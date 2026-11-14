@@ -1,4 +1,4 @@
-import type { IJiraClient, JiraAttachment, JiraComment, JiraEditMetaField, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueLink, JiraIssueType, JiraMyFiltersResult, JiraRemoteLink, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
+import type { IJiraClient, JiraAttachment, JiraComment, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueLink, JiraIssueType, JiraMyFiltersResult, JiraRemoteLink, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
 import type { DiagLogger } from '../utils/diagTypes';
 import { formatJiraBody } from '../utils/markdownFormatter';
 import { ApiError } from '../utils/apiError';
@@ -6,7 +6,7 @@ import { refusedFieldsOf } from '../utils/jiraFieldErrors';
 import { buildRequirementsSource, type RequirementsSource } from '../utils/requirementsSource';
 import { formatFileSize } from '../utils/attachmentEligibility';
 import { mergedBanner, mergedSummary } from '../utils/ticketMerge';
-import { renderReviewTable, neutralizeMarkdownLinks, buildChatCommandLink, type ReviewTableColumn } from '../participant/sessionState';
+import { renderReviewTable, neutralizeMarkdownLinks, buildChatCommandLink, type ReviewTableColumn } from '../utils/chatPrimitives';
 import { fetchAllPages } from '../utils/reportImport';
 
 export type FieldResolutionResult =

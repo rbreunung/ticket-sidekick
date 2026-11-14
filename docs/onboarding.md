@@ -125,41 +125,7 @@ participant without the user typing `@jira`/`@bitbucket` explicitly.
 
 ### `@jira`
 
-`request.command` is dispatched right after `parseIntent()` runs — every
-other field the flow needs (ticket key, field name/value, target status,
-JQL, comment text, …) still comes from the LLM's parse of the remaining
-prompt text; the command only pre-decides *which* operation to route to,
-removing the one ambiguity a deliberate `/command` shouldn't be subject to.
-This is checked after the full multi-turn session-tag scan, so a session
-already in flight always finishes claiming the turn before a slash command
-can (KTD12). `/check` is the one exception — it's merged directly into the
-existing plain-text `check` regex special-case, which runs (unchanged)
-before the session-tag scan, same as it always did.
-
-The bulk-update-review session is the other exception: its own reply parser
-recognizes bare generic words (`skip <keys>`) that could coincidentally be
-the leftover prompt text of an unrelated `/comment`/`/field`/etc. command
-(e.g. `/comment skip PROJ-1, moving on`). That session step only fires when
-`request.command` is unset — an explicit slash command is an unambiguous
-"this is a new operation" signal, and the pending session is left untouched
-(not cleared), so it's still there to resume on the next ordinary-text
-reply.
-
-| Command | Target flow | `sampleRequest` |
-| --- | --- | --- |
-| `/check` | Connection check (`config`/`connection` special-case) | `check` |
-| `/create` | `createTicket` — multi-turn ticket creation | `create a bug in PROJ: login fails after password reset` |
-| `/view` | `getTicket` — show a ticket's fields, description, comments | `view PROJ-123` |
-| `/comment` | `addComment` | `PROJ-123 thanks, looks good to merge` |
-| `/field` | `updateField` | `PROJ-123 set priority to High` |
-| `/move` | `transition` | `PROJ-123 to In Progress` |
-| `/search` | `searchJql` | `my open bugs in PROJ` |
-| `/load` | `loadTicket` — download description/comments/attachments into `.jira-context/<key>/` | `load PROJ-123` |
-
-The pure `mapCommandToOperation()` (`src/participant/jira/llmHelpers.ts`)
-holds the command-name → `Operation` mapping and is unit-tested in
-`src/test/llmHelpers.test.ts`; the dispatch itself lives in
-`src/participant/JiraParticipant.ts`.
+`@jira` has no slash command since 2026-11-14: it runs only the report imports, which start from their Command Palette commands or a plain request ("import veracode report"). `src/test/jiraCommandsGuard.test.ts` fails if a slash command comes back. The removed commands' replacements are listed in [`docs/jira-flows.md`](jira-flows.md#where-the-removed-flows-went).
 
 ### `@bitbucket`
 
@@ -178,10 +144,10 @@ at a PR to review" guidance when `/review` is used with no URL.
 
 ## Follow-up suggestion chips, greeting detection, and the unclassifiable-prompt fallback
 
-Both participants offer follow-up suggestion chips (`vscode.ChatFollowup`,
+`@bitbucket` offers follow-up suggestion chips (`vscode.ChatFollowup`,
 via `participant.followupProvider`) after every major response, proposing a
-likely next action — e.g. after loading a ticket: add a comment, transition
-it; after a PR review: add findings to review, explain finding #1 (or, in a
+likely next action; `@jira` no longer offers any (its ticket chips went with
+the removed flows). After a PR review: add findings to review, explain finding #1 (or, in a
 quick/standard review whose title names a Jira ticket, **Check against KEY**,
 which re-runs it as smart), and Copy for Teams (the only chip after a review
 with no findings) (R6).
@@ -202,16 +168,11 @@ multi-turn session reply whose own response tag already carries the
 next-step guidance. `followupProvider.provideFollowups(result, …)` reads
 `result.metadata` and hands it to the pure computer below.
 
-**Pure logic (KTD15).** `computeJiraFollowups(state: JiraFollowupState)`
-(`src/participant/sessionState.ts`) and
-`computeBitbucketFollowups(state: BitbucketFollowupState)`
-(`src/participant/reviewSessionState.ts`) each take one discriminated
-"what just happened" state (`'greeting'`, `'fallback'` (`@jira` only),
-`'loadedTicket'` / `'reviewCompleted'`, or `'none'`) and return 2-3
-`{ prompt, label? }` suggestions phrased as literal next prompts — one
-function per participant, rather than a separate function per state, since
-"no prior operation, this is a greeting" is just one more case of the same
-"what just happened" question every other state answers.
+**Pure logic (KTD15).** `computeBitbucketFollowups(state: BitbucketFollowupState)`
+(`src/participant/reviewSessionState.ts`) takes one discriminated
+"what just happened" state (`'greeting'`, `'reviewCompleted'` or `'none'`)
+and returns 2-3 `{ prompt, label? }` suggestions phrased as literal next
+prompts.
 
 **Greeting/empty-prompt detection (R9).** `isGreetingOrEmpty(prompt)`
 (`src/participant/sessionState.ts`, shared by both participants) detects an
@@ -230,24 +191,17 @@ for the general specific-before-generic principle this sidesteps by
 construction.
 
 For `@jira`, every phrase in that set prints the same single help screen: the tool name and version (read from
-`context.extension.packageJSON` when the help is shown, `unknown` when missing) and every command and flow in groups,
-built from the catalog in `src/participant/session/jiraCommands.ts`. There is no separate greeting. The catalog follows
-the import screens' help conventions (`importCommands.ts`), and `src/test/jiraCommandsGuard.test.ts` fails when a slash
-command in `package.json` or an intent operation has no entry. The suggestion chips below the screen are unchanged.
+`context.extension.packageJSON` when the help is shown, `unknown` when missing), the three imports and the
+imports-only notice, built from the catalog in `src/participant/session/jiraCommands.ts`.
 
-**Unclassifiable-prompt fallback (R8, `@jira` only).** The old bare
-`"Unrecognised operation."` message (the `default:` case of `@jira`'s
-operation switch) is replaced with a short, helpful line plus follow-up
-chips carrying example prompts — `@bitbucket` has no equivalent fallback to
-reroute, since it has no LLM intent classifier to bypass, only a PR-URL
-match, and its existing "Point me at a PR to review" guidance already covers
-a non-greeting, non-URL prompt.
+**Imports-only notice (`@jira` only).** A prompt the intent parse does not read as one of the imports
+(`createFromEmail`, `addEmailComment`, `importVeracode`, `importWaltzReport`) is `other` and gets
+`JIRA_ONLY_IMPORTS_NOTICE`, which points to `/ts-jira help` and Agent mode; nothing is read from or written to Jira.
+`@bitbucket` has no equivalent, since it has no LLM intent classifier, only a PR-URL match.
 
-**KTD14.** Both the greeting response and the unclassifiable-prompt fallback
-deliver their example prompts *only* as follow-up chips, capped at 2-3 and
-phrased as literal next prompts a user could send — never duplicated as a
-bulleted list in the response's own markdown. The `@jira` help screen lists
-commands, not example prompts to click, so the rule still holds.
+**KTD14.** `@bitbucket`'s greeting response delivers its example prompts *only* as follow-up chips, capped at 2-3
+and phrased as literal next prompts a user could send — never duplicated as a bulleted list in the response's own
+markdown.
 
 ## Getting-Started walkthrough: Jira
 
@@ -264,8 +218,8 @@ setting/command it describes.
 | 1 | `jiraBaseUrl` | `ticketSidekick.jira.baseUrl` setting | `onSettingChanged:ticketSidekick.jira.baseUrl` |
 | 2 | `jiraCredentials` | A Data Center PAT or Cloud email+API token, via `ticket-sidekick.setDataCenterToken` / `ticket-sidekick.configureCloud` | `onContext:ticketSidekick.jiraCredentialsSet` (U1's context key, kept in sync in `extension.ts`) |
 | 3 | `jiraDefaultProject` | `ticketSidekick.jira.defaultProject` setting | `onSettingChanged:ticketSidekick.jira.defaultProject` |
-| 4 | `jiraWorkflow` | Running `@jira discover workflow <PROJ> <IssueType>` | `onContext:ticketSidekick.workflowViewed` — set in `handleDiscoverWorkflow` (`workflowHandler.ts`) right after the workflow graph is actually cached, not on an attempted-but-empty sample |
-| 5 | `jiraFirstTicket` | Creating a template from a ticket (`/ts-jira-template`) and a ticket from it, or `@jira create` directly | `onContext:ticketSidekick.firstTicketCreated` — set at every real `ticketService.createTicket()` success point reachable from chat: `contentHandler.ts`'s `createTicket`-operation branch (backs the `createHandler.ts` flow) |
+| 4 | `jiraWorkflow` | `/ts-jira workflow <KEY>`, which shows a ticket's reachable statuses and discovers the workflow the first time | `onContext:ticketSidekick.workflowViewed` — set by `src/tools/registerJiraTools.ts` after a successful `jira_workflow` call (`src/tools/walkthroughProgress.ts`) |
+| 5 | `jiraFirstTicket` | Creating a template from a ticket (`/ts-jira-template`) and a ticket from it, or `/ts-jira-create` directly | `onContext:ticketSidekick.firstTicketCreated` — set after a successful `jira_create_ticket` call, the same way |
 | 6 | `jiraCopilotTools` | The Jira tools, `/ts-jira help` and the boards; says that `@jira` and `@bitbucket` are deprecated | `onCommand:ticket-sidekick.boards.sessions` |
 
 **First-touch auto-open (KTD11).** `extension.ts`'s `activate()` opens this
@@ -275,8 +229,8 @@ and never re-checked false afterward, so the walkthrough never reopens on
 a later VS Code start. The Bitbucket walkthrough (a separate contribution,
 added in a later unit) does not auto-open.
 
-Each step's button opens Copilot Chat pre-filled with the relevant `@jira`
-query via `workbench.action.chat.open` (the same command
+Each step's button opens Copilot Chat pre-filled with the relevant `/ts-jira`
+command via `workbench.action.chat.open` (the same command
 `extension.ts`'s `.eml`/Veracode/Waltz import commands already use to open
 chat with a fixed query), or runs the credential-setup command directly.
 

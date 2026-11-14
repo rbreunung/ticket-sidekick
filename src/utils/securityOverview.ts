@@ -2,7 +2,8 @@
 // links the chat tables and the CSV are rendered from. Pure and vscode-free; both entry points (the standalone
 // command and the `export` reply in an import) assemble an {@link OverviewInput} and share everything else.
 import type { OverviewTicket, ProjectVersionInfo } from '../services/TicketService';
-import { neutralizeMarkdownLinks } from '../participant/session/primitives';
+import { neutralizeMarkdownLinks } from './chatPrimitives';
+import { quoteJqlValue } from './searchConstraints';
 import { readVeracodeFindings, type TicketFinding } from './veracodeFindingsTable';
 import { readWaltzComponents, type TicketComponent } from './waltzComponentsTable';
 import { severityLabel, type VeracodeFlaw } from './veracodeReport';
@@ -126,15 +127,6 @@ export const JQL_KEY_CAP = 100;
 
 const FLAG_ORDER: Record<string, number> = { overdue: 0, 'due-before-release': 1 };
 
-function quoteJql(value: string): string {
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-}
-
-function earliestDate(dates: Array<string | null | undefined>): string | null {
-  const valid = dates.filter((d): d is string => typeof d === 'string' && d !== '');
-  return valid.length === 0 ? null : valid.reduce((a, b) => (b < a ? b : a));
-}
-
 /** The record a flaw of the loaded report corresponds to (exact: it comes straight from the parsed report). */
 export function findingFromFlaw(flaw: VeracodeFlaw): TicketFinding {
   return {
@@ -233,7 +225,7 @@ function jiraFor(table: { fixVersion: string | null; rows: OverviewRow[] }, inpu
   const keys = table.rows.map(r => r.ticketKey).filter((k): k is string => k !== null);
   if (keys.length === 0) return null;
   const labelQuery = input.projectKey
-    ? `project = ${input.projectKey} AND resolution is EMPTY AND (labels = "veracode" OR labels = "oss-dependency") AND ${table.fixVersion === null ? 'fixVersion is EMPTY' : `fixVersion = ${quoteJql(table.fixVersion)}`}`
+    ? `project = ${input.projectKey} AND resolution is EMPTY AND (labels = "veracode" OR labels = "oss-dependency") AND ${table.fixVersion === null ? 'fixVersion is EMPTY' : `fixVersion = ${quoteJqlValue(table.fixVersion)}`}`
     : null;
   const wantKeys = input.report !== undefined;
   let jql: string;

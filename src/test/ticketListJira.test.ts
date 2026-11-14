@@ -1,7 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import { existsSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { ticketListJiraDeps } from '../boards/ticketList/jiraDeps';
 import type { IJiraClient, JiraIssue } from '../jira/IJiraClient';
 import type { JiraAccess } from '../tools/jiraTools/jiraAccess';
+import { MockJiraClient } from './mocks/MockJiraClient';
+import { makeTempDir, removeTempDirs } from './helpers/gitRepo';
 
 // What the ticket list board reads from and writes to Jira, against a stub client.
 
@@ -9,11 +13,11 @@ function issue(n: number, status = 'Open'): JiraIssue {
   return { id: String(n), key: `PROJ-${n}`, fields: { summary: `Ticket ${n}`, status: { name: status }, issuetype: { name: 'Bug' }, assignee: { displayName: 'Ada' }, priority: { name: 'High' }, updated: `t${n}` } } as unknown as JiraIssue;
 }
 
-function deps(client: Partial<IJiraClient>, configured = true) {
+function deps(client: Partial<IJiraClient>, configured = true, settings: { searchFields?: string[]; cleanupFields?: string[] } = {}, warnings: string[] = [], folder?: string) {
   const access = (configured
-    ? { configured: true, config: { baseUrl: 'https://jira.example.com', token: 'x' }, client }
+    ? { configured: true, config: { baseUrl: 'https://jira.example.com', token: 'x', searchFields: settings.searchFields ?? [], cleanupFields: settings.cleanupFields ?? [] }, client }
     : { configured: false, config: {} }) as unknown as JiraAccess;
-  return ticketListJiraDeps({ getJira: async () => access, workspaceFolder: () => undefined, now: () => 1 });
+  return ticketListJiraDeps({ getJira: async () => access, workspaceFolder: () => folder, now: () => 1, onDiag: (_l, message) => { warnings.push(message); } });
 }
 
 describe('reading a ticket list from Jira', () => {
@@ -26,11 +30,11 @@ describe('reading a ticket list from Jira', () => {
         return { issues: Array.from({ length: Math.min(max ?? 50, 250 - from) }, (_, i) => issue(from + i + 1)), total: 250 };
       },
     } as never);
-    const all = await d.search('project = PROJ', 300);
+    const all = await d.search('project = PROJ', 300, []);
     expect(all.rows).toHaveLength(250);
     expect(all.truncated).toBe(false);
     expect(all.rows[0]).toEqual({ key: 'PROJ-1', summary: 'Ticket 1', status: 'Open', issueType: 'Bug', assignee: 'Ada', priority: 'High', updated: 't1' });
-    const capped = await d.search('project = PROJ', 120);
+    const capped = await d.search('project = PROJ', 120, []);
     expect(capped.rows).toHaveLength(120);
     expect(capped.truncated).toBe(true);
     expect(calls.slice(0, 3)).toEqual([0, 100, 200]);
@@ -38,7 +42,7 @@ describe('reading a ticket list from Jira', () => {
 
   it('words a failed search as status and short reason, without Jira\'s response body', async () => {
     const d = deps({ searchJql: async () => { throw Object.assign(new Error('<html>secret</html>'), { status: 400 }); } } as never);
-    await expect(d.search('nonsense', 10)).rejects.toThrow(/^Jira answered HTTP 400/);
+    await expect(d.search('nonsense', 10, [])).rejects.toThrow(/^Jira answered HTTP 400/);
   });
 
   it('reads a ticket as it is now, and reports one that is gone as gone', async () => {
@@ -123,5 +127,107 @@ describe('setting a field from the board', () => {
   it('says so and writes nothing when no field has the name', async () => {
     const d = deps({ getFields: async () => [], updateIssue: async () => { throw new Error('must not write'); } } as never);
     await expect(d.setField('PROJ-1', 'Nope', 'x')).rejects.toThrow('No field named "Nope" was found. Nothing was changed.');
+  });
+});
+
+describe('extra columns', () => {
+  const fields = async () => [
+    { id: 'customfield_1', name: 'Team', schema: { type: 'string' } },
+    { id: 'fixVersions', name: 'Fix versions', schema: { type: 'array' } },
+  ];
+
+  it('names the configured columns after their fields and warns once about an unknown one', async () => {
+    const warnings: string[] = [];
+    const d = deps({ getFields: fields } as never, true, { searchFields: ['customfield_1'], cleanupFields: ['fixVersions', 'customfield_9'] }, warnings);
+    expect(await d.extraColumns()).toEqual({
+      search: [{ id: 'customfield_1', name: 'Team' }],
+      cleanup: [{ id: 'fixVersions', name: 'Fix versions' }, { id: 'customfield_9', name: 'customfield_9' }],
+    });
+    expect(warnings).toEqual(['Unrecognized field in cleanupFields: customfield_9']);
+  });
+
+  it('asks Jira for no field names when no extra column is configured', async () => {
+    let asked = 0;
+    const d = deps({ getFields: async () => { asked++; return []; } } as never);
+    expect(await d.extraColumns()).toEqual({ search: [], cleanup: [] });
+    expect(asked).toBe(0);
+  });
+
+  it('reads each ticket\'s extra fields as plain text', async () => {
+    const requested: string[][] = [];
+    const d = deps({
+      getFields: fields,
+      searchJql: async (_jql: string, _max?: number, _startAt?: number, extra?: string[]) => {
+        requested.push(extra ?? []);
+        const one = issue(1);
+        (one.fields as Record<string, unknown>).fixVersions = [{ name: '3.2' }, { name: '3.3' }];
+        return { issues: [one], total: 1 };
+      },
+    } as never, true, { cleanupFields: ['fixVersions', 'customfield_1'] });
+    const { rows } = await d.search('project = PROJ', 300, ['fixVersions', 'customfield_1']);
+    expect(requested[0]).toEqual(['updated', 'parent', 'fixVersions', 'customfield_1']);
+    expect(rows[0].extra).toEqual({ fixVersions: '3.2, 3.3', customfield_1: 'Not set' });
+  });
+});
+
+describe('what a cleanup reads', () => {
+  it('reads a subtask\'s parent key', async () => {
+    const d = deps({
+      searchJql: async () => {
+        const sub = issue(11);
+        (sub.fields as Record<string, unknown>).parent = { key: 'PROJ-10' };
+        return { issues: [sub], total: 1 };
+      },
+    } as never);
+    const { rows } = await d.search('parent in ("PROJ-10")', 300, []);
+    expect(rows[0].parent).toBe('PROJ-10');
+  });
+
+  it('finds no rules and no workflow without a workspace folder', async () => {
+    const d = deps({} as never);
+    expect(await d.cleanupRules()).toEqual([]);
+    expect(await d.workflowGraph('PROJ', 'Bug')).toBeUndefined();
+  });
+
+  it('reads the resolution names Jira offers', async () => {
+    const d = deps({ getResolutions: async () => [{ name: 'Fixed' }, { name: 'Duplicate' }] } as never);
+    expect(await d.resolutions()).toEqual(['Fixed', 'Duplicate']);
+  });
+});
+
+describe('the workflow a cleanup board follows', () => {
+  afterEach(() => removeTempDirs());
+
+  it('takes a cached workflow without asking Jira', async () => {
+    const folder = makeTempDir();
+    const graph = { Open: [{ id: '1', name: 'Close', to: 'Done' }] };
+    writeFileSync(join(folder, '.jira-workflow-cache.json'), JSON.stringify({ PROJ: { Bug: { discovered: '2026-11-01', graph } } }));
+    const client = new MockJiraClient();
+    client.getProjectStatuses = async () => { throw new Error('Jira was asked'); };
+    const d = deps(client as never, true, {}, [], folder);
+    expect(await d.workflowGraph('PROJ', 'Bug')).toEqual(graph);
+  });
+
+  it('discovers an uncached workflow once and keeps it for the next reading', async () => {
+    const folder = makeTempDir();
+    const client = new MockJiraClient();
+    let asked = 0;
+    const statuses = client.getProjectStatuses.bind(client);
+    client.getProjectStatuses = async (project: string, issueType: string) => { asked++; return statuses(project, issueType); };
+    const d = deps(client as never, true, {}, [], folder);
+    const first = await d.workflowGraph('PROJ', 'Bug');
+    expect(first && Object.keys(first).length).toBeGreaterThan(0);
+    expect(existsSync(join(folder, '.jira-workflow-cache.json'))).toBe(true);
+    expect(await d.doneStatuses('PROJ', 'Bug')).toEqual(['Done']);
+    expect(await d.workflowGraph('PROJ', 'Bug')).toEqual(first);
+    expect(asked).toBe(1);
+  });
+
+  it('knows no workflow when discovery finds no statuses', async () => {
+    const folder = makeTempDir();
+    const client = new MockJiraClient();
+    client.getProjectStatuses = async () => [];
+    const d = deps(client as never, true, {}, [], folder);
+    expect(await d.workflowGraph('PROJ', 'Bug')).toBeUndefined();
   });
 });

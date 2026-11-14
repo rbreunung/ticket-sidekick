@@ -12,6 +12,9 @@ export type Reduced<W> = { ok: true; working: W } | { ok: false; reason: string 
 
 export type Planned = { ok: true; plan: WritePlan } | { ok: false; reason: string };
 
+/** Why the sources are read again: by itself when a stored board is shown, or on the developer's Refresh. */
+export type CheckMode = 'background' | 'refresh';
+
 export interface Reconciled<D, W> {
   derived: DerivedPart<D>;
   working: W;
@@ -50,8 +53,11 @@ export interface BoardKind<R, D, W, A, V, X> {
   reopen?(session: Session<R, D, W>, recipe: R): W;
   /** Reads the sources. Used to build a new session and to check a stored one. */
   read(recipe: R, deps: X): Promise<DerivedPart<D>>;
-  /** Lays the stored working state over a fresh reading and names what no longer fits. */
-  reconcile(session: Session<R, D, W>, fresh: DerivedPart<D>): Reconciled<D, W>;
+  /**
+   * Lays the stored working state over a fresh reading and names what no longer fits. A board may
+   * keep showing what the developer saw after a background check and take the fresh reading only on Refresh.
+   */
+  reconcile(session: Session<R, D, W>, fresh: DerivedPart<D>, mode: CheckMode): Reconciled<D, W>;
   /** A non-writing action: select, filter, pick, resolve or drop a conflict. */
   reduce(session: Session<R, D, W>, action: A): Reduced<W>;
   /** The write plan for a writing action. Kinds without writes omit it. */

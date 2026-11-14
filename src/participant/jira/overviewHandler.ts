@@ -1,14 +1,12 @@
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
-import type { TicketService } from '../../services/TicketService';
 import {
-  buildOverview, renderOverviewMarkdown, parseOverviewPrompt, localDate, type Overview, type OverviewFormat, type OverviewInput,
+  renderOverviewMarkdown, localDate, type Overview, type OverviewFormat,
 } from '../../utils/securityOverview';
 import { renderOverviewCsv, resolveCsvDelimiter } from '../../utils/securityOverviewCsv';
 import { renderOverviewXlsx } from '../../utils/securityOverviewXlsx';
 import { buildChatCommandLink } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
-import { resolveProjectKey } from './ticketContext';
 
 const SCOPE = 'jira.overview';
 
@@ -24,7 +22,7 @@ const FILE_FORMATS: Record<OverviewFormat, { extension: string; filterName: stri
 
 /**
  * Writes the overview as CSV or Excel through a save dialog and tells the user where it went. A cancelled dialog writes
- * nothing and says so. Shared by the standalone command and the `export csv` / `export xlsx` replies of a report import.
+ * nothing and says so. Used by the `export csv` / `export xlsx` replies of a report import.
  */
 export async function saveOverviewFile(overview: Overview, fileLabel: string, format: OverviewFormat, stream: vscode.ChatResponseStream): Promise<boolean> {
   const { extension, filterName, label } = FILE_FORMATS[format];
@@ -62,75 +60,4 @@ export function streamOverview(overview: Overview, stream: vscode.ChatResponseSt
     ? `\n\n${buildChatCommandLink('Save as CSV', '@jira', saveReplies.csv)} · ${buildChatCommandLink('Save as Excel', '@jira', saveReplies.xlsx)}`
     : '';
   stream.markdown(trustedChatMarkdown(text + links));
-}
-
-/** Everything the overview needs from Jira for one project: tickets, release dates and descriptions. Null when the search fails. */
-export async function gatherOverviewInput(
-  ticketService: TicketService,
-  projectKey: string,
-  stream: vscode.ChatResponseStream,
-  baseUrl?: string,
-): Promise<OverviewInput | null> {
-  stream.markdown(`_Searching ${projectKey} for open Veracode and Waltz tickets…_\n\n`);
-  let list;
-  try {
-    list = await ticketService.listOverviewTickets(projectKey);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logDiag(SCOPE, 'error', 'Overview search failed', { projectKey, error: message });
-    stream.markdown(`Could not search ${projectKey}: ${message}`);
-    return null;
-  }
-  if (list.truncated) stream.markdown(`_More tickets matched than can be listed; showing the first ${list.tickets.length}._\n\n`);
-
-  let versions: Awaited<ReturnType<TicketService['getProjectVersions']>> = [];
-  try {
-    versions = await ticketService.getProjectVersions(projectKey);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    logDiag(SCOPE, 'warn', 'Could not read the project versions — release dates are not used', { projectKey, error: message });
-    stream.markdown('_Warning: could not read the release dates, so nothing is flagged as due before its release._\n\n');
-  }
-
-  const { texts, failed } = await ticketService.readDescriptions(
-    list.tickets.map(t => t.key),
-    (key, err) => logDiag(SCOPE, 'warn', `Could not read the description of ${key}`, { issueKey: key, error: err instanceof Error ? err.message : String(err) }),
-  );
-  if (failed.length > 0) logDiag(SCOPE, 'warn', 'Some descriptions could not be read', { failed: failed.length });
-
-  return { tickets: list.tickets, descriptions: texts, versions, today: localDate(), baseUrl, projectKey };
-}
-
-/**
- * `@jira /security-report [PROJECT] [csv|xlsx]`: the project's unresolved Veracode and Waltz tickets by Fix Version. A prompt naming
- * `csv` or `xlsx` (the "Save as" links) builds the same overview again and saves it as a file, so nothing is stored between turns.
- */
-export async function handleSecurityOverview(
-  request: vscode.ChatRequest,
-  stream: vscode.ChatResponseStream,
-  ticketService: TicketService,
-  baseUrl?: string,
-): Promise<void> {
-  const parsed = parseOverviewPrompt(request.prompt);
-  const projectKey = await resolveProjectKey(parsed.projectKey, stream);
-  if (!projectKey) {
-    stream.markdown('Please name a project, e.g. `@jira /security-report PROJ`.');
-    return;
-  }
-  const input = await gatherOverviewInput(ticketService, projectKey, stream, baseUrl);
-  if (!input) return;
-
-  const overview = buildOverview(input);
-  logDiag(SCOPE, 'info', `Overview built — ${projectKey}`, {
-    projectKey, tickets: overview.ticketCount, tables: overview.tables.length, unread: overview.unreadCount, format: parsed.format,
-  });
-  if (parsed.format) {
-    if (overview.tables.length === 0) {
-      stream.markdown(renderOverviewMarkdown(overview, baseUrl));
-      return;
-    }
-    await saveOverviewFile(overview, projectKey, parsed.format, stream);
-    return;
-  }
-  streamOverview(overview, stream, baseUrl, { csv: `/security-report ${projectKey} csv`, xlsx: `/security-report ${projectKey} xlsx` });
 }

@@ -127,7 +127,7 @@ async function startTargetPick<TItem, TRow extends ReviewRowBase>(
     await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
     stream.markdown(
       `_The selected **${issueType}** tickets can't reach any status in the discovered workflow, and no cleanup rule matches. ` +
-      `Run \`@jira discover workflow ${session.projectKey} ${issueType}\` to refresh the workflow cache. No stale tickets were transitioned._\n\n`,
+      `Type \`/ts-jira workflow <KEY>\` with a ${session.projectKey} ${issueType} ticket's key to refresh the workflow cache. No stale tickets were transitioned._\n\n`,
     );
     return streamImportReview({ ...session, view: 'stale' }, stream, ws, descriptor, baseUrl);
   }
@@ -226,7 +226,7 @@ async function runStaleTransitions<TItem, TRow extends ReviewRowBase>(
   if (skipped.length > 0) summary += '\n\n' + skipped.map(s => `– ${s.key} skipped — ${s.reason}`).join('\n');
   if (result.failures.length > 0) {
     summary += '\n\n' + result.failures.map(f => `✗ ${f.key} — ${f.reason}`).join('\n');
-    summary += '\n\nIf caused by a workflow gap, run `@jira discover workflow` to refresh the cache.';
+    summary += '\n\nIf caused by a workflow gap, type `/ts-jira workflow <KEY>` with one of those tickets to refresh the cache.';
   }
   stream.markdown(`${summary}\n\n`);
   logDiag(descriptor.scope, result.failures.length > 0 ? 'warn' : 'info',

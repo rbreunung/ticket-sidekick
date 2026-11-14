@@ -1,194 +1,76 @@
 # Jira Feature Flows
 
-> **Deprecated surface.** This page documents the `@jira` chat participant, which is deprecated and kept for maintenance until its flows have a tool or a board. New work is built as extension tools and boards; see [`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md). The services, parsers and builders described here are reused by the boards.
-
-How `@jira`'s multi-turn flows work: ticket creation, bulk cleanup, workflow
-discovery, comment handling, content preview/refinement, last-ticket context,
-and the Jira session-state table that ties them together.
+> **Deprecated surface.** `@jira` is deprecated and runs only the report imports (emails, Veracode, Waltz) since 2026-11-14. Every other request gets a fixed notice (`JIRA_ONLY_IMPORTS_NOTICE` in `src/participant/session/jiraCommands.ts`) pointing to `/ts-jira` and Agent mode. New work is built as extension tools and boards; see [`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md). The imports themselves are documented in [`docs/report-import.md`](report-import.md).
 
 The code lives in:
 
-- [`src/participant/jira/*Handler.ts`](../src/participant/jira/) — per-flow handlers (`createHandler.ts`, `cleanupHandler.ts`, `workflowHandler.ts`, `contentHandler.ts`, `loadHandler.ts`, `fieldHandler.ts`).
+- [`src/participant/JiraParticipant.ts`](../src/participant/JiraParticipant.ts) — the imports-only handler: the import sessions, the help screen, the intent parse (`createFromEmail`, `addEmailComment`, `importVeracode`, `importWaltzReport` or `other`) and the notice.
+- [`src/participant/jira/`](../src/participant/jira/) — the import handlers, `cleanupHandler.ts` (the stale-ticket close of an import), `overviewHandler.ts` (the import `export` reply) and `ticketContext.ts`.
 - [`src/participant/sessionState.ts`](../src/participant/sessionState.ts) — pure session-state types and helpers, including `pickEmailOption()`.
-- [`src/services/WorkflowService.ts`](../src/services/WorkflowService.ts) — workflow graph cache I/O, BFS path-finding, `discoverWorkflow` sampling.
-- [`src/services/TicketService.ts`](../src/services/TicketService.ts) — ticket business logic backing all of the flows below.
-- [`src/templates/TemplateService.ts`](../src/templates/TemplateService.ts) / [`src/templates/FieldResolver.ts`](../src/templates/FieldResolver.ts) — reads `.jira-templates.json` and resolves template field specs during ticket creation.
 
-## Ticket creation flow
+## Where the removed flows went
 
-`handleCreateTicket` in `JiraParticipant` resolves missing mandatory fields interactively:
+| Removed `@jira` flow | Now |
+| --- | --- |
+| create, with templates and section questions | `/ts-jira-create` and `jira_create_ticket` |
+| view, summarize, show fields, check required fields, comments | `jira_view_ticket`, `jira_list_fields`, `jira_check_required_fields`, `jira_add_comment` |
+| field, move, load, upload, workflow, check | `jira_update_field`, `jira_move_ticket`, `jira_load_ticket`, `jira_upload_attachment`, `jira_workflow`, `jira_check_connection` |
+| search, filters, narrowing by fix version, sprint, assignee and team | `jira_find_tickets`, `jira_list_my_filters`, and the ticket list board through `jira_open_board` |
+| bulk transition, bulk field update | the ticket list board |
+| cleanup by `cleanupRules` | the ticket list board loaded from a rule (`src/boards/ticketList/cleanupSource.ts`) |
+| `/security-report` | the security report board |
+| description and comment preview | dropped |
 
-1. **Project key** — from prompt, then `ticketSidekick.jira.defaultProject` setting, then `showInputBox`. Resolved first, since issue types are project-scoped.
-2. **Summary** — from prompt (LLM extraction), then `showInputBox`
-3. **Template + issue type** — always fetched together: templates from `.jira-templates.json` and issue types from `GET /rest/api/2/project/{key}` (subtasks filtered out). If either exists, one combined chat-native numbered list is streamed via `CreateSelectionSession` — templates first (each showing its issue type), then remaining issue types — and the user always replies with a number (or `(c)` to cancel); an out-of-range or non-numeric reply re-presents the same list. When no issue type can be resolved for a template or list entry (nothing fetched), it carries an empty-string sentinel instead of a guessed value — rendered as "you will be asked to type it" — and picking it opens `showInputBox` for a free-typed issue type rather than silently defaulting. The same `showInputBox` fallback fires directly when both templates and issue types are empty.
+The rules the cleanup board keeps from `@jira run cleanup` are below.
 
-If a template is chosen:
+## Bulk cleanup rules
 
-- If the picked template can no longer be found (renamed/removed from `.jira-templates.json` since the list was shown), a warning is shown and creation proceeds without its default fields
-- `FieldResolver.resolve(defaultFields, resolveFields)` maps any `name`-based specs to Jira field values via API lookups; `id`-based specs pass through directly; array entries produce array results
-- `descriptionSections` (optional) drives a multi-turn Q&A via `CreationSession`; if absent or empty, ticket is created directly
-- When all sections are answered `finishTicketCreation` assembles the description and calls `TicketService.createTicket`
-- Field resolution + section handling are in `continueAfterIssueType`, called from the combined-selection routing block
+The ticket list board runs these rules (`src/boards/ticketList/cleanupSource.ts` for the query, subtasks and paths, `kind.ts` for selection and Apply). `cleanupRules` in `.jira-templates.json` define named rules:
 
-API endpoint: `POST /rest/api/2/issue` with `{ fields: { project: { key }, summary, issuetype: { name }, ...additionalFields } }`
-
-## Comment handling
-
-`getComments` fetches up to 20 newest comments via `TicketService.getIssueComments`, then asks the LLM to synthesize them:
-
-- No query → one-sentence summary per comment
-- With query (e.g. "login bug") → finds and quotes relevant comments with author and date
-
-If the ticket has more than 20 comments the response includes a load-more offer via `MoreCommentsSession`. The user confirms ("load all") to fetch up to 100 comments and re-synthesize.
-
-`TicketService.getTicket` (and therefore `@jira show`) also includes a **Comments** section rendered by `formatComments()`. Each comment shows author display name, date (YYYY-MM-DD), and body extracted from ADF.
-
-## Content preview/refinement
-
-`addComment` with a non-literal `contentSource`, and `updateField` for the description field, trigger a chat-native preview loop via `ContentSession`:
-
-1. LLM generates the content based on the instruction (and optional conversation history for `history-recent` / `history-full`)
-2. Content is streamed to chat with a confirm/adjust prompt
-3. User confirms ("post it") → content is posted; user cancels → session cleared; user gives a refinement instruction → LLM regenerates with the previous content and instruction as context, new preview is streamed
-
-`contentSource` is resolved by the intent parser:
-
-- `"literal"` — user provided exact text; skip preview, post directly
-- `"generate"` — new content from scratch
-- `"history-recent"` — synthesise from the last 3 conversation turns
-- `"history-full"` — synthesise from the entire conversation history
-
-## Last-ticket context
-
-After every successful ticket operation, the handler carries the referenced ticket key on `ChatResult.metadata` as `jiraSession.lastTicketKey` (R13). No visible marker is appended to rendered responses. A branch that references a ticket but starts no session returns `{ jiraSession: { kinds: [], lastTicketKey } }` — empty `kinds` keep every session-detection check false while still letting the key be found.
-
-When a follow-up prompt arrives without an explicit ticket key, the handler scans `ChatContext.history` in reverse via `parseLastTicketFromContext` (in `ticketContext.ts`) and reads `metadata.jiraSession.lastTicketKey` off each turn, resolving to the last referenced ticket automatically.
-
-**Ticket key resolution order (highest to lowest priority):**
-
-1. Explicit key in the user's prompt
-2. Current git branch (regex `[A-Z][A-Z0-9]+-\d+`)
-3. Last ticket from `ChatContext` history (`metadata.jiraSession.lastTicketKey`)
-4. `showInputBox` — ask the user
-
-## Workflow discovery
-
-`@jira discover workflow PROJ Bug` samples tickets across all statuses, calls `getTransitions` on a representative per status, and builds a directed graph. Saved to `.jira-workflow-cache.json` at the workspace root. Re-run any time the workflow changes.
-
-`WorkflowService.findPath(graph, from, to)` uses BFS to find the shortest sequence of transitions from the current status to the target state.
-
-## Guided single-ticket transition
-
-The `loadedTicket` "Transition it" chip (and any other `transition {key}` prompt naming no target
-status) opens a guided multi-turn flow instead of the old static "please specify a target status"
-message: pick a target status (direct transitions plus any multi-hop target discoverable via the
-cached workflow graph) → an optional resolution ask (read from that specific transition's own
-`fields.resolution`, not the global resolution list) → an optional multi-hop path pick when no
-direct transition exists (`WorkflowService.findAllPaths`, ranked shortest-first, capped at 3) → a
-confirm step naming the resolved status/resolution/path → apply or cancel. An unmatched reply at
-any choice point re-shows that step's options with a "didn't understand that" message rather than
-erroring. See `GuidedTransitionSession` and its pure helpers in `sessionState.ts`, and
-`continueGuidedTransition`/`startGuidedTransition` in `JiraParticipant.ts`.
-
-## Bulk cleanup
-
-`cleanupRules` in `.jira-templates.json` define named rules:
-
-- `project`, `issueType`, `targetState` — required
-- `resolution` — optional; if omitted and target is a closed state, asked in chat once before the review screen
+- `name`, `project`, `issueType`, `targetState` — required; `checkCleanupRules` (`cleanupSource.ts`) sets aside a rule missing one, `lookupCleanupRule` refuses it with the missing field, and the Command Palette picker lists only complete rules
+- `resolution` — optional; sent only with a move to a final status (`isFinalStatus` in `src/utils/finalStatus.ts`: Jira's Done category from `getDoneStatuses`, cached as `doneStatuses` in `.jira-workflow-cache.json`, else the shared name list). If omitted and the target is final, a resolution (or none) is chosen on the board before Apply; a move refused with a resolution is retried once without one
 - `subtaskResolution` — resolution for subtask transitions; falls back to `resolution` if omitted
 - `subtaskTargetState` — target status for subtasks; falls back to `targetState` if omitted
-- `closeSubtasks` — if true, open subtasks are fetched in one bulk query (`parent in (...)`) and transitioned before their parent
+- `closeSubtasks` — if true, the parents' open subtasks are read a hundred parents per query (`parent in (...)`), listed beneath their parent and moved before it
 - `fixVersionFilter` — `"released"` or `"unreleased"`; adds `fixVersion in releasedVersions()` / `unreleasedVersions()` to the JQL
 - `fixVersionPattern` — glob pattern (e.g. `"Release*"`); adds `fixVersion ~ "pattern"` (Jira 11+ / modern DC); mutually exclusive with `fixVersionFilter`
-- `jql` — extra JQL ANDed onto the base query; `project`, `issueType`, and `status` are always anchored regardless
+- `jql` — extra JQL ANDed onto the base query; `project`, `issueType`, the target status and `resolution is EMPTY` are always anchored; extra JQL with `ORDER BY` is left out and the board says so
 
-Prompt overrides: `in "Version Name"` (exact), `in released` / `in unreleased` (JQL function), `in "Release*"` (wildcard) — always win over rule fields. Quoted `in "released"` targets a version literally named "released", not the JQL function.
+Fix version override: `in VERSION` (`fixVersion` on `jira_open_board`) wins over the rule's fields — `released` / `unreleased` (JQL functions), a value with `*` (pattern), or a version name; a name in double quotes (`"released"`) is always a version of that name.
 
-Trigger: `@jira run cleanup "rule name"` or ad-hoc `@jira close PROJ bugs in "Fix Version 3.2"`.
+Start: `/ts-jira cleanup "rule name" [in VERSION]`, a plain request, or `Ticket Sidekick: Run a cleanup rule`. The text is matched exactly first; otherwise the longest known rule name followed by ` in ` wins and the rest is the fix version, so a rule named with " in " is still found. A board opened with a proposed move ("close the PROJ bugs in 3.2") is the ad-hoc form; it has no subtasks but applies page by page too.
 
-Review screen shows all tickets with their subtasks and proposed transitions. User replies: **ok**, **(c)** to cancel the run, or key numbers to skip (cascading: subtask skip → parent skipped; parent skip → all subtasks skipped).
+When the board loads, every row gets its target status and a path through the cached workflow, discovering the workflow once per issue type when none is cached. A parent cannot be selected when it has no path, when one of its subtasks has none, or when its chunk of the subtask search reached the read limit (some open subtasks could not be listed). Only parents are selected; their subtasks follow.
 
-`ticketSidekick.jira.cleanupFields` (array of field IDs, default empty) adds one column per configured field to this review table — for both `@jira run cleanup` and the ad-hoc bulk-transition flow, and for both parent and subtask rows. It's the same generic, opt-in mechanism as `ticketSidekick.jira.searchFields` (`@jira search`'s extra columns): any field ID valid for one works in the other, rendered through the same shared column-building helper (`buildExtraFieldColumns` in `TicketService.ts`). A configured field ID that doesn't match any known field logs a warning to the "Ticket Sidekick" Output Channel once per review-table render, for either setting.
+`ticketSidekick.jira.cleanupFields` adds one column per configured field to a cleanup board and to a list opened with a proposed move, for parent and subtask rows, in place of `ticketSidekick.jira.searchFields`. Values are rendered as plain text by `renderFieldValue`; a configured field ID that matches no known field logs one warning to the "Ticket Sidekick" Output Channel per read.
 
-Execution streams one line per ticket (subtasks first), then a summary. Failures are collected and reported at the end — the batch continues on failure.
-
-## Template generation
-
-`@jira` no longer generates templates. `/ts-jira-template` and the `jira_create_template` tool do it from a reference ticket; see [`docs/manual/copilot-tools.md`](manual/copilot-tools.md).
-
-## Filter discovery
-
-`@jira` can list and run the user's own favourite + owned Jira filters (`show my filters`) without naming one — zero results says so, exactly one runs directly, more than one opens a numbered pick-list (`ListedFiltersSession`); a partial fetch failure is called out above the list rather than shown as a complete one. The greeting response's "Show my filters" chip invokes this same intent. See `handleListMyFilters`/`runResolvedFilterJql` in `JiraParticipant.ts` and `ListedFiltersSession`/`parseListedFiltersSelection` in `sessionState.ts`. The same listing and fixVersion/sprint/assignee narrowing are also offered to agents by the tools `jira_list_my_filters`/`jira_find_tickets` — see [`docs/onboarding.md`](onboarding.md#jira-tools).
-
-## Attachment upload
-
-`@jira upload` attaches one or more local files to a ticket — resolving the file from an explicit path, a chat-attached reference, or the active editor, falling back to a multi-select file picker, and the ticket from text, filename, or last-ticket context, falling back to an explicit ask — with a confirmation before any upload runs. The same underlying upload is exposed to Agent Mode as `jira_uploadAttachment`, taking a fully explicit ticket key and file path with no auto-resolution. See [`docs/plans/2026-09-20-1901-feat-upload-attachment-to-ticket-plan.md`](plans/2026-09-20-1901-feat-upload-attachment-to-ticket-plan.md) and [`src/participant/jira/uploadHandler.ts`](../src/participant/jira/uploadHandler.ts).
-
-## Security report
-
-`@jira /security-report [PROJECT] [csv|xlsx]` lists a project's unresolved Veracode and Waltz tickets by Fix Version; the same report is available as the `export` reply of a report import. It keeps no session: the Save as CSV and Save as Excel links re-run the command. Detail in `docs/report-import.md` "Security overview (Veracode + Waltz)".
+Apply writes the selected parents of the page in view, after the R39 native confirmation: subtasks first, then the parent; a parent whose subtask was not moved stays as it is and its result names the subtask. Each ticket is read again first and one that changed since the board read it is not written to. After Apply the rule's query no longer lists the moved tickets, so the next ones move up onto the same page, still selected.
 
 ## Jira sessions
 
-Each session below is looked up by its `workspaceState` key; liveness is checked by round-tripping a `kind` through `ChatResult.metadata.jiraSession` (read by `getActiveJiraSession()` in `ticketContext.ts`), with no visible marker in the rendered response — see `JiraSessionContinuity` in `sessionState.ts`. This replaced the former HTML-comment-tag mechanism (a visible `<!-- jira:TAG -->` matched against the last rendered response) for every session below.
+Each session below is looked up by its `workspaceState` key; liveness is checked by round-tripping a `kind` through `ChatResult.metadata.jiraSession` (read by `getActiveJiraSession()` in `ticketContext.ts`). If the user moved on, the last turn carries no such kind and the session is ignored.
 
 | Session | workspaceState key | Liveness check |
 | --- | --- | --- |
-| `ResolutionSelectionSession` | `jira.session.resolutionSelection` | metadata — `jiraSession.kinds: ['resolution-selection']` |
-| `TransitionBatchSession` | `jira.session.transitionReview` | metadata — `jiraSession.kinds: ['transition-review']` |
-| `GuidedTransitionSession` | `jira.session.guidedTransition` | metadata — `jiraSession.kinds: ['guided-transition']` |
-| `MultiTicketTransitionSession` | `jira.session.multiTransition` | metadata — `jiraSession.kinds: ['multi-transition']` |
-| `FilterSelectionSession` | `jira.session.filterSelection` | metadata — `jiraSession.kinds: ['selecting-filter']` |
-| `ConstraintAmbiguitySession` | `jira.session.constraintAmbiguity` | metadata — `jiraSession.kinds: ['selecting-constraint-match']` |
-| `ListedFiltersSession` | `jira.session.listedFilters` | metadata — `jiraSession.kinds: ['listing-filters']` |
-| `BulkUpdateReviewSession` | `jira.session.bulkUpdateReview` | metadata — `jiraSession.kinds: ['bulk-update-review']` |
-| `SearchResultSession` | `jira.session.searchResult` | _(no marker — background session, overwritten on each search)_ |
-| `CreateSelectionSession` | `jira.session.creatingSelection` | metadata — `jiraSession.kinds: ['selecting-create-option']` |
 | `AwaitIssueTypeSession` | `jira.session.awaitIssueType` | metadata — `jiraSession.kinds: ['await-issue-type']` |
-| `CreationSession` | `jira.session.creating` | metadata — `jiraSession.kinds: ['creating']` |
-| `ContentSession` | `jira.session.previewing` | metadata — `jiraSession.kinds: ['previewing']` |
-| `MoreCommentsSession` | `jira.session.moreComments` | metadata — `jiraSession.kinds: ['more-comments']` |
-| `CommentListSession` | `jira.session.commentList` | metadata — `jiraSession.kinds: ['comment-list']` |
-| `SprintSelectionSession` | `jira.session.sprintSelection` | metadata — `jiraSession.kinds: ['sprint-selection']` |
-| `FieldSelectionSession` | `jira.session.fieldSelection` | metadata — `jiraSession.kinds: ['field-selection']` |
-| `FieldUpdatePreviewSession` | `jira.session.fieldUpdatePreview` | metadata — `jiraSession.kinds: ['field-update-preview']` |
-| `EmailContentSession` | `jira.session.emailContent` | metadata — `jiraSession.kinds: ['email-content']` |
+| `StaleCloseSession` | `jira.session.staleResolution` | metadata — `jiraSession.kinds: ['stale-resolution-selection']` |
 | `EmailCleanupSession` | `jira.session.emailCleanup` | metadata — `jiraSession.kinds: ['email-cleanup']` |
+| `EmailContentSession` | `jira.session.emailContent` | metadata — `jiraSession.kinds: ['email-content']` |
+| `EmailTemplateSelectionSession` | `jira.session.emailTemplateSelection` | metadata — `jiraSession.kinds: ['email-template']` |
+| `EmailReviewSession` | `jira.session.emailReview` | metadata — `jiraSession.kinds: ['email-review']` |
 | `VeracodeTemplateSelectionSession` | `jira.session.veracodeTemplateSelection` | metadata — `jiraSession.kinds: ['veracode-template']` |
 | `VeracodeReviewSession` | `jira.session.veracodeReview` | metadata — `jiraSession.kinds: ['veracode-review']` |
 | `WaltzTemplateSelectionSession` | `jira.session.waltzTemplateSelection` | metadata — `jiraSession.kinds: ['waltz-template']` |
 | `WaltzReviewSession` | `jira.session.waltzReview` | metadata — `jiraSession.kinds: ['waltz-review']` |
-| `StaleResolutionAskSession` | `jira.session.staleResolution` | metadata — `jiraSession.kinds: ['stale-resolution-selection']` |
-| `EmailTemplateSelectionSession` | `jira.session.emailTemplateSelection` | metadata — `jiraSession.kinds: ['email-template']` |
-| `EmailReviewSession` | `jira.session.emailReview` | metadata — `jiraSession.kinds: ['email-review']` |
-| `UploadReviewSession` | `jira.session.uploadReview` | metadata — `jiraSession.kinds: ['upload-review']` |
-| `AwaitUploadTicketSession` | `jira.session.awaitUploadTicket` | metadata — `jiraSession.kinds: ['await-upload-ticket']` |
 
-Detection order in the Jira handler: resolution selection → transition review → guided transition → multi-transition → filter selection → selecting-constraint-match → listing-filters → bulk-update-review → combined template/issue-type selection → shared issue-type ask (R6) → creation → content → more-comments → check command → email content (comment-attach) → batch email template selection → batch email review → veracode template selection → veracode review → Waltz template selection → Waltz review → comment list → upload review → await-upload-ticket → greeting/empty-prompt check → intent parse.
+Detection order in the Jira handler is the order of this table. A stored `AwaitIssueTypeSession` from an older build whose `resume` is a ticket create, not an import, is cleared with the expired-session message.
 
-The shared issue-type ask (`AwaitIssueTypeSession`, R6/KTD4) replaces `resolveIssueTypeOrPrompt()`'s
-former `showInputBox` for every flow that resolves an issue type before creating a ticket —
-`@jira create` and Veracode/Waltz/email report import. Its `resume` field is a discriminated union
-(`'create' | 'reportImport'`) carrying the *identity* of what the user already picked (a
-project/summary, a picked template name, the rest of the originating session) rather than a
-pre-resolved object; the `'reportImport'` kind's `descriptorKind` (`'veracode' | 'waltz' | 'email'`)
-picks which family's thin wrapper resumes through. Each family resumes through its own existing
-continuation (`continueAfterIssueType` for `create`; report import's `continueAfterImportIssueType`,
-reused unmodified for email) once the type is known. Batch email import (KTD1, see
-`docs/report-import.md`) is the `reportImport` kind's third `descriptorKind` rather than a
-standalone resume kind — the single-file comment-attach flow (`EmailContentSession`) never resolves
-an issue type, so it never reaches this ask at all. See `src/participant/jira/ticketContext.ts`
-(`resolveIssueTypeOrPrompt`/`streamAwaitIssueType`) and the resume dispatcher in `JiraParticipant.ts`
-(kept there rather than in `ticketContext.ts` to avoid a require cycle with the handler files it
-resumes into).
-
-Follow-up suggestion chips (after every major response), greeting/empty-prompt detection, and the unclassifiable-prompt fallback that replaces the old bare "Unrecognised operation." message are documented in [`docs/onboarding.md`](onboarding.md#follow-up-suggestion-chips-greeting-detection-and-the-unclassifiable-prompt-fallback).
+The shared issue-type ask (`AwaitIssueTypeSession`) asks for an issue type when an import's template names none. Its `resume` carries the identity of what the user already picked (a template name and the rest of the originating session); `descriptorKind` (`'veracode' | 'waltz' | 'email'`) picks which importer resumes. See `src/participant/jira/ticketContext.ts` (`resolveIssueTypeOrPrompt`/`streamAwaitIssueType`).
 
 ### Clickable replies
 
-Every reply a session above can currently only be answered by typing — a numbered pick, a confirm/cancel word, or a per-row batch-review toggle — also renders as a clickable element wrapping that exact text (`buildChatCommandLink()` in `sessionState.ts`), so clicking resubmits the identical reply a typed message would have sent; typing continues to work unchanged. The two shared issue-type asks (`AwaitIssueTypeSession`, template generation's `awaitName`/`awaitFreeType`) are the one exception — their cancel word must be the literal `(c)` (`isExplicitCancelToken()`), so their clickable "Cancel" resubmits `(c)` rather than the word "cancel".
+Every reply a session above can currently only be answered by typing — a numbered pick, a confirm/cancel word, or a per-row batch-review toggle — also renders as a clickable element wrapping that exact text (`buildChatCommandLink()` in `sessionState.ts`), so clicking resubmits the identical reply a typed message would have sent; typing continues to work unchanged. The shared issue-type ask (`AwaitIssueTypeSession`) is the one exception — their cancel word must be the literal `(c)` (`isExplicitCancelToken()`), so their clickable "Cancel" resubmits `(c)` rather than the word "cancel".
 
-Batch review tables (`TransitionBatchSession`, `BulkUpdateReviewSession`, and the Veracode/Waltz/email import review screens) render each row's inclusion state as its own per-row toggle link — clicking flips that row's `included` flag and re-renders the table; typing the same row numbers/keys does the same thing. For cleanup and bulk-update reviews, only an explicit "post it" reply actually runs the batch, using each row's current `included` state; report-import reviews instead run one group's action at a time from that group's own screen (see [`docs/report-import.md`](report-import.md#overview-and-group-screens-all-three-importers)).
+The Veracode/Waltz/email import review screens render each row's inclusion state as its own per-row toggle link — clicking flips that row's `included` flag and re-renders the table; typing the same row numbers/keys does the same thing. They run one group's action at a time from that group's own screen (see [`docs/report-import.md`](report-import.md#overview-and-group-screens-all-three-importers)).
 
 Any response containing one of these links is a trusted `vscode.MarkdownString` (`trustedChatMarkdown()` in `src/utils/chatMarkdown.ts`, enabled only for `workbench.action.chat.open`). Every externally-influenced string combined into such a response — a ticket summary, a custom field value, an email subject, a Veracode/Waltz finding — is neutralized first via `neutralizeMarkdownLinks()` (`sessionState.ts`), which also runs automatically inside `buildChatCommandLink()` on its own `label` argument. Without this, a crafted `[text](command:...)` sequence in that content could render as a second, attacker-chosen live command once the response is trusted.

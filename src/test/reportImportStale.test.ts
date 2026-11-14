@@ -220,7 +220,7 @@ describe('Stale-ticket review + close with a picked target', () => {
     const session = await importStale([makeStaleIssue('PROJ-2', 'Task', ['2'])], ws);
     expect(session.staleTickets?.groups).toEqual([]);
     expect(session.staleTickets?.ineligible[0]).toMatchObject({ key: 'PROJ-2' });
-    expect(session.staleTickets?.ineligible[0].note).toContain('@jira discover workflow PROJ Task');
+    expect(session.staleTickets?.ineligible[0].note).toContain('no workflow cache for PROJ/Task — type /ts-jira workflow');
 
     expect(await reply('PROJ-2', ws)).toContain("Didn't understand `PROJ-2`");
   });
@@ -356,7 +356,7 @@ describe('Stale-ticket review + close with a picked target', () => {
     const text = await reply('close tickets', ws);
 
     expect(text).toContain("can't reach any status in the discovered workflow");
-    expect(text).toContain('@jira discover workflow PROJ Bug');
+    expect(text).toContain('/ts-jira workflow <KEY>');
     expect(ws.store[CLOSE_KEY]).toBeUndefined();
     expect(client.executeTransitionCalls).toHaveLength(0);
   });

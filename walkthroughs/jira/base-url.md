@@ -1,4 +1,4 @@
-Point Ticket Sidekick at your Jira instance so `@jira` knows where to send requests.
+Point Ticket Sidekick at your Jira instance so its tools and boards know where to send requests.
 
 [Open Jira base URL setting](command:workbench.action.openSettings?%22ticketSidekick.jira.baseUrl%22)
 

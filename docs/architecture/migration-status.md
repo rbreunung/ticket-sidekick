@@ -10,6 +10,8 @@ This page says where the migration stands and what is still open. It is the work
 
 Update this page in every change that closes or adds an open point.
 
+**Release rule for the whole migration.** Every release made while the migration runs is a **preview** (`channel: preview`). The stable channel stays on its current version, with no hotfix release, until the whole migration is done and tested, so colleagues are not interrupted and work in the middle of a branch never has to stop for a release. Each step adds its part to the [manual checklist](manual-checklist.md) and runs it on the preview build; the one normal release at the end reruns the whole checklist. This replaces "each step is a preview release first" in the boards plan (R35, AE9).
+
 ---
 
 ## 1. Direction
@@ -25,11 +27,11 @@ Update this page in every change that closes or adds an open point.
 | Area | State |
 | --- | --- |
 | Single-ticket Jira work | 16 tools: check connection, view, find, list filters, workflow, list templates, list fields, check required fields, load, move, create, comment, update any field (set, add, remove), upload, correct a description, create a template from a ticket |
-| Opening boards | `jira_open_board` tool, three Command Palette commands, `/ts-jira search`, `security-report`, `sessions` |
+| Opening boards | `jira_open_board` tool (with cleanup rules and fix version, sprint, assignee and team narrowing), four Command Palette commands, `/ts-jira search`, `cleanup`, `security-report`, `sessions` |
 | Skills | `/ts-jira` (typed commands), `/ts-jira-create`, `/ts-jira-brief`, `/ts-jira-spell-check`, `/ts-jira-template` |
-| Removed `@jira` flows | Spell check and template generation (replaced by `/ts-jira-spell-check` and `/ts-jira-template`) |
+| Removed `@jira` flows | Every Step 1 flow: create, view, summarize, show fields, check required fields, comments, field, move, load, upload, workflow, check, search, filters, bulk transition, bulk field update, cleanup, `/security-report`, the description and comment preview, spell check and template generation. `@jira` has no slash command left and runs only the report imports; any other request gets a notice pointing to `/ts-jira` and Agent mode |
 | Session model | Sessions stored per workspace, shown from cache and checked in the background, conflicts, single-use write plans, native confirmation for risky writes, expiry and a clear command |
-| Boards | Security report (filters, sort, CSV and Excel export), ticket list (search, bulk move, bulk field update), stored sessions |
+| Boards | Security report (filters, sort, CSV and Excel export), ticket list (search, 50 rows a page up to 300, `searchFields`/`cleanupFields` columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules` with nested subtasks, an out-of-date state that offers only Refresh), stored sessions |
 | Documentation | README, manual, `CLAUDE.md`, glossary, architecture page and plan describe tools and boards as current and the participants as deprecated |
 
 ## 3. Open points
@@ -38,12 +40,11 @@ Ordered as the plan orders its steps. "Blocks removal of" names the participant 
 
 ### Step 1: finish the Jira side
 
+O1, O2 and O5 are closed by [`../plans/2026-11-14-1257-feat-ticket-list-parity-and-step1-removal-plan.md`](../plans/2026-11-14-1257-feat-ticket-list-parity-and-step1-removal-plan.md). Reading more than 300 tickets and a side-by-side conflict view were dropped as gaps there: `@jira` read 50 tickets and never noticed a changed one. A cleanup applies one page at a time (KL27), and a subtask created after the board loaded is not listed (KL28).
+
 | # | Open point | Requirement | Blocks removal of |
 | --- | --- | --- | --- |
-| O1 | Cleanup on the ticket list board: load the board from the `cleanupRules` of `.jira-templates.json`, with the rules' extra fields | R9 | `@jira cleanup` |
-| O2 | Ticket list board parity: columns from `ticketSidekick.jira.searchFields`; narrowing by fix version, sprint, assignee and team JQL; more than 300 tickets; add or remove single values of a list field; resolving a conflict side by side instead of only dropping it | R7, R8, KL25 | `@jira search`, bulk transition, bulk field update |
-| O5 | Remove every `@jira` flow that has a replacement, each only once its row in the plan's Replacement Map is in place: create, view, summarize, show fields, check required fields, comment, field, move, load, upload, workflow, check, search, filters, `/security-report`, and the description and comment preview (dropped by R30) | R33 | — |
-| O6 | Written manual checklist for step 1, run on the managed machine before the normal release | R35 | — |
+| O6 | Manual checklist: the Step 1 part is written in [`manual-checklist.md`](manual-checklist.md); run it on the managed machine against the preview build | R35 | — |
 
 ### Step 2: imports
 
@@ -125,9 +126,9 @@ What the `@jira` import does today and what the import board does with it. The l
 | # | Open point | Note |
 | --- | --- | --- |
 | O17 | Keyboard and screen reader check of every board control | R46. The built boards use VS Code Elements and plain tables; not yet checked with a screen reader |
-| O18 | Chat UI still presents the participants without a deprecation mark | The `chatParticipants` descriptions in `package.json` and the Jira walkthrough pages under `walkthroughs/jira/` still teach `@jira`. Decide whether to mark them now or leave them until removal |
-| O19 | Participant checklists in `CLAUDE.md` ("Adding a new Jira operation", "Adding a new Bitbucket operation") still carry participant steps, marked as deprecated | R48. Drop the steps when the participants go |
-| O20 | `docs/onboarding.md`, `docs/jira-flows.md`, `docs/report-import.md` and `docs/review-process.md` describe participant flows, each under a deprecation note | Rewrite or delete with the step that removes the flow; the parsers, builders and services they describe are reused by the boards |
+| O18 | `@bitbucket` is presented in the chat UI without a deprecation mark | `@jira`'s description now says "Deprecated" and names the imports, and the Jira walkthrough teaches the tools and boards. `@bitbucket` and the Bitbucket walkthrough still teach the participant |
+| O19 | The participant checklist in `CLAUDE.md` ("Adding a new Bitbucket operation") still carries participant steps, marked as deprecated | R48. The Jira checklist no longer routes into `@jira`; drop the Bitbucket steps when `@bitbucket` goes |
+| O20 | `docs/onboarding.md`, `docs/jira-flows.md`, `docs/report-import.md` and `docs/review-process.md` describe participant flows, each under a deprecation note | `docs/jira-flows.md` now marks the removed Step 1 flows as removed and keeps their rules as the reference the boards and tools follow. Rewrite or delete the rest with the step that removes the flow |
 
 ## 4. Open decisions
 

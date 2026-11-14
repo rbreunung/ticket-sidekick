@@ -2,6 +2,7 @@
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
 import type { VeracodeFlaw, VeracodeReviewRow } from '../../utils/veracodeReport';
+import { isFinalStatus } from '../../utils/finalStatus';
 import type { WaltzComponent, WaltzReviewRow } from '../../utils/waltzReport';
 import type { EmailImportItem, EmailReviewRow } from '../../utils/emlParser';
 import type { RowChange, TicketInfo } from '../../utils/reportImport';
@@ -456,10 +457,6 @@ export interface StaleCloseSession {
   schemaVersion: number;
 }
 
-// A target state in this set counts as closing, so a resolution is asked before transitioning to
-// it (when nothing else supplies one). Shared by `@jira cleanup` (cleanupHandler.ts) and the
-// stale-ticket close below.
-export const CLOSED_LIKE_STATES = new Set(['done', 'resolved', 'closed', "won't fix"]);
 
 /** A group's tickets that are selected and not yet transitioned by an earlier close run. */
 export function selectedOpenStaleTickets(group: StaleTicketGroup, closedKeys: string[] = []): TransitionBatchTicket[] {
@@ -482,7 +479,7 @@ export function staleTargetState(option: StaleTargetOption): string {
 export function staleTargetNeedsResolution(option: StaleTargetOption, resolutionOptions: string[]): boolean {
   if (resolutionOptions.length === 0) return false;
   if (option.kind === 'rule' && option.resolution !== undefined) return false;
-  return CLOSED_LIKE_STATES.has(staleTargetState(option).toLowerCase());
+  return isFinalStatus(staleTargetState(option));
 }
 
 /**

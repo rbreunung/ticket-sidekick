@@ -5,9 +5,9 @@ import type { DiagLogger } from '../utils/diagTypes';
 import { buildJiraNotConfiguredMessage } from '../services/setupHints';
 import type { JiraAccess } from './jiraTools/jiraAccess';
 
-// The Jira connection check behind both `@jira check` and the check connection tool, so both
-// give the same answer from the same code: the base URL is validated first, then Jira is asked
-// for the signed-in user. The result carries the facts and the Markdown both surfaces show.
+// The Jira connection check behind the check connection tool (`/ts-jira check`): the base URL is
+// validated first, then Jira is asked for the signed-in user. The result carries the facts and
+// the Markdown the tool shows.
 
 export interface ConnectionSettings {
   baseUrl: string;

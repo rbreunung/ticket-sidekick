@@ -124,7 +124,7 @@ export interface JiraCreatedIssue {
 export interface JiraProjectStatus {
   name: string;
   subtask: boolean;
-  statuses: Array<{ id: string; name: string }>;
+  statuses: Array<{ id: string; name: string; statusCategory?: { key?: string } }>;
 }
 
 export interface JiraFilter {
@@ -181,6 +181,8 @@ export interface IJiraClient {
   getResolutions(): Promise<Array<{ name: string }>>;
   getProject(projectKey: string): Promise<JiraProject>;
   getProjectStatuses(projectKey: string, issueType: string): Promise<string[]>;
+  /** The statuses of a project's issue type that Jira puts in the Done category. */
+  getDoneStatuses(projectKey: string, issueType: string): Promise<string[]>;
   getSprintByName(projectKey: string, sprintName: string): Promise<{ id: number }>;
   getTeamByName(name: string): Promise<{ id: string }>;
   createIssue(projectKey: string, summary: string, issueType: string, additionalFields?: Record<string, unknown>): Promise<JiraCreatedIssue>;

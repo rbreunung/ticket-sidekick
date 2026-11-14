@@ -183,8 +183,9 @@ describe('the section-order check', () => {
   });
 });
 
-// Every basic `@jira` command keeps a way to do the same thing in a chat without `@jira`: the
-// tools it maps to must all exist, and so must the skills it maps to.
+// Every former `@jira` slash command keeps a way to do the same thing in a chat without `@jira`:
+// the tools it maps to must all exist, and so must the skills it maps to. `@jira` itself has no
+// slash command left; it only runs the report imports.
 const BASIC_COMMANDS: Record<string, readonly string[]> = {
   view: [VIEW_TICKET_TOOL],
   load: [LOAD_TICKET_TOOL],
@@ -195,6 +196,7 @@ const BASIC_COMMANDS: Record<string, readonly string[]> = {
   create: [CREATE_TICKET_TOOL, '/ts-jira-create'],
   check: [CHECK_CONNECTION_TOOL],
   'security-report': [OPEN_BOARD_TOOL],
+  cleanup: [OPEN_BOARD_TOOL],
 };
 
 /** The basic commands whose tools or skills do not all exist. */
@@ -206,10 +208,9 @@ function coverageGaps(coverage: Record<string, readonly string[]>, toolNames: re
 const skillNames = contributedSkills.map(s => basename(dirname(s.path)));
 
 describe('basic @jira commands without @jira', () => {
-  it('maps every basic @jira slash command to tools and skills that exist', () => {
+  it('maps every former @jira command to tools and skills that exist, and @jira has no slash command left', () => {
     const jira = pkg.contributes.chatParticipants.find((p: { id: string }) => p.id === 'ticket-sidekick.jira');
-    const commands = (jira.commands as Array<{ name: string }>).map(c => c.name).sort();
-    expect(Object.keys(BASIC_COMMANDS).sort()).toEqual(commands);
+    expect(jira.commands ?? []).toEqual([]);
     expect(coverageGaps(BASIC_COMMANDS, catalogNames, skillNames)).toEqual([]);
   });
 

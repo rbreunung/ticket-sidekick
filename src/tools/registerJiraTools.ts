@@ -8,6 +8,7 @@ import type { JiraAccess, JiraToolDeps } from './jiraTools/jiraAccess';
 import { confirmationWithPreview, needsConfirmation } from './jiraToolConfirmation';
 import { RecentCallGuard } from './recentCallGuard';
 import { callTool } from './toolDefinition';
+import { walkthroughStepDoneBy } from './walkthroughProgress';
 
 // Registers the Jira tool catalog with VS Code as language model tools ("extension tools") and the
 // boards they open. This is the one way Copilot reaches the Jira tools: there is no MCP server and
@@ -56,6 +57,8 @@ export function registerJiraTools(context: vscode.ExtensionContext, configServic
         try {
           const result = await callTool(tool, options.input, deps);
           logDiag('tools.jira', result.failed ? 'warn' : 'info', `${tool.name}: ${result.failed ? `failed (${result.error})` : 'ok'}`);
+          const step = walkthroughStepDoneBy(tool.name, result.failed);
+          if (step) void vscode.commands.executeCommand('setContext', step, true);
           return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(result.text)]);
         } catch (err) {
           logDiag('tools.jira', 'error', `${tool.name}: failed`, { error: err instanceof Error ? err.message : String(err) });

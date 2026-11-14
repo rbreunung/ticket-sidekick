@@ -79,7 +79,7 @@ export function buildIgnoredTicketLine(key: string): string {
 }
 
 export function buildNotConfiguredLine(key: string): string {
-  return `_Found ${key} but Jira isn't configured, so requirements aren't checked. Set it up with \`@jira check\`._`;
+  return `_Found ${key} but Jira isn't configured, so requirements aren't checked. Set it up and check it with \`/ts-jira check\`._`;
 }
 
 export function buildNoKeyLine(): string {
@@ -104,7 +104,7 @@ export function buildTicketFailureLine(key: string, failure: Extract<Requirement
     case 'not-found':
       return `_Ticket ${key} was not found in Jira — reviewing without it._`;
     case 'auth':
-      return `_Jira rejected the credentials while reading ${key} — reviewing without it. Check them with \`@jira check\`._`;
+      return `_Jira rejected the credentials while reading ${key} — reviewing without it. Check them with \`/ts-jira check\`._`;
     default:
       return `_Could not read ${key} from Jira (${safeErrorText(failure.message, 120)}) — reviewing without it._`;
   }

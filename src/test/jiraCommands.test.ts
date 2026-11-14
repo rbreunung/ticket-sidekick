@@ -8,6 +8,7 @@ describe('buildJiraHelp', () => {
     const lines = help.split('\n');
     expect(lines[0]).toBe('**Ticket Sidekick `@jira` · v0.8.4 — Help**');
     expect(lines[lines.length - 1]).toBe('`help` prints this list again.');
+    expect(help).toContain('`@jira` now only imports reports');
   });
 
   it('lists the groups in order, each with at least one bullet', () => {
@@ -29,13 +30,9 @@ describe('buildJiraHelp', () => {
     expect(help).not.toContain('command:');
   });
 
-  it('describes the security report and where it is also reachable', () => {
-    const security = help.split('\n').filter(l => l.includes('/security-report')).join('\n');
-    expect(security).toContain('csv');
-    expect(security).toContain('xlsx');
-    const imports = help.slice(help.indexOf('**Import**'), help.indexOf('**Security report**'));
-    expect(imports).toContain('`export`');
-    expect(imports).toContain('help');
+  it('lists only the report imports', () => {
+    expect(JIRA_COMMAND_ENTRIES.map(e => e.id)).toEqual(['email', 'veracode', 'waltz']);
+    expect(help).not.toContain('/security-report');
   });
 
   it('keeps the version text inert', () => {

@@ -56,8 +56,11 @@ A ticket field whose value is usually the same across many tickets of a kind —
 ## Boards
 
 ### Board
-A page in an editor tab (a VS Code webview) that shows a session and sends the developer's actions to the extension over the tab's message channel; the page holds no state. Also called an editor view. A write is shown as a preview before a second Apply click, and a write to several tickets, a close or a Bitbucket post also needs a VS Code confirmation. Built: the security report (no writes), the ticket list (search, bulk move, bulk field update) and the sessions board. Planned: cleanup on the ticket list, the import board (Veracode, Waltz, email) and the PR review board.
+A page in an editor tab (a VS Code webview) that shows a session and sends the developer's actions to the extension over the tab's message channel; the page holds no state. Also called an editor view. A write is shown as a preview before a second Apply click, and a write to several tickets, a close or a Bitbucket post also needs a VS Code confirmation. Built: the security report (no writes), the ticket list (search, bulk move, bulk field update, cleanup) and the sessions board. Planned: the import board (Veracode, Waltz, email) and the PR review board.
 *Avoid:* "canvas" — VS Code canvases were tried and removed; a board is never one.
+
+### Cleanup board
+A ticket list board loaded from a `cleanupRules` rule, or opened with a proposed transition (an ad-hoc bulk close). It shows the `cleanupFields` columns, lists each parent's open subtasks beneath it (they follow the parent's selection), and applies only the selected rows of the page being viewed.
 
 ### Session
 The extension's record of one piece of board work: the recipe (what was asked for), the data derived from Jira, Bitbucket, a report file or a model run, and the developer's working state. There is one per source, it is cached on disk so a restart continues it, and it is never the truth: the sources are. Not the same as the old `@jira`/`@bitbucket` multi-turn session kept in `workspaceState`.

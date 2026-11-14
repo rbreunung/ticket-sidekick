@@ -471,6 +471,23 @@ describe('discoverAndCacheWorkflow', () => {
     expect(loadWorkflowCache(tmpDir).PROJ.Bug.graph).toEqual(result.graph);
   });
 
+  it('keeps which statuses Jira puts in the Done category with the workflow', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    await discoverAndCacheWorkflow(new MockJiraClient(), tmpDir, 'PROJ', 'Bug');
+    expect(loadWorkflowCache(tmpDir).PROJ.Bug.doneStatuses).toEqual(['Done']);
+  });
+
+  it('still caches the workflow when the status categories cannot be read', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
+    const client = new MockJiraClient();
+    client.getDoneStatuses = async () => { throw new Error('Jira answered 500'); };
+
+    const result = await discoverAndCacheWorkflow(client, tmpDir, 'PROJ', 'Bug');
+
+    expect(loadWorkflowCache(tmpDir).PROJ.Bug.graph).toEqual(result.graph);
+    expect(loadWorkflowCache(tmpDir).PROJ.Bug.doneStatuses).toBeUndefined();
+  });
+
   it('preserves a prior cache entry for a status this run could not sample', async () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'ticket-sidekick-workflow-'));
     const staleTransitions = [{ id: '9', name: 'Reopen', to: 'In Progress' }];

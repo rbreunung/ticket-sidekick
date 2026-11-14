@@ -717,7 +717,7 @@ export function createBitbucketParticipant(
     const postAndReport = async (previewSession: BitbucketCommentPreviewSession): Promise<vscode.ChatResult> => {
       await ws.update('bitbucket.session.commentPreview', undefined);
       stream.markdown(`_Posting ${previewSession.items.length} comment${previewSession.items.length !== 1 ? 's' : ''} to Bitbucket…_\n\n`);
-      const { client, service } = makeBitbucketServices(config);
+      const { service } = makeBitbucketServices(config);
       const results = await service.postCommentItems(
         previewSession.project, previewSession.repo, previewSession.prId, previewSession.items,
       );

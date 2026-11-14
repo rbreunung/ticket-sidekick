@@ -28,66 +28,17 @@
         "id": "ticket-sidekick.jira",
         "name": "jira",
         "fullName": "Ticket Sidekick",
-        "description": "Manage Jira tickets with natural language",
+        "description": "Deprecated: imports emails, Veracode and Waltz reports into Jira. Use /ts-jira or Agent mode for everything else",
         "isSticky": true,
-        "commands": [
-          {
-            "name": "check",
-            "description": "Verify your Jira connection and credentials",
-            "sampleRequest": "check"
-          },
-          {
-            "name": "create",
-            "description": "Create a new Jira ticket",
-            "sampleRequest": "create a bug in PROJ: login fails after password reset"
-          },
-          {
-            "name": "view",
-            "description": "View a ticket's fields, description, and comments",
-            "sampleRequest": "view PROJ-123"
-          },
-          {
-            "name": "load",
-            "description": "Download a ticket's description, comments, and attachments into the workspace",
-            "sampleRequest": "load PROJ-123"
-          },
-          {
-            "name": "comment",
-            "description": "Add a comment to a ticket",
-            "sampleRequest": "PROJ-123 thanks, looks good to merge"
-          },
-          {
-            "name": "field",
-            "description": "Update a field on a ticket",
-            "sampleRequest": "PROJ-123 set priority to High"
-          },
-          {
-            "name": "move",
-            "description": "Transition a ticket to a new status",
-            "sampleRequest": "PROJ-123 to In Progress"
-          },
-          {
-            "name": "search",
-            "description": "Search tickets with JQL or natural language",
-            "sampleRequest": "my open bugs in PROJ"
-          },
-          {
-            "name": "security-report",
-            "description": "List a project's open Veracode and Waltz tickets by release, with Due Dates; add csv or xlsx to save them as a file",
-            "sampleRequest": "PROJ"
-          }
-        ],
         "disambiguation": [
           {
-            "category": "jira_ticket_management",
-            "description": "The user wants to create, view, update, comment on, transition, or search for Jira tickets, or manage Jira ticket templates, bulk cleanup, or workflow discovery.",
+            "category": "jira_report_import",
+            "description": "The user wants to import an email (.eml), a Veracode Detailed Report or a Waltz OSS report into Jira tickets, or add an email to a Jira ticket as a comment.",
             "examples": [
-              "Create a bug ticket in PROJ for the login page crashing on Safari",
-              "Show me PROJ-123",
-              "Add a comment to PROJ-456 saying the fix is deployed",
-              "Move PROJ-789 to Done",
-              "Find all my open tickets in PROJ",
-              "Set the priority on PROJ-42 to High"
+              "Import this Veracode report into PROJ",
+              "Create Jira tickets from the Waltz OSS report",
+              "Create a ticket from this email",
+              "Add this email to PROJ-42 as a comment"
             ]
           }
         ]
@@ -170,6 +121,10 @@
       {
         "command": "ticket-sidekick.boards.ticketList",
         "title": "Ticket Sidekick: Open ticket list"
+      },
+      {
+        "command": "ticket-sidekick.boards.cleanup",
+        "title": "Ticket Sidekick: Run a cleanup rule"
       },
       {
         "command": "ticket-sidekick.boards.sessions",
@@ -769,7 +724,7 @@
       {
         "name": "jira_open_board",
         "displayName": "Open a Ticket Sidekick board",
-        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, or the stored sessions. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
+        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, or the stored sessions. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. For a cleanup by a rule from .jira-templates.json, pass the rule's name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
         "userDescription": "Opens a board in its own editor tab.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraOpenBoard",
@@ -787,7 +742,7 @@
                 "ticket-list",
                 "sessions"
               ],
-              "description": "security-report: a project's open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, where the user selects tickets and moves them or sets a field. sessions: the stored board sessions of this workspace."
+              "description": "security-report: a project's open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, where the user selects tickets and moves them or sets a field, or a cleanup rule's tickets. sessions: the stored board sessions of this workspace."
             },
             "project": {
               "description": "security-report: the Jira project key, e.g. PROJ. Leave out to use the default project.",
@@ -800,6 +755,26 @@
             "filter": {
               "description": "ticket-list: a saved filter's id or name, in place of jql.",
               "type": "string"
+            },
+            "cleanupRule": {
+              "description": "ticket-list: the name of a cleanup rule in .jira-templates.json, in place of jql or filter; \"<rule> in <version>\" also names a fix version. The board moves the rule's tickets to its target status.",
+              "type": "string"
+            },
+            "fixVersion": {
+              "description": "ticket-list: with jql or filter, narrow to a fix version by name. With cleanupRule, the fix version in place of the rule's own: released, unreleased, a pattern with *, or a version name (\"released\" in double quotes for a version of that name).",
+              "type": "string"
+            },
+            "sprint": {
+              "description": "ticket-list with jql or filter: narrow to a sprint, by name.",
+              "type": "string"
+            },
+            "assignee": {
+              "description": "ticket-list with jql or filter: narrow to an assignee, a user name or \"me\".",
+              "type": "string"
+            },
+            "myTeam": {
+              "description": "ticket-list with jql or filter: narrow by the team JQL of the ticketSidekick.jira.myTeamJql setting.",
+              "type": "boolean"
             },
             "change": {
               "description": "ticket-list: a change the user asked for. The board shows it as proposed and writes nothing until the user applies it.",
@@ -827,6 +802,15 @@
                 "value": {
                   "description": "For a field change: the new value.",
                   "type": "string"
+                },
+                "operation": {
+                  "description": "For a list field such as labels: add or remove the value and keep the others. Default: set.",
+                  "type": "string",
+                  "enum": [
+                    "set",
+                    "add",
+                    "remove"
+                  ]
                 }
               },
               "required": [
@@ -913,7 +897,7 @@
           "ticketSidekick.jira.showConnectionInfo": {
             "type": "boolean",
             "default": false,
-            "description": "When enabled, each @jira response starts with an italic line showing the active base URL, API version, and auth type."
+            "description": "When enabled, each @jira import response starts with an italic line showing the active base URL, API version, and auth type."
           },
           "ticketSidekick.jira.additionalDisplayFields": {
             "type": "array",
@@ -921,7 +905,7 @@
               "type": "string"
             },
             "default": [],
-            "description": "Field IDs always shown in @jira show output even when their value is null. Use @jira show fields on PROJ-123 to discover field IDs (e.g. [\"customfield_10020\", \"customfield_10500\"])."
+            "description": "Field IDs always shown when a ticket is viewed or loaded, even when their value is null. Type /ts-jira fields PROJ-123 to discover field IDs (e.g. [\"customfield_10020\", \"customfield_10500\"])."
           },
           "ticketSidekick.jira.searchFields": {
             "type": "array",
@@ -929,7 +913,7 @@
               "type": "string"
             },
             "default": [],
-            "description": "Field IDs to add as extra columns in @jira search results (e.g. [\"priority\", \"customfield_10020\"]). Use @jira show fields on PROJ-123 to discover field IDs."
+            "description": "Field IDs to add as extra columns to search results and the ticket list board (e.g. [\"priority\", \"customfield_10020\"]). Type /ts-jira fields PROJ-123 to discover field IDs."
           },
           "ticketSidekick.jira.cleanupFields": {
             "type": "array",
@@ -937,7 +921,7 @@
               "type": "string"
             },
             "default": [],
-            "description": "Field IDs to add as extra columns in the @jira run cleanup / bulk transition review table (e.g. [\"fixVersions\", \"priority\"]). Use @jira show fields on PROJ-123 to discover field IDs."
+            "description": "Field IDs to add as extra columns on a cleanup board and on a ticket list opened with a proposed move, in place of searchFields (e.g. [\"fixVersions\", \"priority\"]). Type /ts-jira fields PROJ-123 to discover field IDs."
           },
           "ticketSidekick.jira.hiddenDisplayFields": {
             "type": "array",
@@ -956,11 +940,11 @@
               "updated",
               "statuscategorychangedate"
             ],
-            "description": "Field IDs excluded from @jira show output. Fields in additionalDisplayFields override this list. Use @jira show fields on PROJ-123 to discover field IDs."
+            "description": "Field IDs left out when a ticket is viewed or loaded. Fields in additionalDisplayFields override this list. Type /ts-jira fields PROJ-123 to discover field IDs."
           },
           "ticketSidekick.jira.myTeamJql": {
             "type": "string",
-            "description": "JQL fragment representing your team's tickets (e.g. 'project = BACKEND AND assignee in membersOf(\"backend-team\")'). When you ask '@jira open tickets for my team', this is ANDed with the rest of your query."
+            "description": "JQL fragment representing your team's tickets (e.g. 'project = BACKEND AND assignee in membersOf(\"backend-team\")'). When you ask Copilot for your team's tickets, the search tool and the ticket list board AND this with the rest of the query."
           }
         }
       },
@@ -1247,7 +1231,7 @@
           {
             "id": "jiraDefaultProject",
             "title": "Set a default project",
-            "description": "So `@jira create` and the report importers don't need a project key in every prompt.\n[Open setting](command:workbench.action.openSettings?%22ticketSidekick.jira.defaultProject%22)",
+            "description": "So creating tickets, the security report and the report importers don't need a project key in every prompt.\n[Open setting](command:workbench.action.openSettings?%22ticketSidekick.jira.defaultProject%22)",
             "media": {
               "markdown": "walkthroughs/jira/default-project.md"
             },
@@ -1257,8 +1241,8 @@
           },
           {
             "id": "jiraWorkflow",
-            "title": "Discover your ticket types & workflow",
-            "description": "Sample your project's real tickets to learn its issue types and status-transition graph.\n[Ask @jira](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20discover%20workflow%20%3CPROJECT%3E%20%3CISSUE_TYPE%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
+            "title": "See your ticket workflow",
+            "description": "See the statuses a ticket can reach; the project's workflow is discovered the first time.\n[Show the workflow](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%2Fts-jira%20workflow%20%3CKEY%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
             "media": {
               "markdown": "walkthroughs/jira/workflow.md"
             },
@@ -1269,7 +1253,7 @@
           {
             "id": "jiraFirstTicket",
             "title": "Create your first ticket",
-            "description": "Turn an example ticket into a template, then create a ticket from it — or create one directly.\n[Create a template](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%2Fts-jira-template%20%3CKEY%3E%20%3CNAME%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)\n[Or create directly](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20create%20%3CTYPE%3E%20in%20%3CPROJECT%3E%3A%20%3CSUMMARY%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
+            "description": "Turn an example ticket into a template, then create a ticket from it — or create one directly.\n[Create a template](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%2Fts-jira-template%20%3CKEY%3E%20%3CNAME%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)\n[Or create directly](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%2Fts-jira-create%20%3CTYPE%3E%20in%20%3CPROJECT%3E%3A%20%3CSUMMARY%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
             "media": {
               "markdown": "walkthroughs/jira/first-ticket.md"
             },

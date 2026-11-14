@@ -12,6 +12,7 @@ import { SESSIONS_BOARD } from './boardMessages';
 import { BOARD_VIEW_TYPE, BoardPanels } from './boardPanels';
 import { SECURITY_REPORT_KIND, securityReportKind, type SecurityReportDeps } from './securityReport/kind';
 import { ticketListJiraDeps } from './ticketList/jiraDeps';
+import { checkCleanupRules, describeRuleProblem, type RuleProblem } from './ticketList/cleanupSource';
 import { TICKET_LIST_KIND, ticketListKind } from './ticketList/kind';
 
 // VS Code glue for the boards: where sessions are stored, the native confirmation and save dialog,
@@ -21,6 +22,7 @@ export const BOARD_COMMANDS = {
   clearSessions: 'ticket-sidekick.sessions.clear',
   securityReport: 'ticket-sidekick.boards.securityReport',
   ticketList: 'ticket-sidekick.boards.ticketList',
+  cleanup: 'ticket-sidekick.boards.cleanup',
   sessions: 'ticket-sidekick.boards.sessions',
 } as const;
 
@@ -128,6 +130,33 @@ export function registerBoards(
       if (!query?.trim()) return;
       const filter = /^filter:\s*(.+)$/i.exec(query.trim())?.[1];
       await openFromCommand(TICKET_LIST_KIND, filter ? { filter } : { jql: query.trim() });
+    }),
+    vscode.commands.registerCommand(BOARD_COMMANDS.cleanup, async () => {
+      let rules: string[];
+      let problems: RuleProblem[];
+      try {
+        const checked = checkCleanupRules(await ticketListDeps.cleanupRules());
+        rules = checked.rules.map(rule => rule.name);
+        problems = checked.problems;
+      } catch (err) {
+        void vscode.window.showWarningMessage(`Ticket Sidekick: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+      if (problems.length > 0) {
+        void vscode.window.showWarningMessage(`Ticket Sidekick: ${problems.map(describeRuleProblem).join('; ')}.`);
+      }
+      if (rules.length === 0) {
+        if (problems.length === 0) void vscode.window.showInformationMessage('Ticket Sidekick: there are no cleanupRules in .jira-templates.json in this workspace.');
+        return;
+      }
+      const rule = await vscode.window.showQuickPick(rules, { title: 'Cleanup', placeHolder: 'The cleanup rule to run' });
+      if (!rule) return;
+      const fixVersion = await vscode.window.showInputBox({
+        title: `Cleanup: ${rule}`,
+        prompt: 'A fix version in place of the rule\'s own: released, unreleased, a pattern with *, or a version name. Leave empty to use the rule as it is.',
+      });
+      if (fixVersion === undefined) return;
+      await openFromCommand(TICKET_LIST_KIND, { cleanupRule: rule, ...(fixVersion.trim() ? { fixVersion: fixVersion.trim() } : {}) });
     }),
     vscode.commands.registerCommand(BOARD_COMMANDS.sessions, () => openFromCommand(SESSIONS_BOARD, {})),
     { dispose: () => clearInterval(timer) },

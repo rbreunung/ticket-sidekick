@@ -6,9 +6,9 @@ Jira and Bitbucket inside GitHub Copilot Chat in VS Code:
 
 - **Jira tools for Copilot** — Copilot's agent views, finds, creates, comments on, moves and updates Jira tickets through Ticket Sidekick's tools, or you type a command such as `/ts-jira view PROJ-123`
 - **Boards** — ticket lists and the security report open in an editor tab, where you select, preview and apply changes; a board comes back after a restart
-- **`@jira` and `@bitbucket` chat participants (deprecated)** — the earlier way to do the same, still the only way for report imports and pull request reviews
+- **`@jira` and `@bitbucket` chat participants (deprecated)** — `@jira` now only runs the report imports (emails, Veracode, Waltz), and `@bitbucket` the pull request reviews
 
-> **Deprecation notice.** The `@jira` and `@bitbucket` chat participants are deprecated. They keep working for now, but new features are built as Copilot tools, `/ts-jira` commands and boards only, and the participants will be removed once the imports and the pull request review have moved to boards. Start with [Copilot tools and boards](#copilot-tools-and-boards).
+> **Deprecation notice.** The `@jira` and `@bitbucket` chat participants are deprecated. `@jira` keeps only the report imports; every other Jira task is done with the Copilot tools, `/ts-jira` commands and boards. Both participants will be removed once the imports and the pull request review have moved to boards. Start with [Copilot tools and boards](#copilot-tools-and-boards).
 
 ---
 
@@ -26,13 +26,13 @@ See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool 
 
 ### Boards
 
-Larger views open as a **board** in their own editor tab. The security report opens with "the security report for PROJ", `/ts-jira security-report PROJ` or `Ticket Sidekick: Open security report`. A ticket list opens when you ask Copilot to see tickets or to change several of them, with `/ts-jira search <JQL or filter>` or `Ticket Sidekick: Open ticket list`: you select tickets there and move them or set a field after a preview. A board keeps its work in progress as a stored session, so it comes back after a restart; `/ts-jira sessions` or `Ticket Sidekick: Open stored sessions` lists the stored sessions and `Ticket Sidekick: Clear stored sessions` deletes them all. The Command Palette commands work without Copilot. See [Boards](docs/manual/boards.md).
+Larger views open as a **board** in their own editor tab. The security report opens with "the security report for PROJ", `/ts-jira security-report PROJ` or `Ticket Sidekick: Open security report`. A ticket list opens when you ask Copilot to see tickets or to change several of them, with `/ts-jira search <JQL or filter>` or `Ticket Sidekick: Open ticket list`: you select tickets there and move them or set a field after a preview. A cleanup rule from `.jira-templates.json` opens the same board with "run the cleanup Close released bugs", `/ts-jira cleanup <rule> [in VERSION]` or `Ticket Sidekick: Run a cleanup rule`. A board keeps its work in progress as a stored session, so it comes back after a restart; `/ts-jira sessions` or `Ticket Sidekick: Open stored sessions` lists the stored sessions and `Ticket Sidekick: Clear stored sessions` deletes them all. The Command Palette commands work without Copilot. See [Boards](docs/manual/boards.md).
 
 ---
 
-## @jira — Jira
+## Jira setup
 
-> **Deprecated.** `@jira` is being replaced by the [Copilot tools and boards](#copilot-tools-and-boards) above. Its setup steps below still apply to them. It remains the way to run the report imports and the bulk cleanup until those have a board.
+The Jira tools, the boards and the `@jira` imports share this setup.
 
 ### Quickstart
 
@@ -40,7 +40,7 @@ Larger views open as a **board** in their own editor tab. The security report op
 2. Cloud only: also set `ticketSidekick.jira.authType` to `"cloud"` (Data Center is the default, no extra setting needed)
 3. Command Palette → `Ticket Sidekick: Set Jira Personal Access Token` (Data Center) or `Ticket Sidekick: Configure Jira Cloud Credentials` (Cloud)
 
-Then open Copilot Chat and try `@jira check` to confirm the connection, or `@jira show PROJ-123` to read a ticket. Full setup details and every command are below.
+Then type `/ts-jira check` in a Copilot chat to confirm the connection, or ask "show me PROJ-123" in Agent mode to read a ticket.
 
 ### Prerequisites
 
@@ -74,345 +74,17 @@ Omit this setting for Data Center (default).
 **Cloud:** Open the Command Palette → `Ticket Sidekick: Configure Jira Cloud Credentials`
 (You will need your Atlassian email and an API token from id.atlassian.com)
 
-### Core commands
+### Good to know
 
-Type `@jira help` (or just `@jira`) for the full list of commands and flows, grouped by purpose, with the extension version. Inside a Veracode, Waltz or email import, `help` lists the commands of the screen you are on.
+- **Ticket from the branch.** When you name no ticket, viewing and loading use the ticket in the current git branch name: `feature/PROJ-123-my-work` → `PROJ-123`.
+- **Workflow cache.** Moves and cleanups follow your Jira workflow. Ticket Sidekick discovers a project's workflow once per issue type when it needs it and keeps it in `.jira-workflow-cache.json` at your workspace root; `/ts-jira workflow <KEY>` shows the statuses a ticket can reach. Commit the file to share it with your team.
+- **Formatting.** Descriptions and comments are shown as Markdown; Jira wiki markup and older ADF content are converted automatically.
 
-Open GitHub Copilot Chat and use `@jira`:
+---
 
-| What you type | What happens |
-| --- | --- |
-| `@jira show PROJ-123` | Full ticket: all non-null fields in a metadata table, formatted description, one-line comment summaries |
-| `@jira load PROJ-123` | Download full ticket context into `.jira-context/PROJ-123/` — `ticket.md`, `comments.md`, and attachments — so the AI can reason over them alongside your code |
-| `@jira show fields on PROJ-123` | Table of every field: name, ID, and current value — use to discover IDs for `additionalDisplayFields` |
-| `@jira summarize PROJ-123` | Same fields as `show`, but description + comments replaced by a one-paragraph AI synthesis |
-| `@jira show comments` | Full formatted comment bodies numbered — use when you want to read the actual text |
-| `@jira what do the comments say about the login bug?` | LLM synthesis filtered to a topic |
-| `@jira create a bug: login times out` | Resolves template and type, then shows a preview — reply **"create it"** to confirm |
-| `@jira create Story in VSJI: add dark mode` | Creates a ticket with project and type from the prompt — shows preview before creating |
-| `@jira set priority to High` | Updates any field by name (exact or fuzzy-matched) on the current branch ticket |
-| `@jira set labels to backend, urgent` | Replaces entire array field (comma-separated) |
-| `@jira add frontend to labels` | Appends to an array field, deduplicates |
-| `@jira remove backend from labels` | Removes items from an array field |
-| `@jira set sprint to Sprint 4` | Sets sprint field — fuzzy-matched by name, resolved to sprint ID |
-| `@jira set customfield_10500 to ASL QRF` | Updates any custom field by ID |
-| `@jira assign this to jane.doe` | Assigns ticket (searches Jira by display name) |
-| `@jira assign to me` | Assigns ticket to the currently logged-in user |
-| `@jira update the description based on our conversation` | Generates a new description from context — shows preview before posting |
-| `@jira comment that the fix is in PR #42` | Adds a comment |
-| `@jira move to Done` | Transitions the current ticket to a target status |
-| `@jira move to Cancelled with resolution "Not a Bug"` | Transitions and sets a resolution in one step |
-| `@jira find open bugs assigned to me` | Runs JQL search |
-| `@jira open bugs for my team` | Searches within your team's tickets — needs `ticketSidekick.jira.myTeamJql` (see [Settings Reference](docs/manual/settings-reference.md#jira-settings-reference)) |
-| `@jira show my filters` | Lists your favourite and own saved Jira filters to pick one and run it (runs it directly when you have only one) |
-| `@jira tickets from filter "My open bugs"` | Runs a saved filter by name (or `filter 12345` by ID) |
-| `@jira check required fields on PROJ-123` | Validates required fields |
-| `@jira check` | Validates the base URL, tests the connection, and shows active configuration |
-| `@jira create from email` | Create a Jira ticket from an imported `.eml` file |
-| `@jira import veracode report` | Create Jira tickets from a Veracode Detailed Report XML export |
-| `@jira upload the report to PROJ-123` | Attach one or more local files to a ticket — shows a confirmation before uploading |
+## @jira — report imports (deprecated)
 
-**Slash commands** — typing `@jira /` in Copilot Chat lists shortcuts for the most common operations. Each one is the same as writing the request in your own words (`@jira /view PROJ-123` does what `@jira view PROJ-123` does):
-
-| Command | Example | What it does |
-| --- | --- | --- |
-| `@jira /check` | `@jira /check` | Verify your Jira connection and credentials |
-| `@jira /create` | `@jira /create a bug in PROJ: login fails after password reset` | Create a new ticket |
-| `@jira /view` | `@jira /view PROJ-123` | Show a ticket's fields, description and comments |
-| `@jira /load` | `@jira /load PROJ-123` | Download a ticket's description, comments and attachments into the workspace |
-| `@jira /comment` | `@jira /comment PROJ-123 thanks, looks good to merge` | Add a comment |
-| `@jira /field` | `@jira /field PROJ-123 set priority to High` | Update a field |
-| `@jira /move` | `@jira /move PROJ-123 to In Progress` | Move a ticket to a new status |
-| `@jira /search` | `@jira /search my open bugs in PROJ` | Search with JQL or plain language |
-| `@jira /security-report` | `@jira /security-report PROJ` | List a project's open Veracode and Waltz tickets by release, with Due Dates, and save them as CSV or Excel |
-
-### Reading tickets
-
-#### Show vs summarize
-
-There are two distinct ways to read a ticket:
-
-| Command | What you get |
-| --- | --- |
-| `@jira show PROJ-123` | All non-null fields in a metadata table, multi-line fields (description, rich-text custom fields) in their own sections, numbered one-line comment summaries, linked issues, and web links |
-| `@jira summarize PROJ-123` | Same fields, but description and comments replaced by a one-paragraph AI synthesis |
-
-The ticket key in the heading is a clickable link to the ticket in your browser. Search results (`@jira find …`) also produce clickable keys in the results table.
-
-`@jira show` appends two additional sections when data is present:
-
-- **Linked Issues** — every issue link (`blocks`, `is blocked by`, `relates to`, etc.) with linked ticket key, summary, and status
-- **Web Links** — remote links attached to the ticket (Confluence pages, external documents, etc.)
-
-And two ways to read comments:
-
-| Command | What you get |
-| --- | --- |
-| `@jira show comments` | Full comment bodies numbered — Markdown-rendered, separated by dividers |
-| `@jira what do comments say about X?` | AI synthesis filtered to the topic you named |
-
-After seeing numbered comments you can always ask to view one in full:
-
-```text
-3
-show comment 2
-comment 4
-```
-
-If a ticket has more than 20 comments the response ends with an offer to load the rest:
-
-```text
-… 5 older comment(s) not shown. Reply "load all" to include them.
-```
-
-Reply **`load all`** to fetch up to 100 comments. For `show comments` the full bodies are rendered; for synthesised views the summary is regenerated over all comments.
-
-#### Loading ticket context
-
-`@jira load PROJ-123` downloads the complete ticket into `.jira-context/PROJ-123/` in your workspace root:
-
-```
-.jira-context/
-  PROJ-123/
-    ticket.md       ← all fields in the same layout as @jira show, plus linked issues, web links, and attachment index
-    comments.md     ← every comment in full, chronological order
-    attachments/
-      screenshot.png
-      error.log
-      report.pdf
-```
-
-Once loaded, your AI assistant (GitHub Copilot, Cursor, etc.) can read these files directly during coding sessions — no additional prompting required.
-
-| File type | Criterion | Action |
-| --- | --- | --- |
-| Text / source | `text/*` MIME type or known text extension | Downloaded |
-| Images | `image/*` MIME type | Downloaded |
-| Documents | `.pdf`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.odt`, `.ods`, `.odp`, `.rtf`, `.csv` | Downloaded |
-| Archives | `.zip`, `.tar`, `.gz`, `.tgz`, `.bz2`, `.7z`, `.rar`, `.jar`, `.war`, `.ear` | Downloaded |
-| Oversized | File larger than 100 MB | Skipped — listed in `ticket.md` with size |
-| Unknown binary | Any other MIME type not covered above | Skipped — listed in `ticket.md` with size |
-| Unsafe name | A name with `/` or `\` in it, or the name `.` or `..` | Never written — listed in `ticket.md` |
-
-Up to three attachments are downloaded in parallel.
-
-When a load skips attachments, the response lists each one with its name, size and the reason. To fetch a skipped one anyway, ask Copilot to load it with the `jira_load_ticket` tool, naming the attachment (see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md)). Files over 100 MB and files with an unsafe name are never downloaded.
-
-`.jira-context/` is automatically added to `.gitignore` at your workspace root the first time you run `@jira load`.
-
-#### Ticket detection
-
-If you don't name a ticket, the plugin resolves it in this order:
-
-1. Explicit key in your prompt (`PROJ-123`)
-2. Current git branch — `feature/PROJ-123-my-work` → `PROJ-123`
-3. Last ticket referenced earlier in the chat session
-4. Input box — the plugin asks you
-
-This means you can `@jira show PROJ-123`, then immediately follow up with `@jira add a comment: done` without repeating the key.
-
-#### Descriptions and comments — rich formatting
-
-Descriptions and comments are rendered as Markdown. Jira wiki markup (bold, italic, monospace, code blocks, bullet lists) and legacy ADF content are both converted automatically — no configuration required.
-
-### Creating tickets
-
-Running `@jira create` starts a guided flow:
-
-1. **Template** — if `.jira-templates.json` is present, a numbered list is shown in chat. Pick by number, name, or reply **`n`** for no template. Reply **`c`** to cancel.
-2. **Summary** — extracted from your prompt if provided; otherwise the plugin asks in chat. Providing the summary upfront is usually faster.
-3. **Issue type** — taken from the template or your prompt. If neither provides one, the plugin shows a numbered list of issue types for the project.
-4. **Description sections** — if the chosen template defines `descriptionSections`, the plugin asks each question in sequence, building the description incrementally.
-5. **Preview** — a full ticket card is shown: summary, issue type, project, template (if any), and description. Reply **"create it"** (or `yes`, `ok`, `confirm`) to create the ticket. Reply with a refinement instruction to adjust the description and see a new preview. Reply **`c`** to cancel.
-
-**Examples:**
-
-```text
-@jira create a bug
-```
-→ Template list shown. After picking a template, the plugin asks "What should the **summary** be?"
-
-```text
-@jira create a bug: stale loans not returning after grace period
-```
-→ Template list shown. Summary is extracted from the prompt — no additional question.
-
-```text
-@jira create Story in VSJI: dark mode — assign to jane.doe, components Backend
-```
-→ Project key `VSJI`, issue type `Story`, summary, assignee, and components all parsed from the prompt.
-
-You can include these directly in the create prompt and the plugin will extract them without asking:
-
-| In your prompt | What it sets |
-| --- | --- |
-| `assign to me` / `assign to <name>` | Assignee (resolved via Jira user search) |
-| `components Backend, API` | Components field |
-
-### Field updates
-
-`@jira set <field> to <value>` works for **any** editable Jira field — built-in fields, custom fields, and sprint.
-
-**Field name matching** is fuzzy: the plugin tries an exact match first, then prefix, then substring. If multiple fields match, a numbered disambiguation list is shown. Use field IDs (e.g. `customfield_10500`) for an exact, unambiguous match.
-
-**Array operations** let you add to or remove from multi-value fields without overwriting existing entries:
-
-| What you type | Effect |
-| --- | --- |
-| `@jira set labels to backend, urgent` | Replace entire labels array |
-| `@jira add frontend to labels` | Append `frontend`, deduplicate |
-| `@jira remove backend from labels` | Remove `backend` from the array |
-
-**Sprint fields** are resolved by fuzzy name match against active and future sprints in the project. If multiple sprints match, a numbered list is shown.
-
-**Preview before writing:** every field update streams a confirm screen before writing. Reply **`ok`** to apply, **`(c)`** to cancel, or give an adjustment instruction.
-
-**Scope:** if your last search returned multiple tickets, the plugin asks whether to apply to the current ticket or all N results from the search.
-
-**Spell check:** in a Copilot chat, `/ts-jira-spell-check PROJ-123` lists spelling and grammar corrections for a ticket's description and writes only the ones you approve; see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md).
-
-### Content generation and preview
-
-When you ask `@jira` to write content — for a new ticket, a comment, or a description update — the plugin shows a preview before posting:
-
-```text
-@jira create a bug: login times out after entering password
-@jira write a comment summarizing what we agreed on
-@jira update the description based on our conversation
-@jira draft a comment from the last few messages
-```
-
-The draft is streamed to chat. You then reply:
-
-- **`post it`** (or `yes`, `looks good`) — posts the content immediately
-- **Any refinement instruction** — regenerates with your feedback applied, shows a new preview
-- **`cancel`** (or `never mind`) — discards the draft without posting
-
-If you provide explicit literal text the preview is skipped and the comment is posted directly:
-
-```text
-@jira comment: ready for QA, all tests passing
-@jira add comment "approved"
-```
-
-The plugin infers which mode to use from your phrasing — `"write"`, `"draft"`, `"summarize"`, `"based on our discussion"`, and similar phrases trigger generation. Quoted text or direct statements post literally.
-
-### Uploading attachments
-
-Attach one or more local files to a ticket directly from chat:
-
-```text
-@jira upload the report to PROJ-123
-@jira upload screenshot.png
-```
-
-The file is resolved in this order:
-
-1. An explicit path in your prompt (workspace-relative or absolute)
-2. A file attached to the chat message (all attachments, if you attach more than one)
-3. Your active editor's file
-4. A multi-select file picker, if none of the above apply
-
-The ticket is resolved the same way as everywhere else: a key in your prompt, then a key embedded in the filename, then the last ticket referenced in the session — if none of those match, the plugin asks which ticket before continuing.
-
-Before anything uploads, a confirmation lists every file (name, size, full source path) and the target ticket:
-
-```text
-Upload the following to PROJ-123?
-
-- **report.pdf** (2.1 MB) — `/Users/jane/Downloads/report.pdf`
-
-Confirm · Cancel
-```
-
-Reply **"confirm"** to upload, **"cancel"** to discard. Each file reports its own success or failure — one failed upload in a batch doesn't stop the rest. Files over the 25 MB limit are rejected up front with a clear message and nothing is uploaded.
-
-For security, an explicit path you type must resolve inside your home directory and may not pass through a dotfile or dot-directory segment (e.g. `~/.ssh`, `~/.aws`) — files attached via the chat picker or your active editor aren't affected by this restriction.
-
-### Transitions and bulk cleanup
-
-#### Transitioning a single ticket
-
-Move a ticket to a target status by name:
-
-```text
-@jira move to Done
-@jira close this
-@jira transition PROJ-123 to In Review
-@jira move to Cancelled with resolution "Not a Bug"
-```
-
-The plugin resolves the ticket from context (current prompt, git branch, or last referenced key). It then fetches the ticket's available transitions and finds the one whose destination matches the target name (case-insensitive).
-
-If the target state requires multiple hops (e.g. Open → In Review → Done), the plugin falls back to the workflow cache automatically — no extra steps needed as long as you have run `@jira discover workflow` at least once for that project and issue type.
-
-If no path is found, the response lists the directly reachable states from the current status.
-
-**Guided transition** — after `@jira show PROJ-123`, click **Transition it** (or type `@jira transition PROJ-123` without a status) to be walked through it instead:
-
-1. Pick the target status from a numbered list of every status the ticket can reach — directly, or through the discovered workflow
-2. If more than one route leads there, pick the route
-3. If the transition requires a resolution, pick one
-4. Confirm the summary — nothing changes in Jira before you reply **Yes**
-
-Reply **cancel** at any step to stop without changing anything.
-
-**Resolution** — include `with resolution "<name>"` to set the resolution field on the final transition in one command.
-
-#### Workflow discovery (required for bulk transitions)
-
-Before running cleanup rules or bulk status transitions, teach the plugin your Jira workflow:
-
-```text
-@jira discover workflow BILLING Bug
-```
-
-This samples tickets across all statuses, queries their available transitions, and saves a workflow graph to `.jira-workflow-cache.json` at your workspace root. Re-run whenever your Jira workflow changes.
-
-The plugin uses this graph to find the shortest transition path from each ticket's current status to the target state — for both single-ticket `move` commands and bulk cleanup runs.
-
-> **Tip:** Commit `.jira-workflow-cache.json` to share it with your team so everyone benefits from a single discovery run.
-
-#### Bulk cleanup
-
-Run a named cleanup rule to transition a batch of tickets to a target state:
-
-```text
-@jira run cleanup "Close released bugs"
-```
-
-Or target a specific fix version ad-hoc:
-
-```text
-@jira close BILLING bugs in "Release 3.2"
-```
-
-More examples:
-
-```text
-@jira close BILLING bugs with resolution Fixed
-@jira run cleanup "Close released bugs" with resolution "Won't Fix"
-@jira run cleanup "Close released bugs" in released
-@jira run cleanup "Close released bugs" in "Release*"
-```
-
-The plugin:
-
-1. Builds the effective JQL and shows it as a **scope preview** (including ticket count) before executing
-2. Searches for tickets matching the scope — tickets that already have a resolution set are automatically excluded
-3. If `closeSubtasks` is true, fetches all open subtasks in a single query (also excluding pre-resolved ones)
-4. Asks for a resolution once if neither the rule nor your prompt provides one and the target state is a closed state
-5. Shows a review screen listing every ticket and subtask, the transition path each will follow, and the resolution that will be applied
-
-On the review screen, reply:
-
-- **`ok`** — execute all transitions
-- **`(c)`** or **`cancel`** — abort the entire run
-- **ticket number(s)** — skip those tickets (e.g. `123` or `123 456`); skipping a subtask also skips its parent; skipping a parent also skips all its subtasks
-
-Execution streams one confirmation line per ticket. Failures are reported at the end without stopping the rest of the batch.
-
-To see more on the review screen (e.g. each ticket's fix version), add field IDs to `ticketSidekick.jira.cleanupFields` — see [Settings Reference](docs/manual/settings-reference.md#jira-settings-reference).
+`@jira` now only runs the report imports below. Type `@jira help` (or just `@jira`) for its commands with the extension version; inside a Veracode, Waltz or email import, `help` lists the commands of the screen you are on. Any other request to `@jira` answers with a pointer to `/ts-jira` and Agent mode, where viewing, creating, commenting, moving and searching tickets, cleanup rules and the security report work now.
 
 ### Report imports (email, Veracode, Waltz)
 

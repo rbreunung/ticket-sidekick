@@ -14,7 +14,7 @@ interface Recipe { project: string }
 interface Derived { tickets: Record<string, string> }
 interface Working { selected: string[] }
 type Action = { type: 'select'; key: string } | { type: 'close' };
-interface Deps { tickets: Record<string, string>; reads: { count: number }; failRead?: boolean }
+interface Deps { tickets: Record<string, string>; reads: { count: number }; failRead?: boolean; modes?: string[] }
 
 function makeKind(formatVersion = 1): BoardKind<Recipe, Derived, Working, Action, { tickets: Record<string, string>; selected: string[] }, Deps> {
   return {
@@ -33,7 +33,8 @@ function makeKind(formatVersion = 1): BoardKind<Recipe, Derived, Working, Action
       if (deps.failRead) throw new Error('Jira answered 503');
       return { readAt: deps.reads.count, fingerprints: {}, data: { tickets: { ...deps.tickets } } };
     },
-    reconcile: (session, fresh) => {
+    reconcile: (session, fresh, mode) => {
+      source.modes?.push(mode ?? 'none');
       const gone = session.working.selected.filter(key => fresh.data.tickets[key] !== session.derived.data.tickets[key]);
       return {
         derived: fresh,
@@ -207,6 +208,19 @@ describe('restart', () => {
     expect(dropped.conflicts).toEqual([]);
   });
 
+  it('tells the board whether a check ran by itself or on Refresh', async () => {
+    const first = manager();
+    const state = await openReady(first);
+    source.modes = [];
+
+    const restarted = manager();
+    await ready(restarted, state.id);
+    expect(source.modes).toEqual(['background']);
+
+    await restarted.refresh('demo', state.id);
+    expect(source.modes).toEqual(['background', 'refresh']);
+  });
+
   it('keeps the stored state on show when the check fails', async () => {
     const first = manager();
     const state = await openReady(first);
@@ -282,6 +296,25 @@ describe('writing from a board', () => {
     const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
     clock += 11 * 60 * 1000;
     await expect(m.apply('demo', state.id, preview.planId)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('applies nothing while the last check failed, and again once a check passes', async () => {
+    const m = manager();
+    const state = await selected(m, ['PROJ-1']);
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    source.failRead = true;
+    const failed = await m.refresh('demo', state.id);
+    expect(failed.writesBlocked).toBe(true);
+    await expect(m.apply('demo', state.id, preview.planId)).rejects.toMatchObject({ status: 409, message: expect.stringContaining('once a check passes') });
+    await expect(m.preview('demo', state.id, failed.revision, { type: 'close' })).rejects.toMatchObject({ status: 409 });
+    expect(source.tickets['PROJ-1']).toBe('Open');
+
+    source.failRead = false;
+    const passed = await m.refresh('demo', state.id);
+    expect(passed.writesBlocked).toBe(false);
+    const again = await m.preview('demo', state.id, passed.revision, { type: 'close' });
+    await m.apply('demo', state.id, again.planId);
+    expect(source.tickets['PROJ-1']).toBe('Closed');
   });
 
   it('refuses a target that changed in Jira since the board read it, and writes the others', async () => {

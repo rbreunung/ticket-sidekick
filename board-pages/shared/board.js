@@ -153,7 +153,7 @@ export function startBoard({ root, render }) {
     if (message) items.push(h('p', { class: 'banner', role: 'status' }, message));
     if (!state) return items;
     if (state.notice) items.push(h('p', { class: 'banner' }, state.notice));
-    if (state.error) items.push(h('p', { class: 'banner error', role: 'alert' }, state.status === 'failed' ? `Could not load: ${state.error}` : `The check failed: ${state.error} The data shown is from ${formatTime(state.asOf)}.`));
+    if (state.error) items.push(h('p', { class: 'banner error', role: 'alert' }, state.status === 'failed' ? `Could not load: ${state.error}` : `The check failed: ${state.error} The data shown is from ${formatTime(state.asOf)}.${state.writesBlocked ? ' Nothing can be applied until a check passes: use Refresh.' : ''}`));
     if (!state.stored && state.status === 'ready') items.push(h('p', { class: 'banner' }, 'This session is too large to store and will not survive a restart.'));
     if (state.conflicts.length > 0) {
       items.push(h('section', { class: 'banner conflicts', 'aria-label': 'Conflicts' },
@@ -177,7 +177,7 @@ export function startBoard({ root, render }) {
       state && !stopped ? h('div', { class: 'bar' },
         h('vscode-button', { id: 'refresh', secondary: true, disabled: busy || state.status !== 'ready' && state.status !== 'failed', onClick: () => board.refresh() }, 'Refresh'),
         h('vscode-button', { id: 'discard', secondary: true, disabled: busy, onClick: () => board.discard() }, 'Discard session')) : null);
-    const content = state?.view !== undefined && !stopped ? render(state.view, board, busy) : null;
+    const content = state?.view !== undefined && !stopped ? render(state.view, board, busy, state) : null;
     root.replaceChildren(header, ...banners(), content ?? '');
     if (focusId) document.getElementById(focusId)?.focus();
   }

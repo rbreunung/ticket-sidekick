@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import type { DiagLogger } from '../utils/diagTypes';
-import type { ExportedFile, RegisteredKind } from './boardKind';
+import type { CheckMode, ExportedFile, RegisteredKind } from './boardKind';
 import { sessionIdFor } from './sessionId';
 import type { SessionStore } from './sessionStore';
 import { SessionError, type ApplyLineResult, type Conflict, type PlanLine, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
@@ -31,6 +31,8 @@ export interface BoardState {
   conflicts: Conflict[];
   notice?: string;
   error?: string;
+  /** The last check against the sources failed on a board that writes: nothing is applied until one passes. */
+  writesBlocked: boolean;
   view?: unknown;
 }
 
@@ -173,7 +175,7 @@ export class SessionManager {
   }
 
   /** Reads the sources again and lays the working state over the fresh reading. */
-  private async check(entry: Entry): Promise<void> {
+  private async check(entry: Entry, mode: CheckMode = 'background'): Promise<void> {
     const session = entry.session;
     if (!session) return this.build(entry);
     entry.status = 'checking';
@@ -182,7 +184,7 @@ export class SessionManager {
     try {
       const { kind } = entry.reg;
       const fresh = await kind.read(session.recipe, await entry.reg.deps());
-      const merged = kind.reconcile(session, fresh);
+      const merged = kind.reconcile(session, fresh, mode);
       // A conflict stays until the developer resolves or drops it; a later check must not erase it.
       const fresher = new Set(merged.conflicts.map(c => c.id));
       entry.session = {
@@ -250,6 +252,7 @@ export class SessionManager {
       id: entry.id, kind: kind.kind, title: kind.title(entry.recipe), status: entry.status, tick: entry.tick,
       revision: session?.revision ?? 0, asOf: session?.derived.readAt, restored: entry.restored, stored: entry.stored,
       conflicts: session?.conflicts ?? [], notice: entry.notice, error: entry.error,
+      writesBlocked: this.writesBlocked(entry),
       view: session ? kind.view(session) : undefined,
     };
   }
@@ -265,6 +268,17 @@ export class SessionManager {
       });
     }
     return this.toState(entry);
+  }
+
+  /** A board that writes is not applied from data a failed check could not confirm. */
+  private writesBlocked(entry: Entry): boolean {
+    return Boolean(entry.session && entry.error && entry.reg.kind.apply);
+  }
+
+  private requireWritable(entry: Entry): void {
+    if (this.writesBlocked(entry)) {
+      throw new SessionError(409, `Nothing can be applied while the last check against the sources failed (${entry.error}). Refresh the board; Apply works again once a check passes.`);
+    }
   }
 
   private requireCurrent(entry: Entry, revision: number): Session {
@@ -298,7 +312,7 @@ export class SessionManager {
   /** Checks the session against its sources now. */
   async refresh(kindName: string, id: string): Promise<BoardState> {
     const entry = await this.entry(kindName, id);
-    await this.enqueue(entry, () => this.check(entry));
+    await this.enqueue(entry, () => this.check(entry, 'refresh'));
     return this.toState(entry);
   }
 
@@ -314,6 +328,7 @@ export class SessionManager {
       const session = this.requireCurrent(entry, revision);
       const { kind } = entry.reg;
       if (!kind.plan || !kind.apply) throw new SessionError(400, 'This board does not write.');
+      this.requireWritable(entry);
       const planned = kind.plan(session, action);
       if (!planned.ok) throw new SessionError(400, planned.reason);
       this.sweepPlans();
@@ -336,6 +351,7 @@ export class SessionManager {
       const session = this.requireCurrent(entry, pending.revision);
       const { kind } = entry.reg;
       if (!kind.apply) throw new SessionError(400, 'This board does not write.');
+      this.requireWritable(entry);
       const { plan } = pending;
       if (plan.risky && !(await this.deps.confirm({ title: plan.title, lines: plan.lines }))) {
         throw new SessionError(409, 'Not applied: the confirmation was declined.');

@@ -18,6 +18,8 @@ export interface WorkflowCache {
     [issueType: string]: {
       discovered: string;
       graph: WorkflowGraph;
+      /** The statuses Jira puts in the Done category; absent in a cache written before they were kept. */
+      doneStatuses?: string[];
     };
   };
 }
@@ -334,7 +336,14 @@ export async function discoverAndCacheWorkflow(
   if (!cache[projectKey]) cache[projectKey] = {};
   const oldGraph = cache[projectKey][issueType]?.graph ?? {};
   const preserved = preserveSkippedStatuses(graph, skippedStatuses, oldGraph);
-  cache[projectKey][issueType] = { discovered: new Date().toISOString().slice(0, 10), graph };
+  // Which statuses are final comes from Jira's status categories; a failed read keeps what was cached.
+  let doneStatuses = cache[projectKey][issueType]?.doneStatuses;
+  try {
+    doneStatuses = await jiraClient.getDoneStatuses(projectKey, issueType);
+  } catch {
+    // The workflow is still worth caching; the usual final names decide until the next discovery.
+  }
+  cache[projectKey][issueType] = { discovered: new Date().toISOString().slice(0, 10), graph, ...(doneStatuses ? { doneStatuses } : {}) };
   saveWorkflowCache(workspaceRoot, cache);
 
   return { graph, skippedStatuses, preserved };

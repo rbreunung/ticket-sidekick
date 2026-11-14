@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { JiraAttachment, JiraComment } from '../../jira/IJiraClient';
-import { formatCommentsInFull } from '../../participant/sessionState';
+import { formatCommentsInFull } from '../../utils/ticketText';
 import { formatFileSize } from '../../utils/attachmentEligibility';
 import { newestFirst } from '../../utils/requirementsSource';
 import { resolveTicketKey } from '../branchTicket';

@@ -316,6 +316,12 @@ export class JiraApiClient implements IJiraClient {
     return match ? match.statuses.map((s) => s.name) : [];
   }
 
+  async getDoneStatuses(projectKey: string, issueType: string): Promise<string[]> {
+    const data = await this.request<JiraProjectStatus[]>(`/project/${projectKey}/statuses`);
+    const match = data.find((t) => t.name.toLowerCase() === issueType.toLowerCase());
+    return match ? match.statuses.filter((s) => s.statusCategory?.key === 'done').map((s) => s.name) : [];
+  }
+
   async getSprintByName(projectKey: string, sprintName: string): Promise<{ id: number }> {
     const boardIds = this.sprintBoardId
       ? [this.sprintBoardId]

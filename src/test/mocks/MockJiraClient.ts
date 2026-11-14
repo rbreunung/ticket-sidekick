@@ -110,6 +110,12 @@ export class MockJiraClient implements IJiraClient {
     return match ? match.statuses.map((s) => s.name) : [];
   }
 
+  async getDoneStatuses(_projectKey: string, issueType: string): Promise<string[]> {
+    const data = loadFixture<JiraProjectStatus[]>('project-statuses-PROJ.json');
+    const match = data.find((t) => t.name.toLowerCase() === issueType.toLowerCase());
+    return match ? match.statuses.filter((s) => s.statusCategory?.key === 'done').map((s) => s.name) : [];
+  }
+
   async getSprintByName(_projectKey: string, sprintName: string): Promise<{ id: number }> {
     if (sprintName === 'Sprint 5') return loadFixture<{ id: number }>('sprint-PROJ.json');
     throw new Error(`Sprint '${sprintName}' not found in project PROJ.`);

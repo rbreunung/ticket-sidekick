@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { loadTicketToWorkspace, nodeFsWriter } from '../participant/jira/loadCore';
+import { loadTicketToWorkspace, nodeFsWriter } from '../tools/jiraTools/loadCore';
 import { TicketService } from '../services/TicketService';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { makeTempDir, removeTempDirs } from './helpers/gitRepo';

@@ -433,6 +433,21 @@ describe('JiraApiClient', () => {
     });
   });
 
+  describe('getDoneStatuses', () => {
+    it('returns the statuses of the issue type that Jira puts in the Done category', async () => {
+      vi.stubGlobal('fetch', makeFetch([
+        { name: 'Bug', subtask: false, statuses: [
+          { id: '1', name: 'Open', statusCategory: { key: 'new' } },
+          { id: '2', name: 'Shipped', statusCategory: { key: 'done' } },
+          { id: '3', name: 'Rejected', statusCategory: { key: 'done' } },
+        ] },
+      ]));
+      const client = new JiraApiClient(BASE_CONFIG);
+      expect(await client.getDoneStatuses('PROJ', 'bug')).toEqual(['Shipped', 'Rejected']);
+      expect(await client.getDoneStatuses('PROJ', 'Epic')).toEqual([]);
+    });
+  });
+
   describe('getRequiredFields (granular createmeta)', () => {
     // Per-issue-type field metadata item shape shared by DC (v2, under `values`) and
     // Cloud (v3, under `fields`) — both wrap the same field-item shape.

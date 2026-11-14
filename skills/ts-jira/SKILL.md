@@ -2,7 +2,7 @@
 name: ts-jira
 description: Runs one Jira command you type, e.g. /ts-jira load PROJ-123. /ts-jira help lists the commands.
 disable-model-invocation: true
-argument-hint: help|load|view|search|filters|comment|field|fields|check-fields|move|workflow|templates|upload|check|security-report|sessions <arguments>
+argument-hint: help|load|view|search|cleanup|filters|comment|field|fields|check-fields|move|workflow|templates|upload|check|security-report|sessions <arguments>
 ---
 
 The user typed after /ts-jira: `$ARGUMENTS`
@@ -23,6 +23,7 @@ Usage: /ts-jira <command> [arguments]
   load [KEY] [file ...]       load a ticket into .jira-context/
   view [KEY]                  show a ticket
   search <JQL or filter>      open the tickets in their own tab
+  cleanup <rule> [in VERSION] run a cleanup rule in its own tab
   filters                     list your saved filters
   comment <KEY> <text>        add a comment
   field <KEY> <field> <value> update a field
@@ -46,6 +47,7 @@ A brief, a guided create, a spell check or a template: help brief, help create, 
 | load [KEY] [file ...] | `jira_load_ticket`; the files go in `attachments` |
 | view [KEY] | `jira_view_ticket` |
 | search <JQL or filter> | `jira_open_board` with board `ticket-list` and the text as `jql`, or as `filter` when it is a saved filter's id or name |
+| cleanup <rule> [in VERSION] | `jira_open_board` with board `ticket-list` and the whole text after `cleanup`, `in VERSION` included, as `cleanupRule`; the board finds the rule and the version |
 | filters | `jira_list_my_filters` |
 | comment <KEY> <text> | `jira_add_comment` |
 | field <KEY> <field> <value> | `jira_update_field` |

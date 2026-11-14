@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const sla = vi.hoisted(() => ({ value: undefined as unknown }));
+const csvDelimiter = vi.hoisted(() => ({ value: undefined as unknown }));
 
 vi.mock('vscode', () => {
   class Uri {
@@ -13,7 +14,7 @@ vi.mock('vscode', () => {
     Uri,
     workspace: {
       workspaceFolders: undefined,
-      getConfiguration: vi.fn(() => ({ get: (key: string) => (key === 'veracode.slaDays' ? sla.value : undefined) })),
+      getConfiguration: vi.fn(() => ({ get: (key: string) => (key === 'veracode.slaDays' ? sla.value : key === 'jira.overviewCsvDelimiter' ? csvDelimiter.value : undefined) })),
       fs: { writeFile: vi.fn() },
     },
     window: {
@@ -53,6 +54,7 @@ let service: TicketService;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  csvDelimiter.value = undefined;
   sla.value = undefined;
   client = new MockJiraClient();
   service = new TicketService(client);
@@ -183,6 +185,60 @@ describe('export reply of a report import', () => {
     expect(sheet.rowCount).toBe(3);
     expect(sheet.getRow(1).values).toContain('Report match');
     expect(streamText(stream)).toContain('Saved the security report to `/out/overview.xlsx`');
+  });
+
+  it('uses the semicolon separator in the CSV when that setting is chosen', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } };
+    const { session, ws } = await importVeracode([makeFlaw('101')], tickets);
+    answerKeySearch({ 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'], fixVersions: ['2026.11'] } });
+    csvDelimiter.value = 'semicolon';
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValueOnce(vscode.Uri.file('/out/overview.csv'));
+
+    await handleVeracodeReviewReply('export csv', session, service, mockStream() as never, ws as never);
+
+    const csv = new TextDecoder('utf-8', { ignoreBOM: true }).decode(vi.mocked(vscode.workspace.fs.writeFile).mock.calls[0][1] as Uint8Array);
+    expect(csv.split('\r\n')[0]).toContain(';Report match');
+  });
+
+  it('ignores the CSV separator setting in the Excel workbook', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } };
+    const { session, ws } = await importVeracode([makeFlaw('101')], tickets);
+    answerKeySearch({ 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'], fixVersions: ['2026.11'] } });
+    csvDelimiter.value = 'semicolon';
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValueOnce(vscode.Uri.file('/out/overview.xlsx'));
+
+    await handleVeracodeReviewReply('export xlsx', session, service, mockStream() as never, ws as never);
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(Buffer.from(vi.mocked(vscode.workspace.fs.writeFile).mock.calls[0][1] as Uint8Array) as never);
+    expect(workbook.getWorksheet('Security overview')!.getRow(1).values).toContain('Report match');
+  });
+
+  it('writes nothing and says so when the save dialog is cancelled', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } };
+    const { session, ws } = await importVeracode([makeFlaw('101')], tickets);
+    answerKeySearch({ 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'], fixVersions: ['2026.11'] } });
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValueOnce(undefined);
+    const stream = mockStream();
+
+    await handleVeracodeReviewReply('export csv', session, service, stream as never, ws as never);
+
+    expect(vscode.workspace.fs.writeFile).not.toHaveBeenCalled();
+    expect(streamText(stream)).toContain('Save cancelled');
+  });
+
+  it('reports a failed write instead of claiming the file was saved', async () => {
+    const tickets: Record<string, FakeTicket> = { 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'] } };
+    const { session, ws } = await importVeracode([makeFlaw('101')], tickets);
+    answerKeySearch({ 'PROJ-1': { labels: ['veracode', 'veracode-issue-101'], fixVersions: ['2026.11'] } });
+    vi.mocked(vscode.window.showSaveDialog).mockResolvedValueOnce(vscode.Uri.file('/readonly/overview.csv'));
+    vi.mocked(vscode.workspace.fs.writeFile).mockRejectedValueOnce(new Error('EACCES'));
+    const stream = mockStream();
+
+    await handleVeracodeReviewReply('export csv', session, service, stream as never, ws as never);
+
+    expect(streamText(stream)).toContain('Could not save the file: EACCES');
+    expect(streamText(stream)).not.toContain('Saved the security report');
   });
 
   it('answers export on a group screen of a multi-group import with where it works', async () => {

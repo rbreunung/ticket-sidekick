@@ -24,13 +24,24 @@ function fake(rows: TicketRow[] = [row(1), row(2), row(3, 'Done')]): Fake {
     jiraConfigured: async () => true,
     baseUrl: async () => 'https://jira.example.com',
     resolveFilter: async name => (name === 'mine' ? { id: '42', name: 'My open tickets', jql: 'assignee = currentUser()' } : `No saved filters found matching "${name}".`),
-    search: async () => ({ rows: [...jira.values()].map(r => ({ ...r })), truncated: false }),
+    extraColumns: async () => ({ search: [{ id: 'customfield_1', name: 'Team' }], cleanup: [{ id: 'fixVersions', name: 'Fix versions' }] }),
+    search: async (_jql, _limit, fieldIds) => ({
+      rows: [...jira.values()].map(r => ({ ...r, extra: Object.fromEntries(fieldIds.map(id => [id, `${id} of ${r.key}`])) })),
+      truncated: false,
+    }),
     readTicket: async key => { const t = jira.get(key); return t ? { status: t.status, updated: t.updated } : undefined; },
     move: async (key, status) => {
       if (key === 'PROJ-2' && status === 'Blocked') throw new Error('no path to Blocked');
       const t = jira.get(key)!; t.status = status; t.updated = 't2'; deps.moved.push(`${key}→${status}`); return 'moved';
     },
-    setField: async (key, field, value) => { deps.fields.push(`${key}.${field}=${value}`); jira.get(key)!.updated = 't2'; return 'set'; },
+    setField: async (key, field, value, operation) => {
+      const sign = operation === 'add' ? '+=' : operation === 'remove' ? '-=' : '=';
+      deps.fields.push(`${key}.${field}${sign}${value}`); jira.get(key)!.updated = 't2'; return 'set';
+    },
+    cleanupRules: async () => [],
+    workflowGraph: async () => undefined,
+    doneStatuses: async () => undefined,
+    resolutions: async () => [],
     now: () => 1000,
   };
   return deps;
@@ -195,21 +206,122 @@ describe('applying a change', () => {
   });
 });
 
-describe('a restored list checked against Jira', () => {
-  it('keeps the selection, and takes out and names a selected ticket that changed or left the list', async () => {
+describe('a list checked against Jira', () => {
+  it('says by itself that it is out of date, keeps the rows on show and allows only paging', async () => {
     const deps = fake();
     let s = await open(deps);
     s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'transition', status: 'Closed' } });
-    Object.assign(deps.jira.get('PROJ-1')!, { status: 'In Progress', updated: 't9' });
+    Object.assign(deps.jira.get('PROJ-1')!, { status: 'Done', updated: 't9' });
     deps.jira.delete('PROJ-3');
-    const merged = ticketListKind.reconcile(s, await ticketListKind.read(s.recipe, deps));
-    expect(merged.conflicts.map(c => `${c.target} ${c.message}`)).toEqual([
-      'PROJ-1 changed in Jira and was taken out of the selection.',
-      'PROJ-3 is no longer in this list and was taken out of the selection.',
-    ]);
-    const view = ticketListKind.view({ ...s, derived: merged.derived, working: merged.working });
-    expect(view.rows.filter(r => r.selected).map(r => r.key)).toEqual(['PROJ-2']);
-    expect(view.change).toEqual({ type: 'transition', status: 'Closed' });
+    const merged = ticketListKind.reconcile(s, await ticketListKind.read(s.recipe, deps), 'background');
+    expect(merged.conflicts).toEqual([]);
+    const checked = { ...s, derived: merged.derived, working: merged.working };
+    const view = ticketListKind.view(checked);
+    expect(view.outOfDate).toEqual({ changed: ['PROJ-1'], gone: ['PROJ-3'], added: 0 });
+    expect(view.rows.map(r => `${r.key} ${r.status}`)).toEqual(['PROJ-1 Open', 'PROJ-2 Open', 'PROJ-3 Done']);
+    expect(ticketListKind.reduce(checked, { type: 'select', key: 'PROJ-1', on: false })).toMatchObject({ ok: false, reason: expect.stringContaining('Refresh') });
+    expect(ticketListKind.plan!(checked, { type: 'apply' })).toMatchObject({ ok: false, reason: expect.stringContaining('Refresh') });
+    expect(ticketListKind.reduce(checked, { type: 'page', page: 0 })).toMatchObject({ ok: true });
+  });
+
+  it('takes the fresh rows on Refresh, keeps the selection of tickets still listed and drops the rest', async () => {
+    const deps = fake();
+    let s = await open(deps);
+    s = act(act(s, { type: 'select', key: 'PROJ-1', on: true }), { type: 'select', key: 'PROJ-3', on: true });
+    Object.assign(deps.jira.get('PROJ-1')!, { status: 'Done', updated: 't9' });
+    deps.jira.delete('PROJ-3');
+    const background = ticketListKind.reconcile(s, await ticketListKind.read(s.recipe, deps), 'background');
+    const stale = { ...s, derived: background.derived, working: background.working };
+    const refreshed = ticketListKind.reconcile(stale, await ticketListKind.read(s.recipe, deps), 'refresh');
+    const view = ticketListKind.view({ ...s, derived: refreshed.derived, working: refreshed.working });
+    expect(view.outOfDate).toBeNull();
+    expect(view.rows.map(r => `${r.key} ${r.status} ${r.selected}`)).toEqual(['PROJ-1 Done true', 'PROJ-2 Open false']);
+    expect(view.selectedCount).toBe(1);
+  });
+
+  it('is out of date when a ticket newly matches the query, and applies nothing until Refresh', async () => {
+    const deps = fake();
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'transition', status: 'Closed' } });
+    deps.jira.set('PROJ-9', { ...deps.jira.get('PROJ-2')!, key: 'PROJ-9', summary: 'Ticket PROJ-9' });
+    const merged = ticketListKind.reconcile(s, await ticketListKind.read(s.recipe, deps), 'background');
+    const checked = { ...s, derived: merged.derived, working: merged.working };
+    const view = ticketListKind.view(checked);
+    expect(view.outOfDate).toEqual({ changed: [], gone: [], added: 1 });
+    expect(view.rows.map(r => r.key)).not.toContain('PROJ-9');
+    expect(ticketListKind.plan!(checked, { type: 'apply' })).toMatchObject({ ok: false, reason: expect.stringContaining('Refresh') });
+  });
+
+  it('stays up to date when nothing changed', async () => {
+    const deps = fake();
+    const s = await open(deps);
+    const merged = ticketListKind.reconcile(s, await ticketListKind.read(s.recipe, deps), 'background');
+    expect(merged.working.outOfDate).toBeNull();
+  });
+});
+
+describe('extra columns from the settings', () => {
+  it('shows the search columns for a query, with each ticket\'s value', async () => {
+    const view = ticketListKind.view(await open(fake()));
+    expect(view.columns).toEqual([{ id: 'customfield_1', name: 'Team' }]);
+    expect(view.rows[0].extra?.customfield_1).toBe('customfield_1 of PROJ-1');
+  });
+
+  it('shows the cleanup columns when the board opens with a proposed move, and keeps them when the change is edited', async () => {
+    let s = await open(fake(), { jql: 'project = PROJ', change: { type: 'transition', status: 'Closed' } });
+    expect(ticketListKind.view(s).columns).toEqual([{ id: 'fixVersions', name: 'Fix versions' }]);
+    s = act(s, { type: 'change', change: { type: 'field', field: 'labels', value: 'x' } });
+    expect(ticketListKind.view(s).columns).toEqual([{ id: 'fixVersions', name: 'Fix versions' }]);
+  });
+
+  it('switches to the cleanup columns when the same list is asked for again with a proposed move', async () => {
+    const deps = fake();
+    const s = await open(deps);
+    const again = await ticketListKind.validate({ jql: 'project = PROJ', change: { type: 'transition', status: 'Done' } }, deps);
+    const working = ticketListKind.reopen!(s, (again as { recipe: TicketListRecipe }).recipe);
+    expect(ticketListKind.view({ ...s, working }).columns).toEqual([{ id: 'fixVersions', name: 'Fix versions' }]);
+  });
+});
+
+describe('paging', () => {
+  const many = () => fake(Array.from({ length: 120 }, (_, i) => row(i + 1)));
+
+  it('shows 50 tickets a page and the last page with the rest', async () => {
+    const s = await open(many());
+    expect(ticketListKind.view(s)).toMatchObject({ totalRows: 120, page: 0, pageCount: 3 });
+    expect(ticketListKind.view(s).rows.map(r => r.key).slice(0, 2)).toEqual(['PROJ-1', 'PROJ-2']);
+    const last = act(s, { type: 'page', page: 2 });
+    expect(ticketListKind.view(last).rows.map(r => r.key)).toEqual(Array.from({ length: 20 }, (_, i) => `PROJ-${101 + i}`));
+    expect(ticketListKind.view(act(s, { type: 'page', page: 9 })).page).toBe(2);
+  });
+
+  it('keeps the selection across pages and plans every selected ticket, named in the confirmation', async () => {
+    let s = await open(many());
+    s = act(act(s, { type: 'select-all' }), { type: 'select', key: 'PROJ-60', on: false });
+    s = act(act(s, { type: 'page', page: 2 }), { type: 'change', change: { type: 'transition', status: 'Done' } });
+    expect(ticketListKind.view(s).selectedCount).toBe(119);
+    const planned = ticketListKind.plan!(s, { type: 'apply' });
+    expect(planned).toMatchObject({ ok: true, plan: { title: 'Move 119 ticket(s) to Done', risky: true } });
+    expect((planned as { plan: { lines: unknown[] } }).plan.lines).toHaveLength(119);
+  });
+});
+
+describe('changing single values of a list field', () => {
+  it('adds or removes a value and keeps the others', async () => {
+    const deps = fake();
+    let s = act(await open(deps), { type: 'select', key: 'PROJ-1', on: true });
+    s = act(s, { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup', operation: 'add' } });
+    const added = await apply(s, deps);
+    expect(added.plan).toMatchObject({ title: 'Add to labels on 1 ticket(s)', lines: [{ target: 'PROJ-1', change: 'Add "cleanup" to labels' }] });
+    let t = act(act(added.session, { type: 'select', key: 'PROJ-2', on: true }), { type: 'change', change: { type: 'field', field: 'labels', value: 'old', operation: 'remove' } });
+    t = (await apply(t, deps)).session;
+    expect(deps.fields).toEqual(['PROJ-1.labels+=cleanup', 'PROJ-2.labels-=old']);
+  });
+
+  it('refuses an operation it does not know, and an empty value', async () => {
+    const s = await open(fake());
+    expect(ticketListKind.reduce(s, { type: 'change', change: { type: 'field', field: 'labels', value: 'x', operation: 'toggle' } as never })).toMatchObject({ ok: false });
+    expect(ticketListKind.reduce(s, { type: 'change', change: { type: 'field', field: 'labels', value: ' ', operation: 'add' } })).toMatchObject({ ok: false });
   });
 });
 

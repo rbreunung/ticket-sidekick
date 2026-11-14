@@ -1,6 +1,4 @@
 import * as vscode from 'vscode';
-import { execSync } from 'child_process';
-import { extractTicketId } from '../../utils/branchParser';
 import {
   NO_ISSUE_TYPE, CURRENT_SESSION_SCHEMA_VERSION, buildChatCommandLink,
   type AwaitIssueTypeResume, type AwaitIssueTypeSession, type JiraSessionContinuity,
@@ -30,28 +28,6 @@ export function getActiveJiraSession(context: vscode.ChatContext): JiraSessionCo
   if (!(last instanceof vscode.ChatResponseTurn)) return undefined;
   const metadata = last.result.metadata as { jiraSession?: JiraSessionContinuity } | undefined;
   return metadata?.jiraSession;
-}
-
-// U3: same metadata read as getActiveJiraSession, but for an arbitrary history turn rather than
-// only the last one — used by llmHelpers.ts's extractHistoryTurns() to keep filtering
-// session-management responses (e.g. 'previewing') out of LLM history context
-// now that those turns carry no visible `<!-- jira:TAG -->` marker to text-match against (R3).
-export function turnCarriesJiraSessionKind(
-  turn: vscode.ChatRequestTurn | vscode.ChatResponseTurn,
-  kind: JiraSessionContinuity['kinds'][number],
-): boolean {
-  if (!(turn instanceof vscode.ChatResponseTurn)) return false;
-  const metadata = turn.result.metadata as { jiraSession?: JiraSessionContinuity } | undefined;
-  return metadata?.jiraSession?.kinds.includes(kind) ?? false;
-}
-
-export function resolveTicketFromBranch(): string | null {
-  try {
-    const branch = execSync('git branch --show-current', { encoding: 'utf-8' }).trim();
-    return extractTicketId(branch);
-  } catch {
-    return null;
-  }
 }
 
 export async function resolveProjectKey(
@@ -121,18 +97,4 @@ export async function streamAwaitIssueType(
 // must abort, not silently proceed.
 export function sessionWasSuperseded(ws: vscode.Memento, key: string): boolean {
   return ws.get(key) !== undefined;
-}
-
-export function parseLastTicketFromContext(context: vscode.ChatContext): string | null {
-  // R13: the last-referenced ticket key now rides on `metadata.jiraSession.lastTicketKey`
-  // (set by every branch that references a ticket) instead of a visible HTML-comment marker in
-  // the rendered markdown. Scan all turns, latest first — same "latest wins" semantics as before.
-  for (let i = context.history.length - 1; i >= 0; i--) {
-    const turn = context.history[i];
-    if (turn instanceof vscode.ChatResponseTurn) {
-      const key = (turn.result.metadata as { jiraSession?: JiraSessionContinuity } | undefined)?.jiraSession?.lastTicketKey;
-      if (key) return key;
-    }
-  }
-  return null;
 }
