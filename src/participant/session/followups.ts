@@ -119,9 +119,9 @@ export function computeJiraFollowups(state: JiraFollowupState): FollowupSuggesti
     }
     case 'loadedTicket': {
       // Leave out a suggestion that would just repeat the write the user already performed
-      // (e.g. don't offer "transition" right after `transition` succeeded). R1: the comment
-      // chip is gone entirely. R7: the discover-workflow chip carries the loaded ticket's own
-      // project/issue-type, so it can never land on its own missing-parameter dead end (AE2).
+      // (e.g. don't offer "transition" right after `transition` succeeded). There is no comment
+      // chip. The discover-workflow chip carries the loaded ticket's own project and issue type,
+      // so it can never land on its own missing-parameter dead end.
       const chips: FollowupSuggestion[] = [];
       if (state.justDid !== 'transition') {
         chips.push({ prompt: `transition ${state.ticketKey}`, label: 'Transition it' });

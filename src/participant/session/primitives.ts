@@ -3,7 +3,7 @@
 
 import { TICKET_ID_PATTERN } from '../../utils/branchParser';
 
-// Used by parseResolutionSelection and other pickers: resolves a reply to one list item
+// Resolves a reply to one list item
 // by 1-based number or by exact case-insensitive name (matched via `nameOf`). The
 // `String(n) === trimmed` guard rejects a partially-numeric string like "1abc" rather than letting
 // parseInt silently truncate it into a match. Returns undefined when neither form matches. Generic

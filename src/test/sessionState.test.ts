@@ -232,7 +232,7 @@ describe('computeJiraFollowups', () => {
     expect(chips.some((c) => /discover workflow/i.test(c.prompt) || /discover workflow/i.test(c.label ?? ''))).toBe(true);
     // The prompt itself names the real ticket key/project/issue type so it works without relying
     // on pronoun resolution against chat history, and the workflow chip carries the state's own
-    // projectKey/issueType (KTD4) rather than needing a re-fetch when clicked.
+    // projectKey/issueType rather than needing a re-fetch when clicked.
     expect(chips.find((c) => /transition/i.test(c.prompt))?.prompt).toContain('PROJ-123');
     expect(chips.find((c) => /discover workflow/i.test(c.prompt))?.prompt).toContain('PROJ Bug');
   });

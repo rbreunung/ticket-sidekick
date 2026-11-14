@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { TicketService } from '../../services/TicketService';
-import { applyCorrections, type Correction, type CorrectionResult } from '../../utils/descriptionCorrections';
+import { applyCorrections, type Correction, type RefusalReason, type RefusedCorrection } from '../../utils/descriptionCorrections';
 import { fingerprint } from '../../tools/recentCallGuard';
 import { defineTool } from '../toolDefinition';
 import type { JiraToolDeps } from './jiraAccess';
@@ -21,7 +21,7 @@ const correctionsShape = {
   })).min(1).describe('The corrections the user approved, in the order they were shown.'),
 };
 
-const REASONS: Record<string, string> = {
+const REASONS: Record<RefusalReason, string> = {
   empty: 'no text to replace was given',
   'not found': 'the text is not in the description (any more)',
   'not unique': 'the text appears more than once; give a longer fragment',
@@ -33,15 +33,21 @@ function describeCorrections(corrections: readonly Correction[]): string {
   return corrections.map((c, i) => `${i + 1}. ${c.before} → ${c.after}`).join('\n');
 }
 
-function describeRefusal(result: Extract<CorrectionResult, { refused: unknown }>): string {
-  return result.refused.map(r => `${r.number}. "${r.before}": ${REASONS[r.reason]}`).join('\n');
+function describeRefusal(refused: readonly RefusedCorrection[]): string {
+  return refused.map(r => `${r.number}. "${r.before}": ${REASONS[r.reason]}`).join('\n');
 }
 
-/** The description as wiki text, or why it cannot be corrected. */
-function descriptionOf(key: string, raw: unknown): { text: string } | { problem: string } {
+type CorrectionPlan =
+  | { text: string }
+  | { problem: string }
+  | { refused: RefusedCorrection[] };
+
+/** The corrected description as it would be written now, or why nothing would be written. */
+async function planCorrections(ticketService: TicketService, key: string, corrections: readonly Correction[]): Promise<CorrectionPlan> {
+  const raw = await ticketService.getRawField(key, 'description');
   if (raw === null || raw === undefined || (typeof raw === 'string' && !raw.trim())) return { problem: `${key} has no description.` };
   if (typeof raw !== 'string') return { problem: `The description of ${key} is not stored as wiki text, so it cannot be corrected here.` };
-  return { text: raw };
+  return applyCorrections(raw, corrections);
 }
 
 export const correctDescriptionTool = defineTool<JiraToolDeps, typeof correctionsShape>({
@@ -59,13 +65,9 @@ export const correctDescriptionTool = defineTool<JiraToolDeps, typeof correction
   preview: async (args, deps) => {
     const access = await deps.getJira();
     if (!access.configured) return [];
-    const key = args.ticketKey.trim();
-    const description = descriptionOf(key, await new TicketService(access.client).getRawField(key, 'description'));
-    if ('problem' in description) return [{ name: 'Will be refused', value: description.problem }];
-    const result = applyCorrections(description.text, args.corrections);
-    return 'text' in result
-      ? [{ name: 'Resulting description', value: result.text }]
-      : [{ name: 'Will be refused', value: describeRefusal(result) }];
+    const plan = await planCorrections(new TicketService(access.client), args.ticketKey.trim(), args.corrections);
+    if ('text' in plan) return [{ name: 'Resulting description', value: plan.text }];
+    return [{ name: 'Will be refused', value: 'problem' in plan ? plan.problem : describeRefusal(plan.refused) }];
   },
   handler: async (args, deps) => {
     const key = args.ticketKey.trim();
@@ -77,14 +79,13 @@ export const correctDescriptionTool = defineTool<JiraToolDeps, typeof correction
       fingerprint(CORRECT_DESCRIPTION_TOOL, key, JSON.stringify(args.corrections)),
       `Skipped: the same corrections were written to ${key} within the last minute.`,
       markWritten => runJiraTool(deps, CORRECT_DESCRIPTION_TOOL, `Could not correct the description of ${key}`, async ({ ticketService }) => {
-        const description = descriptionOf(key, await ticketService.getRawField(key, 'description'));
-        if ('problem' in description) return `${description.problem} Nothing was changed.`;
-        const result = applyCorrections(description.text, args.corrections);
-        if ('refused' in result) {
-          return `Nothing was changed on ${key}. These corrections do not fit:\n\n${describeRefusal(result)}\n\n`
+        const plan = await planCorrections(ticketService, key, args.corrections);
+        if ('problem' in plan) return `${plan.problem} Nothing was changed.`;
+        if ('refused' in plan) {
+          return `Nothing was changed on ${key}. These corrections do not fit:\n\n${describeRefusal(plan.refused)}\n\n`
             + 'Drop them, or give a longer or plainer fragment, and call again with the rest.';
         }
-        const outcome = await ticketService.updateFieldOutcome(key, 'description', result.text);
+        const outcome = await ticketService.updateFieldOutcome(key, 'description', plan.text);
         if (!outcome.written) return outcome.message;
         markWritten();
         const n = args.corrections.length;

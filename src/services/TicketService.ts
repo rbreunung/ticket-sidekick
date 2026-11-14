@@ -1183,8 +1183,10 @@ export class TicketService {
     issueKey: string,
     fieldMeta?: JiraFieldMeta[],
     hiddenIds?: Set<string>,
+    /** The ticket when the caller already fetched it, so it is not fetched again. */
+    fetched?: JiraIssue,
   ): Promise<TemplateFieldCandidate[]> {
-    const issue = await this.client.getIssue(issueKey);
+    const issue = fetched ?? await this.client.getIssue(issueKey);
     const meta = fieldMeta ?? await this.client.getFields();
     const metaById = new Map(meta.map(m => [m.id, m]));
     const hidden = hiddenIds ?? new Set<string>();

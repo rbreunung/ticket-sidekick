@@ -36,22 +36,28 @@ async function buildTemplate(
     return { problem: `${err instanceof Error ? err.message : String(err)}. Fix or remove the file first. Nothing was saved.` };
   }
   const issue = await ticketService.getIssue(key);
-  const issueType = (issue.fields.issuetype as { name?: string } | undefined)?.name;
+  const issueType = issue.fields.issuetype?.name;
   if (!issueType) return { problem: `Could not read the issue type of ${key}. Nothing was saved.` };
-  const candidates = await ticketService.getTemplateCandidatesFromTicket(key, undefined, new Set(hiddenFields));
+  const candidates = await ticketService.getTemplateCandidatesFromTicket(key, undefined, new Set(hiddenFields), issue);
   const savedAs = nextFreeTemplateName(name, existing);
   return { template: buildTemplateFromCandidates(savedAs, issueType, candidates), renamed: savedAs !== name };
 }
 
-function describeTemplate(template: JiraTemplate, asked: string, renamed: boolean): ConfirmationLine[] {
+function describeTemplateFields(template: JiraTemplate): ConfirmationLine[] {
   const fields = Object.entries(template.defaultFields);
   return [
-    { name: 'Saved as', value: renamed ? `${template.name} (the name "${asked}" is taken)` : template.name },
     { name: 'Issue type', value: template.issueType ?? '' },
     {
       name: 'Fields',
       value: fields.length === 0 ? 'none: the ticket sets no template fields' : fields.map(([id, value]) => `${id}: ${formatTemplateFieldValue(value)}`).join('\n'),
     },
+  ];
+}
+
+function describeTemplate(template: JiraTemplate, asked: string, renamed: boolean): ConfirmationLine[] {
+  return [
+    { name: 'Saved as', value: renamed ? `${template.name} (the name "${asked}" is taken)` : template.name },
+    ...describeTemplateFields(template),
   ];
 }
 
@@ -97,11 +103,10 @@ export const createTemplateTool = defineTool<JiraToolDeps, typeof createTemplate
         }
         markWritten();
         deps.onDiag?.('info', `Template saved — ${built.template.name}`, { ticketKey: key, issueType: built.template.issueType });
-        const lines = describeTemplate(built.template, name, built.renamed);
         return [
           `Saved the template "${built.template.name}" (${built.template.issueType}) from ${key} to .jira-templates.json.`,
           '',
-          ...lines.slice(1).map(l => `${l.name}:\n${l.value}`),
+          ...describeTemplateFields(built.template).map(l => `${l.name}:\n${l.value}`),
           '',
           `To create a ticket from it: /ts-jira-create <what the ticket is about> using the template "${built.template.name}"`,
         ].join('\n');
