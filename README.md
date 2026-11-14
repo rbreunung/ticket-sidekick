@@ -20,7 +20,7 @@ This is the current way to use Ticket Sidekick. Set up the Jira connection first
 
 In a Copilot chat in **Agent** mode, ask in your own words ("show me PROJ-123", "add a comment to PROJ-123 saying the fix is deployed") and Copilot calls Ticket Sidekick's Jira tools. They view, find, load, move, create, comment on and update Jira tickets, upload attachments, list filters, fields, workflows and templates, and check the connection. A tool that changes something asks first and shows exactly what it will write.
 
-Three skills sit on top of the tools: `/ts-jira <command>` runs one Jira command you type, e.g. `/ts-jira load PROJ-123` (`/ts-jira help` lists them), `/ts-jira-brief` writes a developer brief of a ticket, and `/ts-jira-create` creates a ticket with you, from a template where one fits.
+Five skills sit on top of the tools: `/ts-jira <command>` runs one Jira command you type, e.g. `/ts-jira load PROJ-123` (`/ts-jira help` lists them), `/ts-jira-brief` writes a developer brief of a ticket, `/ts-jira-create` creates a ticket with you, from a template where one fits, `/ts-jira-spell-check` corrects the spelling of a ticket's description, and `/ts-jira-template` saves a new template built from a ticket.
 
 See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool and its inputs, the skills, approvals, troubleshooting and a checklist to try it out. The Bitbucket tools (`bitbucket_*`) are listed in [Agent Mode Tools](docs/manual/agent-mode-tools.md).
 

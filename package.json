@@ -849,6 +849,12 @@
         "path": "./skills/ts-jira-create/SKILL.md"
       },
       {
+        "path": "./skills/ts-jira-spell-check/SKILL.md"
+      },
+      {
+        "path": "./skills/ts-jira-template/SKILL.md"
+      },
+      {
         "path": "./skills/ts-jira/SKILL.md"
       }
     ],

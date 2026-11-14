@@ -242,6 +242,47 @@ describe('the /ts-jira-create skill', () => {
   });
 });
 
+describe('the /ts-jira-spell-check skill', () => {
+  const spell = readFileSync(resolve(root, 'skills/ts-jira-spell-check/SKILL.md'), 'utf-8');
+
+  it('runs only when the user types it, with the ticket key as its argument', () => {
+    const fm = parseFrontmatter(spell);
+    expect(fm?.['disable-model-invocation']).toBe('true');
+    expect(fm?.['argument-hint']).toBe('<ticket key>');
+  });
+
+  it('reads the ticket first and writes the approved corrections last, with the correction tool', () => {
+    const at = positions(spell, [VIEW_TICKET_TOOL, CORRECT_DESCRIPTION_TOOL]);
+    expect(at.every(p => p >= 0)).toBe(true);
+    expect(at[0]).toBeLessThan(at[1]);
+    expect(spell).not.toContain(UPDATE_FIELD_TOOL);
+  });
+
+  it('proposes spelling and grammar only, numbered, and waits for the user before writing', () => {
+    expect(spell).toMatch(/spelling and grammar only/i);
+    expect(spell).toMatch(/never correct text inside code, monospace, a link target or a web address/i);
+    expect(spell).toMatch(/numbered/);
+    expect(spell).toMatch(/Wait for the user/);
+  });
+});
+
+describe('the /ts-jira-template skill', () => {
+  const template = readFileSync(resolve(root, 'skills/ts-jira-template/SKILL.md'), 'utf-8');
+
+  it('runs only when the user types it, with the ticket key and an optional name', () => {
+    const fm = parseFrontmatter(template);
+    expect(fm?.['disable-model-invocation']).toBe('true');
+    expect(fm?.['argument-hint']).toBe('<ticket key> [template name]');
+  });
+
+  it('asks for a missing ticket key and name before it saves with the template tool, and asks nothing after', () => {
+    expect(template).toContain(CREATE_TEMPLATE_TOOL);
+    expect(template.indexOf('ask the user for the name')).toBeGreaterThan(-1);
+    expect(template.indexOf('ask the user for the name')).toBeLessThan(template.indexOf(CREATE_TEMPLATE_TOOL));
+    expect(template).toMatch(/Ask nothing after the save/);
+  });
+});
+
 describe('the /ts-jira command skill', () => {
   const router = readFileSync(resolve(root, 'skills/ts-jira/SKILL.md'), 'utf-8');
   /** The table rows: the command word and what the row does. */
@@ -283,7 +324,7 @@ describe('the /ts-jira command skill', () => {
     expect(cases.map(c => c.n)).toEqual([1, 2, 3, 4, 5]);
     expect(cases[0].text).toBe('Nothing typed: call no tool. Reply with exactly the help text below, as a code block. Stop.');
     expect(cases[1].text).toMatch(/^The first word is `help`: run nothing\./);
-    expect(cases[1].text).toContain('read `help-brief.md` or `help-create.md` in this skill\'s folder and reply with its text exactly; read no other file and call no other tool.');
+    expect(cases[1].text).toContain('read `help-brief.md`, `help-create.md`, `help-spell-check.md` or `help-template.md` in this skill\'s folder and reply with its text exactly; read no other file and call no other tool.');
     expect(cases[1].text).toContain('call no tool and reply with only its line as a code block');
     expect(cases[2].text).toBe('The first word is not a command of the table: call no tool. Reply with exactly the help text. Stop.');
     expect(cases[3].text).toMatch(/^An argument in angle brackets that the command needs is missing: call no tool\./);
@@ -297,7 +338,7 @@ describe('the /ts-jira command skill', () => {
     expect(help[1]).toMatch(/^-{20,}$/);
     expect(help.at(-4)).toMatch(/^-{20,}$/);
     expect(help.at(-3)).toBe('Without KEY, load and view use the ticket of the git branch.');
-    expect(help.at(-2)).toBe('A developer brief or a guided ticket create: help brief, help create');
+    expect(help.at(-2)).toBe('A brief, a guided create, a spell check or a template: help brief, help create, help spell-check, help template');
   });
 
   it('prints a help line for every command of the table, in the same order', () => {
@@ -307,10 +348,12 @@ describe('the /ts-jira command skill', () => {
   });
 });
 
-describe('the help pages /ts-jira prints for brief and create', () => {
+describe('the help pages /ts-jira prints for its skills', () => {
   const pages = [
     { file: 'help-brief.md', skill: 'ts-jira-brief', plain: '/ts-jira view', started: 'Copilot runs /ts-jira-brief only when you type it.' },
     { file: 'help-create.md', skill: 'ts-jira-create', plain: 'call the create ticket tool directly', started: 'Copilot also starts it by itself when you ask for a new ticket in your own words' },
+    { file: 'help-spell-check.md', skill: 'ts-jira-spell-check', plain: '/ts-jira field', started: 'Copilot runs /ts-jira-spell-check only when you type it.' },
+    { file: 'help-template.md', skill: 'ts-jira-template', plain: '.jira-templates.json', started: 'Copilot runs /ts-jira-template only when you type it.' },
   ];
 
   it.each(pages)('$file names a skill that exists, how to use it, when it starts, and what to do without it', ({ file, skill, plain, started }) => {
@@ -323,7 +366,7 @@ describe('the help pages /ts-jira prints for brief and create', () => {
     expect(page).toContain(started);
   });
 
-  it('keeps every skill name out of /ts-jira itself, so it only reaches the model on help brief or help create', () => {
+  it('keeps every skill name out of /ts-jira itself, so it only reaches the model on one of the help pages', () => {
     const router = readFileSync(resolve(root, 'skills/ts-jira/SKILL.md'), 'utf-8');
     for (const page of pages) expect(router).not.toContain(page.skill);
   });
