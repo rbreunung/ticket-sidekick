@@ -13,6 +13,7 @@ import { createTicketTool } from './createTicket';
 import { addCommentTool } from './addComment';
 import { updateFieldTool } from './updateField';
 import { correctDescriptionTool } from './correctDescription';
+import { createTemplateTool } from './createTemplate';
 import { uploadAttachmentTool } from './uploadAttachment';
 import { checkRequiredFieldsTool, listFieldsTool } from './fields';
 import { openBoardTool } from './openBoard';
@@ -49,6 +50,7 @@ export const JIRA_TOOLS: readonly ToolDefinition<JiraToolDeps>[] = [
   listMyFiltersTool,
   workflowTool,
   listTemplatesTool,
+  createTemplateTool,
   loadTicketTool,
   moveTicketTool,
   createTicketTool,

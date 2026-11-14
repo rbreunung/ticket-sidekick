@@ -14,7 +14,7 @@ The Jira tools are registered with VS Code as language model tools of the extens
 
 ### Tools that read Jira
 
-These change nothing in Jira. `jira_workflow` and `jira_load_ticket` write local files in the first workspace folder.
+These change nothing in Jira. `jira_workflow`, `jira_load_ticket` and `jira_create_template` write local files in the first workspace folder; `jira_load_ticket` and `jira_create_template` ask you first.
 
 | Tool | What it does | Inputs |
 | --- | --- | --- |
@@ -27,6 +27,7 @@ These change nothing in Jira. `jira_workflow` and `jira_load_ticket` write local
 | `jira_check_required_fields` | Checks a ticket against the fields listed in `ticketSidekick.jira.requiredFields` and names the empty ones | `ticketKey` |
 | `jira_open_board` | Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, or the stored sessions. For a ticket list, Copilot can pass a change you asked for, which the board shows as proposed. The answer says only whether the board opened; see [Boards](boards.md) | `board` (`security-report`, `ticket-list` or `sessions`); `project` for the security report; `jql` or `filter`, and optionally `change`, for a ticket list |
 | `jira_list_templates` | Lists the templates in your workspace's `.jira-templates.json`, each with its issue type, the field values it sets and its description sections | none |
+| `jira_create_template` | Saves a new template to `.jira-templates.json` in the first workspace folder, built from one ticket: its issue type and the values of its template fields (priority, labels, components, sprint, team). Fields that are empty on the ticket, or hidden by `ticketSidekick.jira.hiddenDisplayFields`, are left out. The confirmation shows the name it saves under, the issue type and every field with its value; it is the only review, so remove a field you do not want from the file afterwards. When a template with the name exists, the new one is saved as `<name> (2)`, `<name> (3)` and so on, and no template is replaced. A file that cannot be read is never written over. The answer ends with the `/ts-jira-create` command that uses the new template. The same template within a minute is skipped. `/ts-jira-template` uses it | `ticketKey`, `name` |
 | `jira_load_ticket` | Downloads a ticket into `.jira-context/<KEY>/` in the first workspace folder, like `@jira load`: `ticket.md`, `comments.md` and the text, image, document and archive attachments. It names every file it wrote by its full path and every attachment it skipped, with its size and the reason. Files over 100 MB are never downloaded. An attachment that has not finished downloading after 2 minutes is listed as skipped (download failed), and everything else is still written. The skipped attachments that can still be fetched are numbered, and Copilot asks you which to download: answer with numbers such as `1, 3`, or `all`, and it loads them | `ticketKey` (optional, as for `jira_view_ticket`); optional `attachments`, a list of attachment names to download as well, including ones the default filter skips |
 
 ### Tools that change Jira

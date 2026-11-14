@@ -568,6 +568,87 @@ describe('correct description', () => {
   });
 });
 
+/** PROJ-123 as a Bug with priority High and labels auth and security. */
+class TemplateSourceClient extends MockJiraClient {
+  override async getIssue(issueKey: string): Promise<JiraIssue> {
+    const issue = await super.getIssue(issueKey);
+    return { ...issue, fields: { ...issue.fields, issuetype: { name: 'Bug' } } } as JiraIssue;
+  }
+}
+
+const templatesIn = (folder: string) => JSON.parse(fs.readFileSync(path.join(folder, '.jira-templates.json'), 'utf-8'));
+
+describe('create template', () => {
+  it("saves the ticket's issue type and template fields, keeps the other templates, and ends with how to use it", async () => {
+    const folder = workspaceWithTemplates();
+    const session = await startSession(new TemplateSourceClient(), { folders: [folder] });
+    const { text } = await session.call('jira_create_template', { ticketKey: 'PROJ-123', name: 'Auth bug' });
+    expect(templatesIn(folder).templates).toEqual([
+      { name: 'Bug Report', issueType: 'Bug', defaultFields: { priority: { name: 'High' }, labels: ['billing'] } },
+      { name: 'Auth bug', issueType: 'Bug', defaultFields: { priority: { name: 'High' }, labels: ['auth', 'security'] } },
+    ]);
+    expect(text).toContain('Saved the template "Auth bug" (Bug) from PROJ-123 to .jira-templates.json.');
+    expect(text.split('\n').at(-1)).toBe('To create a ticket from it: /ts-jira-create <what the ticket is about> using the template "Auth bug"');
+  });
+
+  it('saves under the next free number when the name is taken, and replaces nothing', async () => {
+    const folder = workspaceWithTemplates();
+    const session = await startSession(new TemplateSourceClient(), { folders: [folder] });
+    const asked = await session.confirm('jira_create_template', { ticketKey: 'PROJ-123', name: 'Bug Report' });
+    expect(asked).toContainEqual({ name: 'Saved as', value: 'Bug Report (2) (the name "Bug Report" is taken)' });
+    await session.call('jira_create_template', { ticketKey: 'PROJ-123', name: 'Bug Report' });
+    expect(templatesIn(folder).templates.map((t: { name: string }) => t.name)).toEqual(['Bug Report', 'Bug Report (2)']);
+    expect(templatesIn(folder).templates[0].defaultFields.labels).toEqual(['billing']);
+  });
+
+  it('shows every field and value it will save before it saves', async () => {
+    const session = await startSession(new TemplateSourceClient(), { folders: [workspaceWithTemplates()] });
+    const asked = await session.confirm('jira_create_template', { ticketKey: 'PROJ-123', name: 'Auth bug' });
+    expect(asked).toEqual([
+      { name: 'ticketKey', value: 'PROJ-123' },
+      { name: 'name', value: 'Auth bug' },
+      { name: 'Saved as', value: 'Auth bug' },
+      { name: 'Issue type', value: 'Bug' },
+      { name: 'Fields', value: 'priority: High\nlabels: auth, security' },
+    ]);
+  });
+
+  it('leaves out a field the display settings hide', async () => {
+    const folder = workspaceWithTemplates();
+    const session = await startSession(new TemplateSourceClient(), { folders: [folder], config: jiraConfig({ hiddenDisplayFields: ['labels'] }) });
+    await session.call('jira_create_template', { ticketKey: 'PROJ-123', name: 'Auth bug' });
+    expect(templatesIn(folder).templates[1].defaultFields).toEqual({ priority: { name: 'High' } });
+  });
+
+  it('creates .jira-templates.json when the workspace has none', async () => {
+    const folder = makeTempDir('ts-template-');
+    const session = await startSession(new TemplateSourceClient(), { folders: [folder] });
+    await session.call('jira_create_template', { ticketKey: 'PROJ-123', name: 'Auth bug' });
+    expect(templatesIn(folder)).toEqual({
+      templates: [{ name: 'Auth bug', issueType: 'Bug', defaultFields: { priority: { name: 'High' }, labels: ['auth', 'security'] } }],
+      cleanupRules: [],
+    });
+  });
+
+  it('never writes over a .jira-templates.json it cannot read, and says why', async () => {
+    const folder = makeTempDir('ts-template-');
+    fs.writeFileSync(path.join(folder, '.jira-templates.json'), '{ not json');
+    const session = await startSession(new TemplateSourceClient(), { folders: [folder] });
+    const { text } = await session.call('jira_create_template', { ticketKey: 'PROJ-123', name: 'Auth bug' });
+    expect(fs.readFileSync(path.join(folder, '.jira-templates.json'), 'utf-8')).toBe('{ not json');
+    expect(text).toMatch(/^Could not parse \.jira-templates\.json: .*Nothing was saved\.$/s);
+  });
+
+  it('saves the same template once when the call comes again within a minute', async () => {
+    const folder = workspaceWithTemplates();
+    const session = await startSession(new TemplateSourceClient(), { folders: [folder] });
+    await session.call('jira_create_template', { ticketKey: 'PROJ-123', name: 'Auth bug' });
+    const second = await session.call('jira_create_template', { ticketKey: 'PROJ-123', name: 'Auth bug' });
+    expect(second.text).toBe('Skipped: a template "Auth bug" from PROJ-123 was saved within the last minute.');
+    expect(templatesIn(folder).templates).toHaveLength(2);
+  });
+});
+
 describe('Jira wiki triggers in Markdown text', () => {
   const hostile = '## Steps\n\n- open !https://evil.example/x.png! and {html}<b>x</b>{html}\n- {color:red}hi{color}\n\n**bold**';
   const expectNeutralized = (wiki: unknown) => {

@@ -46,6 +46,7 @@ A tool marked "asks first" shows a confirmation with every value it is about to 
 | `jira_list_my_filters` | `#jiraListMyFilters` | reads |
 | `jira_workflow` | `#jiraWorkflow` | reads |
 | `jira_list_templates` | `#jiraListTemplates` | reads |
+| `jira_create_template` | `#jiraCreateTemplate` | asks first |
 | `jira_load_ticket` | `#jiraLoadTicket` | asks first |
 | `jira_move_ticket` | `#jiraMoveTicket` | asks first |
 | `jira_create_ticket` | `#jiraCreateTicket` | asks first |

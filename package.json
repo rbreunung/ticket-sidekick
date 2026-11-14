@@ -434,6 +434,35 @@
         }
       },
       {
+        "name": "jira_create_template",
+        "displayName": "Create a ticket template from a Jira ticket",
+        "modelDescription": "Saves a new ticket template to the workspace's .jira-templates.json, built from one reference ticket: its issue type and the values of its template fields (priority, labels, components, sprint, team). Fields that are empty on the ticket are left out. When a template with that name exists, the new one is saved as \"<name> (2)\", \"<name> (3)\" and so on; no template is replaced. Ask the user for the name before calling. The same template within a minute is skipped.",
+        "userDescription": "Saves a new ticket template to the workspace's .jira-templates.json, built from one reference ticket.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraCreateTemplate",
+        "icon": "$(edit)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "The reference ticket, e.g. PROJ-123. Its issue type and its template fields (priority, labels, components, sprint, team) are copied."
+            },
+            "name": {
+              "type": "string",
+              "description": "The name of the new template, as the user gave it."
+            }
+          },
+          "required": [
+            "ticketKey",
+            "name"
+          ]
+        }
+      },
+      {
         "name": "jira_load_ticket",
         "displayName": "Load a Jira ticket into the workspace",
         "modelDescription": "Use when the user asks to load or download a ticket, e.g. \"load PROJ-123\". Downloads one Jira ticket into `.jira-context/<KEY>/` in the first workspace folder, so its content can be read as local files: `ticket.md` (fields, description, web links, attachment list), `comments.md` (all comments) and, in `attachments/`, the text, image, document and archive attachments. Binary attachments of other types are skipped unless named in attachments; files over 100 MB are always skipped. The answer lists every file written by its absolute path and every skipped attachment with its size and the reason. Without ticketKey, uses the ticket key in the current git branch of the first workspace folder and says which folder and branch it used. Changes nothing in Jira; it only writes local files, overwriting an earlier load.",

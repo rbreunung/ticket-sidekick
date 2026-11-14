@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { basename, dirname, resolve } from 'path';
 import {
-  ADD_COMMENT_TOOL, CHECK_CONNECTION_TOOL, CORRECT_DESCRIPTION_TOOL, CREATE_TICKET_TOOL, FIND_TICKETS_TOOL, JIRA_TOOLS, LIST_TEMPLATES_TOOL,
+  ADD_COMMENT_TOOL, CHECK_CONNECTION_TOOL, CORRECT_DESCRIPTION_TOOL, CREATE_TEMPLATE_TOOL, CREATE_TICKET_TOOL, FIND_TICKETS_TOOL, JIRA_TOOLS, LIST_TEMPLATES_TOOL,
   LOAD_TICKET_TOOL, MOVE_TICKET_TOOL, OPEN_BOARD_TOOL, UPDATE_FIELD_TOOL, VIEW_TICKET_TOOL,
 } from '../tools/jiraTools/catalog';
 
@@ -251,8 +251,10 @@ describe('the /ts-jira command skill', () => {
     const called = rows.flatMap(r => r.action.match(/\bjira_[a-z_]+/g) ?? []);
     // Creating is left to the /ts-jira-create skill, which drafts the ticket with the user first.
     // Finding is for Copilot's own lookups and questions; a list for the user opens the ticket list board.
-    // Correcting a description is left to the /ts-jira-spell-check skill, which shows the corrections first.
-    const direct = catalogNames.filter(name => name !== CREATE_TICKET_TOOL && name !== FIND_TICKETS_TOOL && name !== CORRECT_DESCRIPTION_TOOL);
+    // Correcting a description and creating a template are left to the /ts-jira-spell-check and
+    // /ts-jira-template skills, which show the corrections or ask for the name first.
+    const left = new Set([CREATE_TICKET_TOOL, FIND_TICKETS_TOOL, CORRECT_DESCRIPTION_TOOL, CREATE_TEMPLATE_TOOL]);
+    const direct = catalogNames.filter(name => !left.has(name));
     expect([...new Set(called)].sort()).toEqual([...direct].sort());
   });
 
