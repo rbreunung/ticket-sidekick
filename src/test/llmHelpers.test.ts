@@ -44,13 +44,13 @@ describe('parseIntent', () => {
   it('parses a clean JSON object', async () => {
     const model = makeModel('{"operation":"addEmailComment","ticketKey":"PROJ-1","projectKey":null}');
     const intent = await parseIntent('add this email to PROJ-1', model as never, {} as never);
-    expect(intent).toEqual({ operation: 'addEmailComment', ticketKey: 'PROJ-1', projectKey: null });
+    expect(intent).toEqual({ operation: 'addEmailComment', projectKey: null });
   });
 
   it('reads an operation that is not a report import as other', async () => {
     const model = makeModel('{"operation":"getTicket","ticketKey":"PROJ-1"}');
     const intent = await parseIntent('show PROJ-1', model as never, {} as never);
-    expect(intent).toEqual({ operation: 'other', ticketKey: 'PROJ-1', projectKey: null });
+    expect(intent).toEqual({ operation: 'other', projectKey: null });
   });
 
   it('parses when the model appends trailing prose containing braces', async () => {

@@ -11,18 +11,16 @@ export type Operation =
 
 export interface ParsedIntent {
   operation: Operation;
-  ticketKey: string | null;
   projectKey: string | null;
 }
 
 export const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"createFromEmail"|"addEmailComment"|"importVeracode"|"importWaltzReport"|"other","ticketKey":string|null,"projectKey":string|null}
+Schema: {"operation":"createFromEmail"|"addEmailComment"|"importVeracode"|"importWaltzReport"|"other","projectKey":string|null}
 - createFromEmail: create a Jira ticket from an email (.eml file); triggered by "create from email", "ticket from email"
 - addEmailComment: import an email (.eml) from the chat; if a ticket key is in the prompt (e.g. PROJ-42) adds the email as a comment, otherwise shows a preview to create or comment; triggered by "add email", "add email to", "import email", "email to ticket", "add comment from mail", "create ticket from mail", "create from mail"
 - importVeracode: import a Veracode Detailed Report XML export and create Jira tickets from its flaws; triggered by "import veracode", "veracode report", "create tickets from veracode", "veracode scan"; projectKey is the project key if one is named
 - importWaltzReport: import a Waltz/SCA OSS report .xlsx export and create Jira tickets from its vulnerable components; triggered by "import oss report", "import waltz report", "oss report", "sca report"; projectKey is the project key if one is named
 - other: anything else, e.g. showing, creating, commenting on, moving or searching tickets, cleanup, workflows or reports
-- ticketKey: a ticket key such as PROJ-42 named in the command, else null
 
 Command: `;
 
@@ -68,7 +66,6 @@ export async function parseIntent(
   const operations: readonly Operation[] = ['createFromEmail', 'addEmailComment', 'importVeracode', 'importWaltzReport'];
   return {
     operation: operations.includes(parsed.operation as Operation) ? parsed.operation as Operation : 'other',
-    ticketKey: typeof parsed.ticketKey === 'string' ? parsed.ticketKey : null,
     projectKey: typeof parsed.projectKey === 'string' ? parsed.projectKey : null,
   };
 }

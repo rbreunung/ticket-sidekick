@@ -1,16 +1,6 @@
 // Session shapes referenced across several session modules, kept in a leaf file so they import nothing.
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
-export interface CommentListSession {
-  ticketKey: string;
-  comments: Array<{
-    index: number;
-    author: string;
-    date: string;
-    bodyMarkdown: string;
-  }>;
-}
-
 export interface TransitionSubtask {
   key: string;
   summary: string;
