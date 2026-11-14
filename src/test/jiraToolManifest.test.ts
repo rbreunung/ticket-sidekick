@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { JIRA_TOOLS } from '../tools/jiraTools/catalog';
 import { callTool, defineTool, ToolFailure } from '../tools/toolDefinition';
-import { confirmationFor, needsConfirmation } from '../tools/jiraToolConfirmation';
+import { confirmationFor, confirmationWithPreview, needsConfirmation } from '../tools/jiraToolConfirmation';
 import { jiraToolManifest, toolReferenceName } from '../tools/jiraToolManifest';
 
 // The Jira tools as Copilot gets them: VS Code language model tools ("extension tools"), declared
@@ -86,5 +86,42 @@ describe('asking before a tool changes something', () => {
   it('cuts a very long value', () => {
     const asked = confirmationFor(demo as never, { ticketKey: 'PROJ-1', comment: 'x'.repeat(5000) });
     expect(asked.lines[1].value).toHaveLength(1501);
+  });
+});
+
+const previewed = defineTool<{ previewFails?: boolean }, typeof shape>({
+  name: 'jira_demo_preview', title: 'Rewrite a demo description', description: 'Demo.', inputSchema: shape, annotations: { destructiveHint: true },
+  handler: async () => 'done',
+  preview: async (args, deps) => {
+    if (deps.previewFails) throw Object.assign(new Error('Issue does not exist'), { status: 404 });
+    return [{ name: 'Resulting description', value: `New text for ${args.ticketKey}` }];
+  },
+});
+
+describe('showing what a tool will write before it runs', () => {
+  it('shows exactly the input values for a tool without a preview', async () => {
+    expect(await confirmationWithPreview(demo, { ticketKey: 'PROJ-1', comment: 'done' }, {}))
+      .toEqual(confirmationFor(demo, { ticketKey: 'PROJ-1', comment: 'done' }));
+  });
+
+  it('shows the input values and then what the tool worked out it will write', async () => {
+    const asked = await confirmationWithPreview(previewed, { ticketKey: 'PROJ-1' }, {});
+    expect(asked).toEqual({
+      title: 'Rewrite a demo description?',
+      lines: [{ name: 'ticketKey', value: 'PROJ-1' }, { name: 'Resulting description', value: 'New text for PROJ-1' }],
+    });
+  });
+
+  it('still asks, with the reason, when the preview cannot be built', async () => {
+    const asked = await confirmationWithPreview(previewed, { ticketKey: 'PROJ-404' }, { previewFails: true });
+    expect(asked.lines).toEqual([
+      { name: 'ticketKey', value: 'PROJ-404' },
+      { name: 'Preview', value: 'Could not preview what will be written: Issue does not exist' },
+    ]);
+  });
+
+  it('does not preview input that does not fit the tool', async () => {
+    const asked = await confirmationWithPreview(previewed, { ticketKey: 5 }, {});
+    expect(asked.lines).toEqual([{ name: 'ticketKey', value: '5' }]);
   });
 });

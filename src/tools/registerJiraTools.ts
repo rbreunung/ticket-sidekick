@@ -5,7 +5,7 @@ import { logDiag } from '../utils/diagLog';
 import { registerBoards, type RegisteredBoards } from '../boards/registerBoards';
 import { JIRA_TOOLS } from './jiraTools/catalog';
 import type { JiraAccess, JiraToolDeps } from './jiraTools/jiraAccess';
-import { confirmationFor, needsConfirmation } from './jiraToolConfirmation';
+import { confirmationWithPreview, needsConfirmation } from './jiraToolConfirmation';
 import { RecentCallGuard } from './recentCallGuard';
 import { callTool } from './toolDefinition';
 
@@ -41,9 +41,9 @@ export function registerJiraTools(context: vscode.ExtensionContext, configServic
 
   for (const tool of JIRA_TOOLS) {
     context.subscriptions.push(vscode.lm.registerTool(tool.name, {
-      prepareInvocation: options => {
+      prepareInvocation: async options => {
         if (!needsConfirmation(tool)) return { invocationMessage: tool.title };
-        const { title, lines } = confirmationFor(tool, options.input);
+        const { title, lines } = await confirmationWithPreview(tool, options.input, deps);
         // Plain text parts, so nothing in a value is read as Markdown or as a link.
         const message = new vscode.MarkdownString();
         for (const line of lines) {

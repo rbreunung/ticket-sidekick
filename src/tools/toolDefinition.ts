@@ -22,6 +22,18 @@ export interface ToolDefinition<Deps, Shape extends z.ZodRawShape = z.ZodRawShap
   annotations: ToolAnnotations;
   /** Answers with Markdown text; a failure the user should see is answered as text too, not thrown. */
   handler(args: z.infer<z.ZodObject<Shape>>, deps: Deps): Promise<string>;
+  /**
+   * What the tool worked out it will write, shown in the confirmation after the input values: for
+   * a value the input does not hold, such as a text computed from what Jira has now. The handler
+   * works it out again when it runs.
+   */
+  preview?(args: z.infer<z.ZodObject<Shape>>, deps: Deps): Promise<ConfirmationLine[]>;
+}
+
+/** One named value of a confirmation, shown as plain text. */
+export interface ConfirmationLine {
+  name: string;
+  value: string;
 }
 
 /** Types a tool against its own input schema and returns it in the shape a catalog holds. */
