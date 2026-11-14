@@ -1,6 +1,7 @@
 import type { JiraAccess } from '../../tools/jiraTools/jiraAccess';
 import { TicketService } from '../../services/TicketService';
-import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../../services/WorkflowService';
+import { discoverAndCacheWorkflow, loadWorkflowCache, resolveAndApplyTransition } from '../../services/WorkflowService';
+import { TemplateService } from '../../templates/TemplateService';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
 import type { JiraFieldMeta } from '../../jira/IJiraClient';
@@ -104,7 +105,7 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
       let token: string | undefined;
       let more = true;
       while (more && rows.length < limit) {
-        const page = await ticketService.searchTicketsRaw(jql, Math.min(PAGE_SIZE, limit - rows.length), ['updated', ...extraFieldIds], startAt, token);
+        const page = await ticketService.searchTicketsRaw(jql, Math.min(PAGE_SIZE, limit - rows.length), ['updated', 'parent', ...extraFieldIds], startAt, token);
         for (const issue of page.issues) {
           rows.push({
             key: issue.key,
@@ -114,6 +115,7 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
             assignee: textOf(issue.fields.assignee),
             priority: issue.fields.priority?.name ?? '',
             updated: typeof issue.fields.updated === 'string' ? issue.fields.updated : '',
+            ...(issue.fields.parent?.key ? { parent: issue.fields.parent.key } : {}),
             ...(extraFieldIds.length > 0 ? {
               extra: Object.fromEntries(extraFieldIds.map(id => [id, plainFieldText((issue.fields as Record<string, unknown>)[id], meta.get(id))])),
             } : {}),
@@ -125,6 +127,27 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
         more = page.issues.length > 0 && page.isLast !== true && (token !== undefined || total === undefined || startAt < total);
       }
       return { rows, truncated: more };
+    }),
+
+    // The rules are read on every call, so an edit to the file shows on the next load.
+    cleanupRules: async () => {
+      const folder = options.workspaceFolder();
+      return folder ? new TemplateService(folder).loadTemplates().cleanupRules : [];
+    },
+
+    workflowGraph: async (projectKey, issueType) => {
+      const folder = options.workspaceFolder();
+      const cached = folder ? loadWorkflowCache(folder)[projectKey]?.[issueType]?.graph : undefined;
+      if (cached && Object.keys(cached).length > 0) return cached;
+      if (!folder) return undefined;
+      const { client } = await jira();
+      const discovered = await guarded(() => discoverAndCacheWorkflow(client, folder, projectKey, issueType));
+      return Object.keys(discovered.graph).length > 0 ? discovered.graph : undefined;
+    },
+
+    resolutions: () => guarded(async () => {
+      const { ticketService } = await jira();
+      return (await ticketService.getResolutions()).map(r => r.name);
     }),
 
     readTicket: async key => {

@@ -38,6 +38,9 @@ function fake(rows: TicketRow[] = [row(1), row(2), row(3, 'Done')]): Fake {
       const sign = operation === 'add' ? '+=' : operation === 'remove' ? '-=' : '=';
       deps.fields.push(`${key}.${field}${sign}${value}`); jira.get(key)!.updated = 't2'; return 'set';
     },
+    cleanupRules: async () => [],
+    workflowGraph: async () => undefined,
+    resolutions: async () => [],
     now: () => 1000,
   };
   return deps;

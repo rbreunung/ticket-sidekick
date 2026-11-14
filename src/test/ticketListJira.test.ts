@@ -161,7 +161,32 @@ describe('extra columns', () => {
       },
     } as never, true, { cleanupFields: ['fixVersions', 'customfield_1'] });
     const { rows } = await d.search('project = PROJ', 300, ['fixVersions', 'customfield_1']);
-    expect(requested[0]).toEqual(['updated', 'fixVersions', 'customfield_1']);
+    expect(requested[0]).toEqual(['updated', 'parent', 'fixVersions', 'customfield_1']);
     expect(rows[0].extra).toEqual({ fixVersions: '3.2, 3.3', customfield_1: 'Not set' });
+  });
+});
+
+describe('what a cleanup reads', () => {
+  it('reads a subtask\'s parent key', async () => {
+    const d = deps({
+      searchJql: async () => {
+        const sub = issue(11);
+        (sub.fields as Record<string, unknown>).parent = { key: 'PROJ-10' };
+        return { issues: [sub], total: 1 };
+      },
+    } as never);
+    const { rows } = await d.search('parent in ("PROJ-10")', 300, []);
+    expect(rows[0].parent).toBe('PROJ-10');
+  });
+
+  it('finds no rules and no workflow without a workspace folder', async () => {
+    const d = deps({} as never);
+    expect(await d.cleanupRules()).toEqual([]);
+    expect(await d.workflowGraph('PROJ', 'Bug')).toBeUndefined();
+  });
+
+  it('reads the resolution names Jira offers', async () => {
+    const d = deps({ getResolutions: async () => [{ name: 'Fixed' }, { name: 'Duplicate' }] } as never);
+    expect(await d.resolutions()).toEqual(['Fixed', 'Duplicate']);
   });
 });
