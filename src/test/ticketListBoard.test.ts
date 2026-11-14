@@ -239,6 +239,19 @@ describe('a list checked against Jira', () => {
     expect(view.selectedCount).toBe(1);
   });
 
+  it('is out of date when a ticket newly matches the query, and applies nothing until Refresh', async () => {
+    const deps = fake();
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'transition', status: 'Closed' } });
+    deps.jira.set('PROJ-9', { ...deps.jira.get('PROJ-2')!, key: 'PROJ-9', summary: 'Ticket PROJ-9' });
+    const merged = ticketListKind.reconcile(s, await ticketListKind.read(s.recipe, deps), 'background');
+    const checked = { ...s, derived: merged.derived, working: merged.working };
+    const view = ticketListKind.view(checked);
+    expect(view.outOfDate).toEqual({ changed: [], gone: [], added: 1 });
+    expect(view.rows.map(r => r.key)).not.toContain('PROJ-9');
+    expect(ticketListKind.plan!(checked, { type: 'apply' })).toMatchObject({ ok: false, reason: expect.stringContaining('Refresh') });
+  });
+
   it('stays up to date when nothing changed', async () => {
     const deps = fake();
     const s = await open(deps);

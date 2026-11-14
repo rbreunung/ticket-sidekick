@@ -918,6 +918,43 @@ describe('opening a ticket list board', () => {
     expect(opened).toEqual([]);
   });
 
+  it('refuses a cleanup rule together with a filter or a change, and narrowing with no query or two', async () => {
+    const opened: Array<{ kind: string; input: unknown }> = [];
+    expect(await callTool(OPEN_BOARD_TOOL, { board: 'ticket-list', cleanupRule: 'x', filter: 'Team open bugs' }, { opened })).toContain('not more than one');
+    expect(await callTool(OPEN_BOARD_TOOL, { board: 'ticket-list', cleanupRule: 'x', change: { type: 'transition', status: 'Done' } }, { opened })).toContain('leave change out');
+    expect(await callTool(OPEN_BOARD_TOOL, { board: 'ticket-list', sprint: 'Sprint 42' }, { opened })).toBe('Not opened: narrowing needs either jql or filter.');
+    expect(await callTool(OPEN_BOARD_TOOL, { board: 'ticket-list', jql: 'project = PROJ', filter: 'Team open bugs', sprint: 'Sprint 42' }, { opened })).toBe('Not opened: narrowing needs either jql or filter.');
+    expect(opened).toEqual([]);
+  });
+
+  it('opens nothing for a sprint name that matches several sprints, and says which', async () => {
+    const opened: Array<{ kind: string; input: unknown }> = [];
+    const text = await callTool(OPEN_BOARD_TOOL, { board: 'ticket-list', jql: 'project = PROJ', sprint: 'Sprint 4' }, { opened });
+    expect(text).toMatch(/^Not opened: /);
+    expect(text).toContain('Sprint 42');
+    expect(opened).toEqual([]);
+  });
+
+  it('opens nothing for a saved filter it cannot find', async () => {
+    const client = new RecordingSearchClient();
+    client.searchFiltersByName = async (): Promise<JiraFilter[]> => [];
+    const opened: Array<{ kind: string; input: unknown }> = [];
+    const text = await callTool(OPEN_BOARD_TOOL, { board: 'ticket-list', filter: 'No such filter', sprint: 'Sprint 42' }, { client, opened });
+    expect(text).toMatch(/^Not opened: /);
+    expect(text).toContain('No such filter');
+    expect(opened).toEqual([]);
+  });
+
+  it('narrows a query by fix version and opens the board on it', async () => {
+    const client = new MockJiraClient();
+    const getProject = client.getProject.bind(client);
+    client.getProject = async key => ({ ...(await getProject(key)), versions: [{ id: '1', name: '3.2' }, { id: '2', name: '4.0' }] }) as Awaited<ReturnType<MockJiraClient['getProject']>>;
+    const opened: Array<{ kind: string; input: unknown }> = [];
+    const text = await callTool(OPEN_BOARD_TOOL, { board: 'ticket-list', jql: 'project = PROJ ORDER BY key', fixVersion: '3.2' }, { client, opened });
+    expect(text).toBe('Opened in an editor tab: Board.');
+    expect(opened).toEqual([{ kind: 'ticket-list', input: { jql: expect.stringMatching(/^\(project = PROJ\) AND \(fixVersion = "3\.2"\) ORDER BY key$/) } }]);
+  });
+
   it('narrows a saved filter by sprint and opens the board on the narrowed query', async () => {
     const client = new RecordingSearchClient();
     client.searchFiltersByName = async (): Promise<JiraFilter[]> =>

@@ -290,6 +290,35 @@ describe('applying a cleanup', () => {
     ]);
   });
 
+  it('refuses a subtask that changed in Jira since the board read it, and leaves its parent', async () => {
+    const deps = fake({
+      rules: [{ ...RULE, closeSubtasks: true, resolution: 'Fixed' }],
+      tickets: [ticket('PROJ-10'), ticket('PROJ-11', 'Open', { parent: 'PROJ-10' }), ticket('PROJ-20')],
+    });
+    const s = await open(deps);
+    Object.assign(deps.jira.get('PROJ-11')!, { status: 'In Progress', updated: 't9' });
+    const { applied } = await apply(s, deps);
+    expect(deps.moved).toEqual(['PROJ-20→Done (Fixed)']);
+    expect(applied.results).toEqual([
+      { target: 'PROJ-11', outcome: 'refused', reason: 'changed in Jira since the board read it' },
+      { target: 'PROJ-10', outcome: 'refused', reason: 'not moved, because subtask PROJ-11 was not moved' },
+      { target: 'PROJ-20', outcome: 'done' },
+    ]);
+    expect(applied.conflicts?.map(c => `${c.target} ${c.stored} → ${c.fresh}`)).toEqual(['PROJ-11 Open → In Progress']);
+  });
+
+  it('refuses a parent that changed in Jira since the board read it, and moves the others', async () => {
+    const deps = fake({ rules: [{ ...RULE, resolution: 'Fixed' }] });
+    const s = await open(deps);
+    Object.assign(deps.jira.get('PROJ-1')!, { updated: 't9' });
+    const { applied } = await apply(s, deps);
+    expect(deps.moved).toEqual(['PROJ-2→Done (Fixed)']);
+    expect(applied.results).toEqual([
+      { target: 'PROJ-1', outcome: 'refused', reason: 'changed in Jira since the board read it' },
+      { target: 'PROJ-2', outcome: 'done' },
+    ]);
+  });
+
   it('applies only the selected tickets of the page in view', async () => {
     const tickets = Array.from({ length: 120 }, (_, i) => ticket(`PROJ-${i + 1}`));
     const deps = fake({ rules: [{ ...RULE, resolution: 'Fixed' }], tickets });
