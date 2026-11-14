@@ -3,6 +3,7 @@
 
 import type { JiraComment, JiraFieldMeta, JiraFilter, JiraSprintCandidate } from '../../jira/IJiraClient';
 import { formatJiraBody } from '../../utils/markdownFormatter';
+export { formatCommentsInFull, rewriteAttachmentLinks } from '../../utils/ticketText';
 import { ReviewTableColumn, TICKET_KEY_TOKEN, buildChatCommandLink, isCancellation, isConfirmation, neutralizeMarkdownLinks, renderReviewTable } from './primitives';
 import { CommentListSession, PendingSearchConstraints } from './sessionTypes';
 
@@ -64,13 +65,6 @@ export function buildCommentListSession(ticketKey: string, comments: JiraComment
   };
 }
 
-export function formatCommentsInFull(comments: JiraComment[]): string {
-  return comments.map((c, i) => {
-    const date = c.created.slice(0, 10);
-    const body = formatJiraBody(c.body).trim() || '_empty_';
-    return `**${i + 1}. ${c.author.displayName}** (${date})\n\n${body}`;
-  }).join('\n\n---\n\n');
-}
 
 export function parseCommentIndex(reply: string, maxIndex: number): number | 'invalid' {
   const match = reply.match(/\b(\d+)\b/);
@@ -218,18 +212,6 @@ export function parseListedFiltersSelection(reply: string, session: ListedFilter
   return parseFilterSelection(reply, session.filters);
 }
 
-export function rewriteAttachmentLinks(
-  md: string,
-  downloaded: Set<string>,           // filename → rewrite href to attachments/filename
-  skippedUrls: Map<string, string>,   // filename → full Jira contentUrl
-): string {
-  return md.replace(/\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, href) => {
-    if (downloaded.has(href)) return `[${alt}](attachments/${href})`;
-    const jiraUrl = skippedUrls.get(href);
-    if (jiraUrl) return `[${alt}](${jiraUrl})`;
-    return match;
-  });
-}
 
 export type EmailOptionPick =
   | { kind: 'template'; name: string; issueType: string }

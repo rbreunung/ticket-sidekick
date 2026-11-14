@@ -48,7 +48,7 @@ vi.mock('vscode', () => ({
   MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
 }));
 
-import { loadTicketToWorkspace, type LoadWriter } from '../participant/jira/loadCore';
+import { loadTicketToWorkspace, type LoadWriter } from '../tools/jiraTools/loadCore';
 import { handleLoadTicket } from '../participant/jira/loadHandler';
 import { TicketService } from '../services/TicketService';
 import { MockJiraClient } from './mocks/MockJiraClient';

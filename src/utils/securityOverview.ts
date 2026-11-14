@@ -2,7 +2,7 @@
 // links the chat tables and the CSV are rendered from. Pure and vscode-free; both entry points (the standalone
 // command and the `export` reply in an import) assemble an {@link OverviewInput} and share everything else.
 import type { OverviewTicket, ProjectVersionInfo } from '../services/TicketService';
-import { neutralizeMarkdownLinks } from '../participant/session/primitives';
+import { neutralizeMarkdownLinks } from './chatPrimitives';
 import { readVeracodeFindings, type TicketFinding } from './veracodeFindingsTable';
 import { readWaltzComponents, type TicketComponent } from './waltzComponentsTable';
 import { severityLabel, type VeracodeFlaw } from './veracodeReport';

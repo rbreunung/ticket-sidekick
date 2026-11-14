@@ -6,7 +6,7 @@ import {
   nodeFsWriter,
   type LoadTicketCoreResult,
   type SkippedAttachment,
-} from '../../participant/jira/loadCore';
+} from './loadCore';
 import { formatFileSize } from '../../utils/attachmentEligibility';
 import { resolveTicketKey } from '../branchTicket';
 import { defineTool } from '../toolDefinition';

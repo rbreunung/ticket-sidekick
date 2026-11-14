@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { IJiraClient } from '../../jira/IJiraClient';
-import { formatIssueTypeOptionsMessage } from '../../participant/sessionState';
+import { formatIssueTypeOptionsMessage } from './toolMessages';
 import { FieldResolver } from '../../templates/FieldResolver';
 import { TemplateService } from '../../templates/TemplateService';
 import { fingerprint } from '../../tools/recentCallGuard';

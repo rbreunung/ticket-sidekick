@@ -1,4 +1,4 @@
-import { formatTemplateListWithDefaults } from '../../participant/sessionState';
+import { formatTemplateListWithDefaults } from './toolMessages';
 import { TemplateService } from '../../templates/TemplateService';
 import { defineTool } from '../toolDefinition';
 import type { JiraToolDeps } from './jiraAccess';

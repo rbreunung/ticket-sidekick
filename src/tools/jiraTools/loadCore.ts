@@ -4,7 +4,7 @@ import * as path from 'path';
 import type { JiraAttachment, JiraComment, JiraFieldMeta, JiraIssue, JiraRemoteLink } from '../../jira/IJiraClient';
 import { formatIssueFields } from '../../services/TicketService';
 import type { TicketService } from '../../services/TicketService';
-import { isSafeFilename } from '../../tools/pathSafety';
+import { isSafeFilename } from '../pathSafety';
 import {
   ATTACHMENT_SIZE_LIMIT,
   classifyAttachmentEligibility,
@@ -13,7 +13,7 @@ import {
 } from '../../utils/attachmentEligibility';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { formatJiraBody } from '../../utils/markdownFormatter';
-import { rewriteAttachmentLinks } from '../sessionState';
+import { rewriteAttachmentLinks } from '../../utils/ticketText';
 
 // Loads a Jira ticket into `.jira-context/<KEY>/` under a workspace folder: `ticket.md`,
 // `comments.md` and the attachments the default filter lets through, plus any attachments named

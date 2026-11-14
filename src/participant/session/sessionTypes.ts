@@ -40,9 +40,5 @@ export interface TransitionBatchTicket {
  * detour (FilterSelectionSession/ListedFiltersSession) so the constraint is still applied once the
  * filter itself is chosen. All three are optional/independent; `null` and `undefined` are both
  * "not named" (ParsedIntent fields are `string | null`). */
-export interface PendingSearchConstraints {
-  fixVersion?: string | null;
-  sprint?: string | null;
-  assignee?: string | null;
-}
+export type { PendingSearchConstraints } from '../../utils/searchConstraints';
 

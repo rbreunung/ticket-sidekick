@@ -6,7 +6,7 @@ import { refusedFieldsOf } from '../utils/jiraFieldErrors';
 import { buildRequirementsSource, type RequirementsSource } from '../utils/requirementsSource';
 import { formatFileSize } from '../utils/attachmentEligibility';
 import { mergedBanner, mergedSummary } from '../utils/ticketMerge';
-import { renderReviewTable, neutralizeMarkdownLinks, buildChatCommandLink, type ReviewTableColumn } from '../participant/sessionState';
+import { renderReviewTable, neutralizeMarkdownLinks, buildChatCommandLink, type ReviewTableColumn } from '../utils/chatPrimitives';
 import { fetchAllPages } from '../utils/reportImport';
 
 export type FieldResolutionResult =

@@ -5,12 +5,12 @@ import {
   buildConstraintClauses,
   buildConstraintJql,
   buildTeamJql,
-  formatBulletList,
   formatFilterCandidateList,
   formatMyFiltersList,
   resolveNamedConstraints,
   type PendingSearchConstraints,
-} from '../../participant/sessionState';
+} from '../../utils/searchConstraints';
+import { formatBulletList } from '../../utils/chatPrimitives';
 import { defineTool } from '../toolDefinition';
 import type { JiraToolDeps } from './jiraAccess';
 import { runJiraTool } from './runJiraTool';
