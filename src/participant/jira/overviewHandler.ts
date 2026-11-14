@@ -22,7 +22,7 @@ const FILE_FORMATS: Record<OverviewFormat, { extension: string; filterName: stri
 
 /**
  * Writes the overview as CSV or Excel through a save dialog and tells the user where it went. A cancelled dialog writes
- * nothing and says so. Shared by the standalone command and the `export csv` / `export xlsx` replies of a report import.
+ * nothing and says so. Used by the `export csv` / `export xlsx` replies of a report import.
  */
 export async function saveOverviewFile(overview: Overview, fileLabel: string, format: OverviewFormat, stream: vscode.ChatResponseStream): Promise<boolean> {
   const { extension, filterName, label } = FILE_FORMATS[format];

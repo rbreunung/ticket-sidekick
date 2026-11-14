@@ -1,7 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import { existsSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { ticketListJiraDeps } from '../boards/ticketList/jiraDeps';
 import type { IJiraClient, JiraIssue } from '../jira/IJiraClient';
 import type { JiraAccess } from '../tools/jiraTools/jiraAccess';
+import { MockJiraClient } from './mocks/MockJiraClient';
+import { makeTempDir, removeTempDirs } from './helpers/gitRepo';
 
 // What the ticket list board reads from and writes to Jira, against a stub client.
 
@@ -9,11 +13,11 @@ function issue(n: number, status = 'Open'): JiraIssue {
   return { id: String(n), key: `PROJ-${n}`, fields: { summary: `Ticket ${n}`, status: { name: status }, issuetype: { name: 'Bug' }, assignee: { displayName: 'Ada' }, priority: { name: 'High' }, updated: `t${n}` } } as unknown as JiraIssue;
 }
 
-function deps(client: Partial<IJiraClient>, configured = true, settings: { searchFields?: string[]; cleanupFields?: string[] } = {}, warnings: string[] = []) {
+function deps(client: Partial<IJiraClient>, configured = true, settings: { searchFields?: string[]; cleanupFields?: string[] } = {}, warnings: string[] = [], folder?: string) {
   const access = (configured
     ? { configured: true, config: { baseUrl: 'https://jira.example.com', token: 'x', searchFields: settings.searchFields ?? [], cleanupFields: settings.cleanupFields ?? [] }, client }
     : { configured: false, config: {} }) as unknown as JiraAccess;
-  return ticketListJiraDeps({ getJira: async () => access, workspaceFolder: () => undefined, now: () => 1, onDiag: (_l, message) => { warnings.push(message); } });
+  return ticketListJiraDeps({ getJira: async () => access, workspaceFolder: () => folder, now: () => 1, onDiag: (_l, message) => { warnings.push(message); } });
 }
 
 describe('reading a ticket list from Jira', () => {
@@ -188,5 +192,41 @@ describe('what a cleanup reads', () => {
   it('reads the resolution names Jira offers', async () => {
     const d = deps({ getResolutions: async () => [{ name: 'Fixed' }, { name: 'Duplicate' }] } as never);
     expect(await d.resolutions()).toEqual(['Fixed', 'Duplicate']);
+  });
+});
+
+describe('the workflow a cleanup board follows', () => {
+  afterEach(() => removeTempDirs());
+
+  it('takes a cached workflow without asking Jira', async () => {
+    const folder = makeTempDir();
+    const graph = { Open: [{ id: '1', name: 'Close', to: 'Done' }] };
+    writeFileSync(join(folder, '.jira-workflow-cache.json'), JSON.stringify({ PROJ: { Bug: { discovered: '2026-11-01', graph } } }));
+    const client = new MockJiraClient();
+    client.getProjectStatuses = async () => { throw new Error('Jira was asked'); };
+    const d = deps(client as never, true, {}, [], folder);
+    expect(await d.workflowGraph('PROJ', 'Bug')).toEqual(graph);
+  });
+
+  it('discovers an uncached workflow once and keeps it for the next reading', async () => {
+    const folder = makeTempDir();
+    const client = new MockJiraClient();
+    let asked = 0;
+    const statuses = client.getProjectStatuses.bind(client);
+    client.getProjectStatuses = async (project: string, issueType: string) => { asked++; return statuses(project, issueType); };
+    const d = deps(client as never, true, {}, [], folder);
+    const first = await d.workflowGraph('PROJ', 'Bug');
+    expect(first && Object.keys(first).length).toBeGreaterThan(0);
+    expect(existsSync(join(folder, '.jira-workflow-cache.json'))).toBe(true);
+    expect(await d.workflowGraph('PROJ', 'Bug')).toEqual(first);
+    expect(asked).toBe(1);
+  });
+
+  it('knows no workflow when discovery finds no statuses', async () => {
+    const folder = makeTempDir();
+    const client = new MockJiraClient();
+    client.getProjectStatuses = async () => [];
+    const d = deps(client as never, true, {}, [], folder);
+    expect(await d.workflowGraph('PROJ', 'Bug')).toBeUndefined();
   });
 });
