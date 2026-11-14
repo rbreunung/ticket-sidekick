@@ -2,7 +2,7 @@ import type { BoardKind, CheckMode } from '../../sessions/boardKind';
 import type { Conflict, Session } from '../../sessions/sessionTypes';
 import type { WorkflowGraph } from '../../services/WorkflowService';
 import type { CleanupRule } from '../../templates/TemplateService';
-import { buildCleanupQuery, buildSubtaskQueries, cleanupTargets, describeFixVersion, isClosedLike, pathProblem } from './cleanupSource';
+import { SUBTASK_KEYS_PER_QUERY, buildCleanupQuery, buildSubtaskQueries, cleanupTargets, describeFixVersion, isClosedLike, pathProblem } from './cleanupSource';
 
 // The ticket list board: the tickets of a JQL query or a saved filter, with a selection and one
 // change (a move to a status, or a field value) that is applied to the selected tickets after a
@@ -183,6 +183,8 @@ export interface TicketListView {
 
 export const MAX_LIST_ROWS = 300;
 export const PAGE_SIZE = 50;
+/** Open subtasks read per query of a hundred parents. */
+export const MAX_SUBTASK_ROWS = MAX_LIST_ROWS * 5;
 const FIELD_OPERATIONS: readonly FieldOperation[] = ['set', 'add', 'remove'];
 const OUT_OF_DATE = 'The list is out of date: press Refresh to see the tickets as they are now.';
 const SORT_COLUMNS: readonly SortColumn[] = ['key', 'summary', 'status', 'issueType', 'assignee', 'priority'];
@@ -317,9 +319,15 @@ async function readCleanup(source: Extract<ListSource, { type: 'rule' }>, deps: 
   const { rows: parents, truncated } = await deps.search(query.jql, MAX_LIST_ROWS, fieldIds);
 
   const subtasksOf = new Map<string, TicketRow[]>();
+  // Parents whose open subtasks could not all be read: closing one could leave a subtask nobody saw open.
+  const unreadSubtasks = new Set<string>();
   if (rule.closeSubtasks && parents.length > 0) {
-    for (const jql of buildSubtaskQueries(parents.map(p => p.key), targets.subtaskTargetState)) {
-      const { rows } = await deps.search(jql, MAX_LIST_ROWS * 5, fieldIds);
+    const keys = parents.map(p => p.key);
+    for (let i = 0; i < keys.length; i += SUBTASK_KEYS_PER_QUERY) {
+      const chunk = keys.slice(i, i + SUBTASK_KEYS_PER_QUERY);
+      const [jql] = buildSubtaskQueries(chunk, targets.subtaskTargetState);
+      const { rows, truncated: more } = await deps.search(jql, MAX_SUBTASK_ROWS, fieldIds);
+      if (more) chunk.forEach(key => unreadSubtasks.add(key));
       for (const sub of rows) if (sub.parent) subtasksOf.set(sub.parent, [...(subtasksOf.get(sub.parent) ?? []), sub]);
     }
   }
@@ -340,7 +348,9 @@ async function readCleanup(source: Extract<ListSource, { type: 'rule' }>, deps: 
     }
     const own = pathProblem(await graphOf(parent.issueType), parent.status, targets.targetState);
     const stuck = subtasks.find(sub => sub.blocked);
-    const blocked = own ?? (stuck ? `subtask ${stuck.key} cannot be moved: ${stuck.blocked}` : undefined);
+    const blocked = own
+      ?? (unreadSubtasks.has(parent.key) ? 'more open subtasks than the board can read; narrow the rule\'s query' : undefined)
+      ?? (stuck ? `subtask ${stuck.key} cannot be moved: ${stuck.blocked}` : undefined);
     rows.push({
       ...parent, target: targets.targetState, ...(targets.resolution ? { resolution: targets.resolution } : {}),
       ...(blocked ? { blocked } : {}), ...(rule.closeSubtasks ? { subtasks } : {}),
@@ -593,7 +603,13 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     return {
       results: targets.flatMap(t => [...(t.subtasks ?? []), t]).map(t => ({ target: t.key, ...results[t.key] })),
       derived,
-      working: { ...session.working, selection: { mode: 'only', keys: [] }, proposed: false, results },
+      // A cleanup's query no longer lists the tickets it moved, so the next ones move up onto the page in
+      // view: the selection stays (rows that left are simply gone) and the developer applies again there.
+      working: {
+        ...session.working,
+        selection: session.recipe.source.type === 'rule' ? session.working.selection : { mode: 'only', keys: [] },
+        proposed: false, results,
+      },
       conflicts,
     };
   },

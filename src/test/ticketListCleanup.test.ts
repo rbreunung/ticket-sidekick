@@ -165,6 +165,20 @@ describe('opening a cleanup', () => {
     expect(ticketListKind.reduce(s, { type: 'select', key: 'PROJ-20', on: true })).toMatchObject({ ok: false, reason: 'PROJ-20 cannot be moved: no path from Blocked to Done.' });
   });
 
+  it('cannot select a ticket whose open subtasks the board could not all read', async () => {
+    const rule: CleanupRule = { ...RULE, closeSubtasks: true, resolution: 'Fixed' };
+    const deps = fake({ rules: [rule], tickets: [ticket('PROJ-10'), ticket('PROJ-11', 'Open', { parent: 'PROJ-10' })] });
+    const search = deps.search;
+    deps.search = async (jql, limit, ids) => {
+      const result = await search(jql, limit, ids);
+      return jql.startsWith('parent in') ? { ...result, truncated: true } : result;
+    };
+    const s = await open(deps);
+    const view = ticketListKind.view(s);
+    expect(view.rows[0]).toMatchObject({ key: 'PROJ-10', selected: false, blocked: expect.stringContaining('more open subtasks than the board can read') });
+    expect(ticketListKind.plan!(s, { type: 'apply' })).toMatchObject({ ok: false });
+  });
+
   it('marks every ticket unmovable when the workflow cannot be read', async () => {
     const view = ticketListKind.view(await open(fake({ graph: undefined })));
     expect(view.rows.every(r => r.blocked?.includes('workflow could not be read'))).toBe(true);
@@ -240,6 +254,24 @@ describe('applying a cleanup', () => {
     expect(plan.lines).toHaveLength(50);
     expect(deps.moved[0]).toBe('PROJ-51→Done (Fixed)');
     expect(deps.moved.at(-1)).toBe('PROJ-100→Done (Fixed)');
+  });
+
+  it('brings the next tickets onto the page in view after an Apply, still selected', async () => {
+    const tickets = Array.from({ length: 120 }, (_, i) => ticket(`PROJ-${i + 1}`));
+    const deps = fake({ rules: [{ ...RULE, resolution: 'Fixed' }], tickets });
+    const search = deps.search;
+    // The rule's query no longer matches a ticket once it is in the target status.
+    deps.search = async (jql, limit, ids) => {
+      const result = await search(jql, limit, ids);
+      return { ...result, rows: result.rows.filter(r => r.status !== 'Done') };
+    };
+    const first = await apply(await open(deps), deps);
+    const view = ticketListKind.view(first.session);
+    expect(view).toMatchObject({ page: 0, totalRows: 70, selectedCount: 70 });
+    expect(view.rows[0]).toMatchObject({ key: 'PROJ-51', selected: true });
+    const second = await apply(first.session, deps);
+    expect(second.plan.lines[0].target).toBe('PROJ-51');
+    expect(deps.moved).toHaveLength(100);
   });
 
   it('applies per page on a list opened with a proposed move too', async () => {
