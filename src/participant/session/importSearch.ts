@@ -4,62 +4,10 @@
 import { formatKeyLink } from '../../services/TicketService';
 import { IMPORT_COMMANDS, SEARCH_USAGE } from './importScreens';
 import { safeMarkdownText } from './importReplies';
-import { ReviewRowBase } from './importTypes';
-import type { TicketInfo } from '../../utils/reportImport';
+import type { TicketSearchOutcome } from '../../imports/rows';
 
-/** How many matching tickets one `search` reply lists. */
-export const SEARCH_RESULT_LIMIT = 20;
-
-
-export interface TicketSearchResult {
-  key: string;
-  /** Ids of the Already-ticketed rows whose main ticket this is; empty for an extra open ticket of a row. */
-  ids: string[];
-  status: string | null;
-  summary: string;
-}
-
-export type TicketSearchOutcome =
-  | { kind: 'usage' }
-  | { kind: 'no-info' }
-  | { kind: 'results'; results: TicketSearchResult[]; total: number };
-
-/** A row that finished as a ticket merge: its ticket is closed in Jira though the row's target still reads unresolved. */
-function isFinishedMerge(row: ReviewRowBase): boolean {
-  return row.result?.status === 'done' && row.result.action === 'merge';
-}
-
-/**
- * The open tickets of the Already-ticketed rows whose summary contains every word of `keyword` (case-insensitive,
- * each word as a substring). A ticket is listed once, in the order its first row appears, with the ids of the rows it
- * is the main ticket of; an extra open ticket of a row carries no id, because an id resolves to its row's main ticket only.
- */
-export function findTicketsBySummary(rows: ReviewRowBase[], ticketInfo: TicketInfo | undefined, keyword: string): TicketSearchOutcome {
-  const words = keyword.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return { kind: 'usage' };
-  if (!ticketInfo) return { kind: 'no-info' };
-
-  const byKey = new Map<string, { ids: string[] }>();
-  const note = (key: string, rowId: string | null) => {
-    const entry = byKey.get(key) ?? { ids: [] };
-    if (rowId !== null && !entry.ids.includes(rowId)) entry.ids.push(rowId);
-    byKey.set(key, entry);
-  };
-  for (const row of rows) {
-    if (row.existingTicketKey === null || isFinishedMerge(row)) continue;
-    if (row.target && !row.target.resolved) note(row.target.key, row.id);
-    for (const key of row.openTicketKeys ?? []) note(key, null);
-  }
-
-  const matches: TicketSearchResult[] = [];
-  for (const [key, { ids }] of byKey) {
-    const info = ticketInfo[key];
-    if (!info) continue;
-    const summary = info.summary.toLowerCase();
-    if (words.every(w => summary.includes(w))) matches.push({ key, ids, status: info.status, summary: info.summary });
-  }
-  return { kind: 'results', results: matches.slice(0, SEARCH_RESULT_LIMIT), total: matches.length };
-}
+// The search match moved to src/imports/rows.ts, which the import board shares; this file keeps its chat wording.
+export { findTicketsBySummary, SEARCH_RESULT_LIMIT, type TicketSearchOutcome, type TicketSearchResult } from '../../imports/rows';
 
 /** The chat text for a search outcome. Summaries and statuses are untrusted Jira text on a trusted screen: `safeMarkdownText` defuses links, autolinks and line breaks. */
 export function buildSearchResults(outcome: TicketSearchOutcome, keyword: string, baseUrl?: string): string {

@@ -1,28 +1,23 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import type { TicketService } from '../../services/TicketService';
 import type { IJiraClient } from '../../jira/IJiraClient';
-import {
-  parseWaltzReport, filterComponents, dueDateFields, sanitizeComponentLabel, buildGroupSummary, buildGroupLabels, buildGroupDescriptionWiki, buildFoldedCommentWiki,
-  describeWaltzRowChange, deriveWaltzActions, buildRecordLabels, buildCveLabel, buildRatingLabel, buildUpdateCommentWiki,
-  buildFollowUpSummary, rewriteSummaryRating, highestRating,
-  type WaltzComponent, type WaltzReviewRow,
-} from '../../utils/waltzReport';
+import type { WaltzComponent, WaltzReviewRow } from '../../utils/waltzReport';
 import { logDiag } from '../../utils/diagLog';
-import { componentFromWaltz } from '../../utils/securityOverview';
-import { AcceptedListService } from '../../services/AcceptedListService';
-import { narrowGroup, acceptedEntriesOf, acceptedComponentEntriesOf, acceptedComponentKeys, isComponentAccepted, type AcceptedEntry } from '../../utils/waltzAccepted';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession, StaleCloseSession } from '../sessionState';
 import { WALTZ_REVIEW_COLUMNS } from '../sessionState';
 import {
-  readAndFilterReport, buildImportTemplateSession, handleImportReport,
+  buildImportTemplateSession, handleImportReport,
   handleImportTemplateSelection, handleImportReviewReply, continueAfterImportIssueType,
   continueStaleClose,
   type ReportImportDescriptor,
 } from './reportImportHandler';
-import { resolveSizeLimitSetting, stringOrNull, templateLabelsOf } from '../../utils/reportImport';
+import { resolveSizeLimitSetting } from '../../utils/reportImport';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
+import { createWaltzDescriptor } from '../../imports/waltz';
+
+// The importer's labels and stale-check predicate live in src/imports/waltz.ts, which the import board shares.
+export { WALTZ_STALE_MARKER_LABEL, buildWaltzActiveComponentPredicate } from '../../imports/waltz';
 
 // Exported so extension.ts's command-palette entry point resolves ticketSidekick.waltz.maxReportSizeMB
 // exactly the same way as the @jira chat entry point below, rather than re-deriving the bounds and
@@ -45,199 +40,16 @@ function getWaltzConfig(): { minVulnRating: string; includeRemediationActions: s
   };
 }
 
-async function readAndFilterWaltzFile(filePath: string): Promise<{ items: WaltzComponent[][]; rawItems: WaltzComponent[] }> {
-  // parseWaltzReport() itself also re-checks size (single source of truth used by the pure unit
-  // tests too) — both checks share the same resolved maxReportBytes so they agree with each other
-  // and with the user's setting.
-  const { maxReportBytes, ...filterConfig } = getWaltzConfig();
-  // U6: buildWaltzActiveComponentPredicate needs the raw, unfiltered components (before
-  // minVulnRating/includeRemediationActions) — readAndFilterReport returns them directly as
-  // `rawItems` alongside the filtered set, no closure capture needed.
-  const { items, rawItems } = await readAndFilterReport(
-    filePath,
-    fp => fs.promises.readFile(fp),
-    raw => parseWaltzReport(raw, maxReportBytes, (level, message, details) => logDiag('jira.waltz', level, message, details)),
-    components => filterComponents(components, filterConfig),
-    maxReportBytes,
-  );
-  // Waltz folds nothing automatically (R3): each component is its own one-member group, so the
-  // shared review flow can treat a Waltz item and a Veracode item alike (KTD1).
-  return { items: items.map(component => [component]), rawItems };
-}
-
-// U5: the `oss-dependency` label every Waltz-imported ticket carries (alongside its own
-// `oss-dep-...` component label) — reportImport.ts's findStaleTickets() searches on this to find
-// open tickets whose component has disappeared from the current report. Not yet wired into the
-// chat flow (that's U6); exported here so that later unit can call findStaleTickets() with the
-// right marker label without duplicating it.
-export const WALTZ_STALE_MARKER_LABEL = 'oss-dependency';
-
-// Reused directly by the descriptor's own labelToDedupKey below (dedup search) and by
-// findStaleTickets()'s labelToDedupKey (stale search, U6) so both parse the identical
-// `oss-dep-...` label shape sanitizeComponentLabel() produces, from one implementation.
-function waltzLabelToDedupKey(label: string): string | null {
-  return label.startsWith('oss-dep-') ? label : null;
-}
-
-/**
- * Builds the "is this component still active" predicate findStaleTickets() needs (U5's R5). A
- * component is active when it's present in the *raw* parsed report (before the
- * minVulnRating/includeRemediationActions filter that decides what gets a *new* ticket — R5 says
- * "absent from the current Waltz report") with a remediationAction that still matches
- * `includeRemediationActions`. Deliberately ignores minVulnRating: R5 only mentions remediation
- * action, so a component that dropped below the rating floor but is still open does not make its
- * ticket stale.
- */
-export function buildWaltzActiveComponentPredicate(
-  rawComponents: WaltzComponent[],
-  includeRemediationActions: string[],
-  acceptedEntries: AcceptedEntry[] = [],
-): (dedupKey: string) => boolean {
-  const allowedActions = new Set(includeRemediationActions.map(a => a.trim()));
-  // A component accepted as a whole is not an active finding even when the report still lists it, so
-  // a ticket covering only accepted components is offered for closing (accepted-components plan, KTD3).
-  const acceptedKeys = acceptedComponentKeys(acceptedEntries);
-  const actionByKey = new Map(rawComponents
-    .filter(c => !isComponentAccepted(c.nameVersion, acceptedKeys))
-    .map(c => [sanitizeComponentLabel(c.nameVersion), (c.remediationAction ?? '').trim()] as const));
-  return (dedupKey: string) => {
-    const action = actionByKey.get(dedupKey);
-    return action !== undefined && allowedActions.has(action);
-  };
-}
-
-const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> = {
-  descriptorKind: 'waltz',
-  scope: 'jira.waltz',
-  importLabel: 'Waltz OSS',
-  itemNoun: 'component(s)',
-  filterKindLabel: 'rating/remediation',
-  noMatchMessage:
-    'No components in this report matched your current filters ' +
-    '(`ticketSidekick.waltz.minVulnRating` / `ticketSidekick.waltz.includeRemediationActions`).',
-  fileFilter: { label: 'OSS report', extensions: ['xlsx'] },
-  filePickerTitle: 'Select OSS Report (.xlsx)',
-  parseAndFilter: readAndFilterWaltzFile,
-  sessionKeys: {
-    templateSelection: 'jira.session.waltzTemplateSelection',
-    review: 'jira.session.waltzReview',
-  },
-  // One label/key per member component, so a ticket a user merged by hand is found from any member.
-  searchLabelOf: group => group.map(component => sanitizeComponentLabel(component.nameVersion)),
-  dedupKeyOf: group => group.map(component => sanitizeComponentLabel(component.nameVersion)),
-  labelToDedupKey: waltzLabelToDedupKey,
-  buildRowFields: (group, templateLabels) => ({
-    nameVersion: group.length === 1 ? group[0].nameVersion : `${group[0].nameVersion} (+${group.length - 1} more)`,
-    maxVulnRating: highestRating(group),
-    summary: buildGroupSummary(group),
-    labels: buildGroupLabels(group, templateLabels),
-    descriptionWiki: buildGroupDescriptionWiki(group),
-    sourceGroup: group,
-  }),
+const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> = createWaltzDescriptor({
+  filter: getWaltzConfig,
+  minVulnRating: getWaltzMinVulnRating,
+  workspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+}, {
   reviewColumns: WALTZ_REVIEW_COLUMNS,
-  itemRefFor: row => row.nameVersion,
-  // KTD5: the Due Date is written after the template fields so a template cannot override the report, only
-  // when the row has a date, and never cleared; KTD6: Jira may refuse it, which must not stop the ticket.
-  buildTicketFields: (row, additionalFields) => {
-    const due = dueDateFields(row.sourceGroup);
-    return {
-      summary: row.summary,
-      fields: { ...additionalFields, labels: row.labels, description: row.descriptionWiki, ...due.fields },
-      optionalFields: due.optionalFields,
-    };
-  },
-  // A rewrite overwrites the Due Date with the regenerated group's date, whatever the ticket holds (KTD5).
-  rewriteDueDate: ({ regenItem }) => stringOrNull(dueDateFields(regenItem).fields.duedate),
-  dueDateNote: dueDate => `Due Date set to ${dueDate} from the report (replaces any date edited by hand)`,
   // Waltz has no issue-type-fetch-failure pop-up today — omitting onIssueTypeFetchFailed keeps that
   // path log-only, matching current behavior (KTD9).
-  // U6: wires reportImportHandler.ts's reverse stale-ticket check up to U5's own marker
-  // label/predicate builder — rawItems here is always what readAndFilterWaltzFile's rawItems (or
-  // extension.ts's own captured pre-filter parse) produced: unfiltered WaltzComponent[].
-  stale: {
-    markerLabel: WALTZ_STALE_MARKER_LABEL,
-    labelToDedupKey: waltzLabelToDedupKey,
-    buildActivePredicate: (rawItems, acceptedEntries) => buildWaltzActiveComponentPredicate(rawItems as WaltzComponent[], getWaltzConfig().includeRemediationActions, acceptedEntries),
-  },
-  // Finding folding (KTD1/KTD4): a row's item is its group of components, so merging is concatenation.
-  fold: {
-    itemOf: row => row.sourceGroup,
-    combine: groups => groups.flat(),
-    recordLabelsOf: group => buildGroupLabels(group),
-    buildComment: (group, droppedKeys, details) => buildFoldedCommentWiki(group, droppedKeys, details),
-  },
-  // Security overview export (KTD3): the report's own components are the exact detail, and the report implies the same Due Date a ticket would get.
-  overviewExport: {
-    source: 'waltz',
-    detailOf: row => ({ components: row.sourceGroup.map(componentFromWaltz) }),
-    summaryOf: row => row.summary,
-    dueDateOf: row => dueDateFields(row.sourceGroup).fields.duedate ?? null,
-  },
-  // Waltz ticket merge (KTD1): the survivor's comment opens by naming the tickets it absorbed.
-  ticketMerge: {
-    buildCommentPreface: absorbedKeys => `h4. Merged tickets\nThis ticket took over the items of ${absorbedKeys.join(', ')}, which were closed as duplicates of it.`,
-  },
-  // Accepted-CVE list (KTD8): component + CVE pairs the team accepted stay off the New screen.
-  accepted: {
-    itemOf: row => row.sourceGroup,
-    service: () => {
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      return workspaceRoot ? new AcceptedListService(workspaceRoot) : null;
-    },
-    narrow: (group, entries) => {
-      const narrowed = narrowGroup(group, entries, getWaltzMinVulnRating());
-      return { item: narrowed.group, hiddenCves: narrowed.hiddenCves, belowFloor: narrowed.belowFloor, hiddenComponents: narrowed.hiddenComponents };
-    },
-    isAccepted: (group, entries) => {
-      const keys = acceptedComponentKeys(entries);
-      return group.length > 0 && group.every(c => isComponentAccepted(c.nameVersion, keys));
-    },
-    componentEntriesOf: (group, reason) => acceptedComponentEntriesOf(group, reason),
-    entriesOf: (group, reason) => acceptedEntriesOf(group, reason),
-  },
-  // Import ticket updates parity (KTD2/KTD3): a component's findings are recorded as one
-  // `oss-cve-<id>` label per CVE plus exactly one `oss-rating-<rating>` label, which `update`
-  // replaces rather than accumulates. A rating rise also rewrites the summary's rating suffix (R12).
-  changeTracking: {
-    findingNoun: 'CVE(s)',
-    // Change tracking only ever sees Already-ticketed rows, and Waltz never folds those (merges act
-    // on New rows only), so the group holds exactly one component here.
-    describe: (group, knownLabels, context) => describeWaltzRowChange(group[0], knownLabels, context),
-    deriveActions: deriveWaltzActions,
-    readsTargetDescriptions: true,
-    reportKeysOf: rawItems => (rawItems as WaltzComponent[]).map(c => sanitizeComponentLabel(c.nameVersion)),
-    recordLabelsOf: (row, change) => {
-      if (change.kind === 'baseline') return buildRecordLabels(row.sourceGroup[0]);
-      const labels = change.newIds.map(buildCveLabel);
-      if (change.ratingRise) labels.push(buildRatingLabel(change.ratingRise.to));
-      return labels.filter(l => l !== '');
-    },
-    removeLabelPrefix: 'oss-rating-',
-    buildUpdateComment: (row, change, { summaryUnchanged }) => buildUpdateCommentWiki(
-      row.sourceGroup[0], { newCveIds: change.newIds, ratingRise: change.ratingRise }, { summaryUnchanged },
-    ),
-    rewriteSummary: (summary, change) => (change.ratingRise
-      ? rewriteSummaryRating(summary, change.ratingRise.to)
-      : undefined),
-    // R12/KTD9: `new ticket` is a full ticket — the component's whole current content and dates, all its record labels and the
-    // template's, and the Due Date — whose title says which ticket it follows. The Relates link to that ticket is added by the caller.
-    actionLabels: { 'follow-up': 'new ticket' },
-    buildFollowUp: (row, _change, originalKey, additionalFields) => {
-      const group = row.sourceGroup;
-      const due = dueDateFields(group);
-      return {
-        summary: buildFollowUpSummary(group[0], originalKey),
-        fields: {
-          ...additionalFields,
-          labels: buildGroupLabels(group, templateLabelsOf(additionalFields)),
-          description: buildGroupDescriptionWiki(group),
-          ...due.fields,
-        },
-        optionalFields: due.optionalFields,
-      };
-    },
-  },
-};
+  onDiag: (level, message, details) => logDiag('jira.waltz', level, message, details),
+});
 
 // The exported functions below are thin wrappers around the shared implementations in
 // reportImportHandler.ts (R1) — names/signatures unchanged from before this consolidation so

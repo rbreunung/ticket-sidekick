@@ -3,9 +3,11 @@
 
 import type { VeracodeReviewRow } from '../../utils/veracodeReport';
 import type { WaltzReviewRow } from '../../utils/waltzReport';
-import { BATCH_LIMIT } from '../../utils/reportImport';
 import { ReviewRowBase } from './importTypes';
 import { ReviewTableColumn, neutralizeMarkdownLinks, normalizeReply, safeCellText } from './primitives';
+
+// The page slice moved to src/imports/rows.ts, which the import board shares.
+export { buildReviewPage, type ReviewPage } from '../../imports/rows';
 
 // ---------------------------------------------------------------------------------------------
 // U4: pageable review-session "New" section (R6-R8). `allRows` (the full, unpaged candidate set)
@@ -14,34 +16,6 @@ import { ReviewTableColumn, neutralizeMarkdownLinks, normalizeReply, safeCellTex
 // separate from the screen renderers below (`buildNewGroupScreen()`) so the slicing logic is
 // independently testable.
 // ---------------------------------------------------------------------------------------------
-
-export interface ReviewPage<TRow extends ReviewRowBase> {
-  rows: TRow[];
-  page: number; // clamped 0-based page actually returned
-  totalPages: number;
-}
-
-/**
- * Slices a review session's full candidate set (`allRows`) into one displayable page: every
- * "already ticketed" row (R8 — shown in full regardless of page) plus one `BATCH_LIMIT`-sized page
- * of "new" rows, selected by `page` (0-based, clamped into `[0, totalPages - 1]` — an out-of-range
- * request, e.g. `next` from the last page or a `page <n>` beyond the end, lands on the nearest
- * valid page rather than erroring). `totalPages` is always at least 1, even when there are zero
- * "new" rows, so a caller never divides by / indexes a zero-page result.
- *
- * Deliberately re-derives `rows` fresh from `allRows` every time rather than mutating in place —
- * `allRows` itself is never touched here, which is what makes a "new" row's toggle page-local
- * (R7): a toggle applied only to a page's returned `rows` (see `applyReviewSessionToggle()`)
- * evaporates the next time this function re-slices that page from `allRows`.
- */
-export function buildReviewPage<TRow extends ReviewRowBase>(allRows: TRow[], page: number): ReviewPage<TRow> {
-  const ticketed = allRows.filter(r => r.existingTicketKey !== null);
-  const fresh = allRows.filter(r => r.existingTicketKey === null);
-  const totalPages = Math.max(1, Math.ceil(fresh.length / BATCH_LIMIT));
-  const clampedPage = Math.min(Math.max(page, 0), totalPages - 1);
-  const start = clampedPage * BATCH_LIMIT;
-  return { rows: [...ticketed, ...fresh.slice(start, start + BATCH_LIMIT)], page: clampedPage, totalPages };
-}
 
 export type ReviewPageNav =
   | { kind: 'next' }

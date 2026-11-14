@@ -3,9 +3,9 @@
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
 import type { TicketService } from '../../services/TicketService';
-import { CURRENT_SESSION_SCHEMA_VERSION, buildChatCommandLink, buildStaleTargetOptions, emptyImportOutcomes, ensureImportViewState, formatStaleTargetOption, isBackOrCancellation, parseResolutionSelection, parseStaleIssueTypePick, parseStaleTargetPick, planStaleTransitions, selectedOpenStaleTickets, selectedStaleIssueTypes, staleTargetNeedsResolution, staleTargetState, type ReviewRowBase, type ReviewSession, type StaleCloseSession, type StaleTargetOption, type VeracodeReviewSession, type WaltzReviewSession } from '../sessionState';
+import { CURRENT_SESSION_SCHEMA_VERSION, buildChatCommandLink, ensureImportViewState, formatStaleTargetOption, isBackOrCancellation, parseResolutionSelection, parseStaleIssueTypePick, parseStaleTargetPick, selectedOpenStaleTickets, selectedStaleIssueTypes, staleTargetNeedsResolution, staleTargetState, type ReviewRowBase, type ReviewSession, type StaleCloseSession, type StaleTargetOption, type VeracodeReviewSession, type WaltzReviewSession } from '../sessionState';
 import { STALE_RESOLUTION_SESSION_KEY, sessionWasSuperseded } from './ticketContext';
-import { transitionTickets } from './cleanupHandler';
+import { runStaleClose, staleCloseTargetOptions } from '../../imports/staleClose';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 import { afterGroupAction, streamImportReview } from './importReviewScreen';
 import type { ReportImportDescriptor } from './reportImportTypes';
@@ -118,10 +118,7 @@ async function startTargetPick<TItem, TRow extends ReviewRowBase>(
   descriptor: ReportImportDescriptor<TItem, TRow>,
   baseUrl?: string,
 ): Promise<vscode.ChatResult> {
-  const stale = session.staleTickets!;
-  const group = stale.groups.find(g => g.issueType === issueType)!;
-  const selectedStatuses = selectedOpenStaleTickets(group, stale.closedKeys).map(t => t.currentStatus);
-  const targetOptions = buildStaleTargetOptions(group.rules, group.graph, selectedStatuses);
+  const targetOptions = staleCloseTargetOptions(session, issueType);
   if (targetOptions.length === 0) {
     // Plan review fix: an empty pick list would strand the user on a question with nothing to pick.
     await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
@@ -193,10 +190,8 @@ export async function closeStaleTickets<TItem, TRow extends ReviewRowBase>(
 }
 
 /**
- * Transitions the chosen issue type's selected, not-yet-transitioned stale tickets to `targetState`
- * through cleanupHandler.ts's shared `transitionTickets()`, with paths computed from the group's
- * stored workflow graph (KTD2). A ticket already there or with no path is skipped with a note and
- * deselected (R11); transitioned tickets are marked so they are never transitioned again.
+ * Runs the stale close (src/imports/staleClose.ts) and streams its progress line and summary. A review
+ * with no such group is returned as it was, with nothing streamed.
  */
 async function runStaleTransitions<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
@@ -207,45 +202,20 @@ async function runStaleTransitions<TItem, TRow extends ReviewRowBase>(
   stream: vscode.ChatResponseStream,
   descriptor: ReportImportDescriptor<TItem, TRow>,
 ): Promise<ReviewSession<TRow>> {
-  const stale = session.staleTickets;
-  const group = stale?.groups.find(g => g.issueType === issueType);
-  if (!stale || !group) return session;
-  const closed = stale.closedKeys ?? [];
-  const { runnable, skipped } = planStaleTransitions(group, targetState, closed);
-  stream.markdown(`_Transitioning ${runnable.length} stale **${issueType}** ticket(s) to **${targetState}**…_\n\n`);
+  const result = await runStaleClose(session, issueType, targetState, resolution, ticketService, descriptor, {
+    onDiag: (level, message, details) => logDiag(descriptor.scope, level, message, details),
+    onEvent: start => stream.markdown(`_Transitioning ${start.count} stale **${start.issueType}** ticket(s) to **${start.targetState}**…_\n\n`),
+  });
+  if (!result) return session;
+  const { transitioned, failed, skipped, failures } = result;
 
-  const result = runnable.length > 0
-    ? await transitionTickets(runnable, ticketService, resolution, descriptor.scope)
-    : { failures: [] as Array<{ key: string; reason: string }> };
-  const failedKeys = new Set(result.failures.map(f => f.key));
-  const newlyClosed = runnable.filter(t => !failedKeys.has(t.key)).map(t => t.key);
-  const failedTickets = runnable.length - newlyClosed.length;
-
-  let summary = `**${newlyClosed.length}** stale ticket(s) transitioned to **${targetState}**, ${failedTickets} failed` +
+  let summary = `**${transitioned.length}** stale ticket(s) transitioned to **${targetState}**, ${failed} failed` +
     (skipped.length > 0 ? `, ${skipped.length} skipped.` : '.');
   if (skipped.length > 0) summary += '\n\n' + skipped.map(s => `– ${s.key} skipped — ${s.reason}`).join('\n');
-  if (result.failures.length > 0) {
-    summary += '\n\n' + result.failures.map(f => `✗ ${f.key} — ${f.reason}`).join('\n');
+  if (failures.length > 0) {
+    summary += '\n\n' + failures.map(f => `✗ ${f.key} — ${f.reason}`).join('\n');
     summary += '\n\nIf caused by a workflow gap, type `/ts-jira workflow <KEY>` with one of those tickets to refresh the cache.';
   }
   stream.markdown(`${summary}\n\n`);
-  logDiag(descriptor.scope, result.failures.length > 0 ? 'warn' : 'info',
-    `${descriptor.importLabel} stale-ticket close — ${newlyClosed.length} transitioned to ${targetState}, ${failedTickets} failed, ${skipped.length} skipped`,
-    { issueType, targetState, transitioned: newlyClosed.length, failed: failedTickets, skipped: skipped.length },
-  );
-
-  const skippedKeys = new Set(skipped.map(s => s.key));
-  const outcomes = session.outcomes ?? emptyImportOutcomes();
-  return {
-    ...session,
-    staleTickets: {
-      ...stale,
-      groups: stale.groups.map(g => (g !== group ? g : {
-        ...g,
-        tickets: g.tickets.map(t => (skippedKeys.has(t.key) ? { ...t, included: false } : t)),
-      })),
-      closedKeys: [...closed, ...newlyClosed],
-    },
-    outcomes: { ...outcomes, closed: outcomes.closed + newlyClosed.length, closeFailed: outcomes.closeFailed + failedTickets },
-  };
+  return result.session;
 }

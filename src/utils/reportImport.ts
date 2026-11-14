@@ -12,7 +12,7 @@ import { TRIGGER_CHARS } from './markdownToJiraWiki';
 // Type-only import: erased at compile time (no runtime `require`), so this does not create the
 // circular *runtime* import that sessionState.ts's own value import of this file (BATCH_LIMIT,
 // sanitizeCellText) would otherwise raise — only a value/side-effect import can cycle.
-import type { ReviewRowBase, TicketedAction } from '../participant/sessionState';
+import type { ReviewRowBase, TicketedAction } from '../imports/types';
 
 // Single source of truth for both importers (KTD4). Both currently hardcode the identical values
 // (20 MB / 50 tickets per run) independently; consuming these from here instead of the local

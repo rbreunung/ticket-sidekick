@@ -53,12 +53,12 @@ describe('import board parity ledger', () => {
   });
 
   it('lists every optional capability an importer can supply', () => {
-    const types = read('src/participant/jira/reportImportTypes.ts');
+    const types = read('src/imports/descriptor.ts');
     const capabilities = [
       ...optionalMembers(types, 'ReportImportDescriptor'),
       ...optionalMembers(types, 'ImportChangeTracking'),
     ];
-    expect(capabilities.length, 'capabilities were found in reportImportTypes.ts').toBeGreaterThan(10);
+    expect(capabilities.length, 'capabilities were found in src/imports/descriptor.ts').toBeGreaterThan(10);
     const missing = capabilities.filter(name => !rows.has(name));
     expect(missing, 'capabilities with no row in the import board parity ledger').toEqual([]);
   });

@@ -4,12 +4,15 @@
 import { formatKeyLink } from '../../services/TicketService';
 import { IMPORT_COMMANDS, LEGACY_UPDATE_COMMAND, SEARCH_USAGE, UNACCEPT_COMPONENT_WORD } from './importScreens';
 import { buildHelpLink, offeredTicketedActions, type ImportCommandCaps } from './importCommands';
-import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, MergeRun, ReviewRowBase, ReviewSessionStale, StaleTargetOption, TicketedAction, ActionLabels, actionLabelOf } from './importTypes';
+import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, MergeRun, ReviewSessionStale, StaleTargetOption, TicketedAction, ActionLabels, actionLabelOf } from './importTypes';
 import { TICKET_KEY_TOKEN, cmdLink, isBackOrCancellation, isCancellation, isConfirmation, neutralizeMarkdownLinks, normalizeReply } from './primitives';
 import type { OverviewFormat } from '../../utils/securityOverview';
 import { parseResolutionSelection } from './core';
 import { ReviewPageNav, parseBulkNewRowReply, parseReviewPageNav } from './reviewPaging';
 import { parseStaleTargetPick, parseStaleTicketToggle } from './staleTargets';
+
+// The merged-row helpers moved to src/imports/rows.ts, which the import board shares.
+export { mergeNewRows, restoreMergedRows, unmergeNewRow } from '../../imports/rows';
 
 /** What a reply on the current import screen asks for (KTD2). */
 export type ImportReplyAction =
@@ -600,60 +603,6 @@ export function buildCloseMergePrompt(input: CloseMergePromptInput): string {
     buildHelpLink(),
   );
   return lines.join('\n');
-}
-
-/**
- * Finding folding: after a page is rebuilt from `allRows` (which keeps the originals), puts each
- * of `merged` back in place of its members when all of them are still on the page. A merged row
- * whose members were split across pages falls back to its originals. Pure.
- */
-export function restoreMergedRows<TRow extends ReviewRowBase>(rows: TRow[], merged: TRow[]): TRow[] {
-  return merged.reduce((acc, row) => {
-    const ids = new Set(row.memberIds ?? [row.id]);
-    const members = acc.filter(r => r.existingTicketKey === null && ids.has(r.id));
-    if (members.length !== ids.size) return acc;
-    return acc.flatMap(r => (r === members[0] ? [row] : members.includes(r) ? [] : [r]));
-  }, rows);
-}
-
-/**
- * Finding folding (KTD3): replaces the named visible New rows with one merged row. It keeps the
- * first member's id and position, lists every original id in `memberIds` (a member that is itself
- * merged contributes all of its originals) and starts included. `buildFields` supplies the
- * importer-specific fields from the members; identity and fold bookkeeping are set here so no
- * importer can get them wrong. Already-ticketed rows are never merged, even when named. Pure.
- */
-export function mergeNewRows<TRow extends ReviewRowBase>(
-  rows: TRow[],
-  ids: string[],
-  buildFields: (members: TRow[]) => Omit<TRow, keyof ReviewRowBase>,
-): TRow[] {
-  const wanted = new Set(ids);
-  const members = rows.filter(r => r.existingTicketKey === null && wanted.has(r.id));
-  if (members.length < 2) return rows;
-  const merged = {
-    ...buildFields(members),
-    id: members[0].id,
-    existingTicketKey: null,
-    included: true,
-    memberIds: members.flatMap(m => m.memberIds ?? [m.id]),
-  } as unknown as TRow;
-  const memberSet = new Set(members);
-  return rows.flatMap(r => (r === members[0] ? [merged] : memberSet.has(r) ? [] : [r]));
-}
-
-/**
- * Finding folding: puts a merged row's original rows (still held, untouched, in `allRows`) back in
- * its place. A row that is not merged, or whose originals are missing, leaves `rows` unchanged. Pure.
- */
-export function unmergeNewRow<TRow extends ReviewRowBase>(rows: TRow[], allRows: TRow[], id: string): TRow[] {
-  const merged = rows.find(r => r.existingTicketKey === null && r.id === id && r.memberIds !== undefined);
-  if (!merged) return rows;
-  const originals = merged.memberIds!
-    .map(memberId => allRows.find(a => a.existingTicketKey === null && a.id === memberId))
-    .filter((r): r is TRow => r !== undefined);
-  if (originals.length !== merged.memberIds!.length) return rows;
-  return rows.flatMap(r => (r === merged ? originals : [r]));
 }
 
 // Accepted spellings of each row action (after normalizeReply lower-casing).

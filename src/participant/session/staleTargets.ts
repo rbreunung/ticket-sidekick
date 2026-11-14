@@ -1,31 +1,11 @@
 // Stale-ticket close: target/issue-type options and picks, ticket toggles.
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
-import { findReachableStatuses, type WorkflowGraph } from '../../services/WorkflowService';
-import { ReviewSessionStale, StaleRuleOption, StaleTargetOption } from './importTypes';
+import { ReviewSessionStale, StaleTargetOption } from './importTypes';
 import { TICKET_KEY_TOKEN, isBackOrCancellation, pickByNumberOrName } from './primitives';
 
-/**
- * R2/KTD3: the close-time target pick — matching cleanup rules first (in `.jira-templates.json`
- * order), then every status reachable in the stored workflow graph from the current status of at
- * least one selected ticket, alphabetically. A status a rule also targets is still listed: picking
- * the plain status transitions without the rule's resolution. Empty when no rule matches and no
- * selected ticket can reach anything.
- */
-export function buildStaleTargetOptions(
-  rules: StaleRuleOption[],
-  graph: WorkflowGraph,
-  currentStatuses: string[],
-): StaleTargetOption[] {
-  const statuses = new Set<string>();
-  for (const from of new Set(currentStatuses)) {
-    for (const s of findReachableStatuses(graph, from)) statuses.add(s);
-  }
-  return [
-    ...rules.map((r): StaleTargetOption => ({ kind: 'rule', ruleName: r.name, targetState: r.targetState, resolution: r.resolution })),
-    ...[...statuses].sort((a, b) => a.localeCompare(b)).map((status): StaleTargetOption => ({ kind: 'status', status })),
-  ];
-}
+// The target options and the ticket toggle moved to src/imports/staleClose.ts, which the import board shares.
+export { applyStaleTicketToggle, buildStaleTargetOptions } from '../../imports/staleClose';
 
 export function formatStaleTargetOption(option: StaleTargetOption): string {
   return option.kind === 'rule' ? `${option.ruleName} → ${option.targetState}` : option.status;
@@ -94,15 +74,3 @@ export function parseStaleTicketToggle(reply: string, stale: ReviewSessionStale)
   return matched.length > 0 ? { matched, remainder: remainderTokens.join(' ') } : null;
 }
 
-/** Flips `included` for every stale ticket (across every group) whose key is in `keys` — pure so
- * it's independently testable, mirroring `applyTicketToggle`'s per-key flip for the cleanup batch. */
-export function applyStaleTicketToggle(stale: ReviewSessionStale, keys: string[]): ReviewSessionStale {
-  const toggleSet = new Set(keys.map(k => k.toUpperCase()));
-  return {
-    ...stale,
-    groups: stale.groups.map(g => ({
-      ...g,
-      tickets: g.tickets.map(t => (toggleSet.has(t.key.toUpperCase()) ? { ...t, included: !t.included } : t)),
-    })),
-  };
-}
