@@ -757,7 +757,7 @@
               "type": "string"
             },
             "cleanupRule": {
-              "description": "ticket-list: the name of a cleanup rule in .jira-templates.json, in place of jql or filter. The board moves the rule's tickets to its target status.",
+              "description": "ticket-list: the name of a cleanup rule in .jira-templates.json, in place of jql or filter; \"<rule> in <version>\" also names a fix version. The board moves the rule's tickets to its target status.",
               "type": "string"
             },
             "fixVersion": {

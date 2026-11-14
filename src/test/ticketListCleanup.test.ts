@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ticketListKind, type TicketListData, type TicketListDeps, type TicketListRecipe, type TicketListWorking, type TicketRow, type TicketListAction } from '../boards/ticketList/kind';
-import { buildCleanupQuery, buildSubtaskQueries, parseFixVersionOverride } from '../boards/ticketList/cleanupSource';
+import { buildCleanupQuery, buildSubtaskQueries, checkCleanupRules, parseFixVersionOverride } from '../boards/ticketList/cleanupSource';
 import type { CleanupRule } from '../templates/TemplateService';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import type { Session } from '../sessions/sessionTypes';
@@ -138,6 +138,32 @@ describe('opening a cleanup', () => {
     expect(result).toEqual({ ok: false, reason: 'no cleanup rule named "Nope" in .jira-templates.json. The rules there are: "Close released bugs".' });
     expect(await ticketListKind.validate({ cleanupRule: 'Nope' }, fake({ rules: [] }))).toMatchObject({ ok: false, reason: expect.stringContaining('has no cleanupRules') });
     expect(await ticketListKind.validate({ cleanupRule: 'Close released bugs', jql: 'x' }, fake())).toMatchObject({ ok: false });
+  });
+
+  it('refuses a rule that is missing a required field and says which', async () => {
+    const broken = { name: 'Close stories', project: 'PROJ', issueType: 'Story' } as unknown as CleanupRule;
+    const deps = fake({ rules: [RULE, broken] });
+    expect(await ticketListKind.validate({ cleanupRule: 'close stories' }, deps)).toEqual({
+      ok: false, reason: 'the cleanup rule "Close stories" in .jira-templates.json has no targetState, so it cannot run',
+    });
+    const unknown = await ticketListKind.validate({ cleanupRule: 'Nope' }, deps);
+    expect(unknown).toMatchObject({ ok: false, reason: expect.stringContaining('Not complete, so not run: "Close stories" (no targetState).') });
+    expect(checkCleanupRules([RULE, broken, {}]).problems).toEqual([
+      { label: 'Close stories', missing: ['targetState'] },
+      { label: 'rule 3', missing: ['name', 'project', 'issueType', 'targetState'] },
+    ]);
+  });
+
+  it('reads "<rule> in <version>" as the rule and a fix version, even when a rule name contains " in "', async () => {
+    const inQa: CleanupRule = { ...RULE, name: 'Close bugs in QA' };
+    const deps = fake({ rules: [RULE, inQa] });
+    const exact = await open(deps, { cleanupRule: 'Close bugs in QA' });
+    expect(exact.recipe.source).toEqual({ type: 'rule', name: 'Close bugs in QA' });
+    const versioned = await open(deps, { cleanupRule: 'close bugs in qa in 3.2' });
+    expect(versioned.recipe.source).toEqual({ type: 'rule', name: 'Close bugs in QA', fixVersion: '3.2' });
+    const plain = await open(deps, { cleanupRule: 'Close released bugs in Release 4' });
+    expect(plain.recipe.source).toEqual({ type: 'rule', name: 'Close released bugs', fixVersion: 'Release 4' });
+    expect(await ticketListKind.validate({ cleanupRule: 'Close released bugs in 3.2', fixVersion: '4.0' }, deps)).toMatchObject({ ok: false, reason: expect.stringContaining('names the fix version twice') });
   });
 
   it('shows open subtasks beneath their parent, with the rule\'s subtask target and resolution', async () => {

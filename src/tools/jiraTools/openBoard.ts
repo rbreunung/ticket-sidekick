@@ -16,7 +16,7 @@ const openBoardShape = {
   project: z.string().optional().describe('security-report: the Jira project key, e.g. PROJ. Leave out to use the default project.'),
   jql: z.string().optional().describe('ticket-list: a JQL query, e.g. project = PROJ AND status = Done.'),
   filter: z.string().optional().describe('ticket-list: a saved filter\'s id or name, in place of jql.'),
-  cleanupRule: z.string().optional().describe('ticket-list: the name of a cleanup rule in .jira-templates.json, in place of jql or filter. The board moves the rule\'s tickets to its target status.'),
+  cleanupRule: z.string().optional().describe('ticket-list: the name of a cleanup rule in .jira-templates.json, in place of jql or filter; \"<rule> in <version>\" also names a fix version. The board moves the rule\'s tickets to its target status.'),
   fixVersion: z.string().optional().describe(
     'ticket-list: with jql or filter, narrow to a fix version by name. With cleanupRule, the fix version in place of the rule\'s own: '
     + 'released, unreleased, a pattern with *, or a version name ("released" in double quotes for a version of that name).',

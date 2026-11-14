@@ -47,7 +47,7 @@ A brief, a guided create, a spell check or a template: help brief, help create, 
 | load [KEY] [file ...] | `jira_load_ticket`; the files go in `attachments` |
 | view [KEY] | `jira_view_ticket` |
 | search <JQL or filter> | `jira_open_board` with board `ticket-list` and the text as `jql`, or as `filter` when it is a saved filter's id or name |
-| cleanup <rule> [in VERSION] | `jira_open_board` with board `ticket-list`, the rule's name as `cleanupRule`, and what follows `in` as `fixVersion` when typed |
+| cleanup <rule> [in VERSION] | `jira_open_board` with board `ticket-list` and the whole text after `cleanup`, `in VERSION` included, as `cleanupRule`; the board finds the rule and the version |
 | filters | `jira_list_my_filters` |
 | comment <KEY> <text> | `jira_add_comment` |
 | field <KEY> <field> <value> | `jira_update_field` |

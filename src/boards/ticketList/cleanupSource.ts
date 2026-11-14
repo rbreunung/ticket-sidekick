@@ -123,3 +123,81 @@ export function pathProblem(graph: WorkflowGraph | undefined, from: string, targ
   if (from.toLowerCase() === target.toLowerCase()) return undefined;
   return findPath(graph, from, target) === null ? `no path from ${from} to ${target}` : undefined;
 }
+
+/** The fields a cleanup rule must have before the board runs it. */
+export const REQUIRED_RULE_FIELDS = ['name', 'project', 'issueType', 'targetState'] as const;
+
+/** A rule in `.jira-templates.json` the board will not run, and the fields it lacks. */
+export interface RuleProblem {
+  /** The rule's name, or its place in the list when it has none ("rule 3"). */
+  label: string;
+  missing: string[];
+}
+
+function filled(value: unknown): boolean {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+/**
+ * Splits the file's rules into the complete ones and the ones missing a required field. The file
+ * is read as written, so an entry can be anything; only a rule with all four fields is run.
+ */
+export function checkCleanupRules(rules: readonly unknown[]): { rules: CleanupRule[]; problems: RuleProblem[] } {
+  const complete: CleanupRule[] = [];
+  const problems: RuleProblem[] = [];
+  rules.forEach((entry, index) => {
+    const rule = (typeof entry === 'object' && entry !== null ? entry : {}) as Record<string, unknown>;
+    const missing = REQUIRED_RULE_FIELDS.filter(field => !filled(rule[field]));
+    if (missing.length === 0) complete.push(entry as CleanupRule);
+    else problems.push({ label: filled(rule.name) ? String(rule.name).trim() : `rule ${index + 1}`, missing: [...missing] });
+  });
+  return { rules: complete, problems };
+}
+
+export function describeRuleProblem(problem: RuleProblem): string {
+  return `the cleanup rule "${problem.label}" in .jira-templates.json has no ${problem.missing.join(', ')}, so it cannot run`;
+}
+
+export type RuleLookup =
+  | { ok: true; rule: CleanupRule; fixVersion?: string }
+  | { ok: false; reason: string };
+
+/**
+ * Finds the rule a request names. An exact name wins. Otherwise a request of the form
+ * `<rule name> in <version>` matches the longest rule name it starts with, and what follows
+ * " in " is the fix version, so a rule whose own name contains " in " is still found. A rule
+ * that is missing a required field is refused with the field it lacks.
+ */
+export function lookupCleanupRule(fileRules: readonly unknown[], requested: string, fixVersion?: string): RuleLookup {
+  const { rules, problems } = checkCleanupRules(fileRules);
+  const wanted = requested.trim().toLowerCase();
+  const named = (label: string) => label.trim().toLowerCase();
+
+  const exactProblem = problems.find(p => named(p.label) === wanted);
+  const exact = rules.find(rule => named(rule.name) === wanted);
+  if (exact) return { ok: true, rule: exact, ...(fixVersion ? { fixVersion } : {}) };
+  if (exactProblem) return { ok: false, reason: describeRuleProblem(exactProblem) };
+
+  const candidates = [
+    ...rules.map(rule => ({ label: rule.name, rule })),
+    ...problems.map(problem => ({ label: problem.label, problem })),
+  ]
+    .filter(c => wanted.startsWith(`${named(c.label)} in `))
+    .sort((a, b) => b.label.trim().length - a.label.trim().length);
+  const best = candidates[0];
+  if (best) {
+    const version = requested.trim().slice(best.label.trim().length + ' in '.length).trim();
+    if ('problem' in best && best.problem) return { ok: false, reason: describeRuleProblem(best.problem) };
+    if (version && fixVersion && version.toLowerCase() !== fixVersion.trim().toLowerCase()) {
+      return { ok: false, reason: `the request names the fix version twice ("${version}" and "${fixVersion}"); give it once.` };
+    }
+    if (version && 'rule' in best && best.rule) return { ok: true, rule: best.rule, fixVersion: fixVersion || version };
+  }
+
+  const known = rules.map(r => `"${r.name}"`).join(', ');
+  const broken = problems.length ? ` Not complete, so not run: ${problems.map(p => `"${p.label}" (no ${p.missing.join(', ')})`).join(', ')}.` : '';
+  return {
+    ok: false,
+    reason: `no cleanup rule named "${requested.trim()}" in .jira-templates.json. ${known ? `The rules there are: ${known}.` : fileRules.length === 0 ? 'The file has no cleanupRules.' : 'The file has no complete cleanupRules.'}${broken}`,
+  };
+}

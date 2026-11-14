@@ -2,7 +2,7 @@ import type { BoardKind, CheckMode } from '../../sessions/boardKind';
 import type { Conflict, Session } from '../../sessions/sessionTypes';
 import type { WorkflowGraph } from '../../services/WorkflowService';
 import type { CleanupRule } from '../../templates/TemplateService';
-import { SUBTASK_KEYS_PER_QUERY, buildCleanupQuery, buildSubtaskQueries, cleanupTargets, describeFixVersion, pathProblem } from './cleanupSource';
+import { SUBTASK_KEYS_PER_QUERY, buildCleanupQuery, buildSubtaskQueries, cleanupTargets, describeFixVersion, lookupCleanupRule, pathProblem } from './cleanupSource';
 import { isFinalStatus } from '../../utils/finalStatus';
 
 // The ticket list board: the tickets of a JQL query or a saved filter, with a selection and one
@@ -153,7 +153,7 @@ export interface TicketListDeps {
   /** Moves a ticket; resolves with a note on success, rejects with a short reason. */
   move(key: string, status: string, resolution?: string): Promise<string>;
   setField(key: string, field: string, value: string, operation: FieldOperation): Promise<string>;
-  /** The cleanup rules of `.jira-templates.json` in the workspace. */
+  /** The rules as written in `.jira-templates.json`; the board checks each before running it. */
   cleanupRules(): Promise<CleanupRule[]>;
   /** The workflow of a project's issue type, discovered once when the cache has none. */
   workflowGraph(projectKey: string, issueType: string): Promise<WorkflowGraph | undefined>;
@@ -312,15 +312,11 @@ function sourceTitle(source: ListSource): string {
   return source.type === 'filter' ? `Tickets: filter "${source.name}"` : 'Tickets: JQL search';
 }
 
-function findRule(rules: CleanupRule[], name: string): CleanupRule | undefined {
-  const wanted = name.trim().toLowerCase();
-  return rules.find(rule => rule.name.trim().toLowerCase() === wanted);
-}
-
 /** Reads a cleanup rule's tickets, their open subtasks and whether a path takes each to its target. */
 async function readCleanup(source: Extract<ListSource, { type: 'rule' }>, deps: TicketListDeps, fieldIds: string[]) {
-  const rule = findRule(await deps.cleanupRules(), source.name);
-  if (!rule) throw new Error(`The cleanup rule "${source.name}" is no longer in .jira-templates.json.`);
+  const found = lookupCleanupRule(await deps.cleanupRules(), source.name);
+  if (!found.ok) throw new Error(`The cleanup rule "${source.name}" cannot be read: ${found.reason}`);
+  const rule = found.rule;
   const query = buildCleanupQuery(rule, source.fixVersion);
   const targets = cleanupTargets(rule);
   const { rows: parents, truncated } = await deps.search(query.jql, MAX_LIST_ROWS, fieldIds);
@@ -422,14 +418,9 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     }
     if (!(await deps.jiraConfigured())) return { ok: false, reason: 'Jira is not set up in that window\'s Ticket Sidekick settings.' };
     if (ruleName) {
-      const rules = await deps.cleanupRules();
-      const rule = findRule(rules, ruleName);
-      if (!rule) {
-        const known = rules.map(r => `"${r.name}"`).join(', ');
-        return { ok: false, reason: `no cleanup rule named "${ruleName}" in .jira-templates.json. ${known ? `The rules there are: ${known}.` : 'The file has no cleanupRules.'}` };
-      }
-      const fixVersion = text(v.fixVersion, 200);
-      return { ok: true, recipe: { source: { type: 'rule', name: rule.name, ...(fixVersion ? { fixVersion } : {}) } } };
+      const found = lookupCleanupRule(await deps.cleanupRules(), ruleName, text(v.fixVersion, 200));
+      if (!found.ok) return { ok: false, reason: found.reason };
+      return { ok: true, recipe: { source: { type: 'rule', name: found.rule.name, ...(found.fixVersion ? { fixVersion: found.fixVersion } : {}) } } };
     }
     let proposed: ListChange | undefined;
     if (v.change !== undefined && v.change !== null) {
