@@ -145,6 +145,11 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
       return Object.keys(discovered.graph).length > 0 ? discovered.graph : undefined;
     },
 
+    doneStatuses: async (projectKey, issueType) => {
+      const folder = options.workspaceFolder();
+      return folder ? loadWorkflowCache(folder)[projectKey]?.[issueType]?.doneStatuses : undefined;
+    },
+
     resolutions: () => guarded(async () => {
       const { ticketService } = await jira();
       return (await ticketService.getResolutions()).map(r => r.name);

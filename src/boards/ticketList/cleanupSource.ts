@@ -1,16 +1,10 @@
 import type { CleanupRule } from '../../templates/TemplateService';
 import { findPath, type WorkflowGraph } from '../../services/WorkflowService';
+import { quoteJqlValue } from '../../utils/searchConstraints';
 
 // A cleanup rule from `.jira-templates.json` turned into what the ticket list board shows: the
 // query for the rule's tickets, the query for their open subtasks, and for every ticket the
 // status it moves to and whether a path through the workflow gets it there. No `vscode` here.
-
-/** Statuses that close a ticket, so a resolution is asked for when the rule names none. */
-export const CLOSED_LIKE_STATUSES = new Set(['done', 'resolved', 'closed', "won't fix", 'wont fix', 'rejected', 'cancelled', 'canceled']);
-
-export function isClosedLike(status: string): boolean {
-  return CLOSED_LIKE_STATUSES.has(status.trim().toLowerCase());
-}
 
 /** How a fix version narrows the rule: released or unreleased versions, a `*` pattern, or one version by name. */
 export type FixVersionScope =
@@ -18,10 +12,6 @@ export type FixVersionScope =
   | { kind: 'unreleased' }
   | { kind: 'pattern'; pattern: string }
   | { kind: 'exact'; name: string };
-
-function quoteJql(value: string): string {
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-}
 
 /**
  * The fix version a request gives, as the rule's own fields would: `released` and `unreleased`
@@ -51,8 +41,8 @@ function fixVersionClause(scope: FixVersionScope): string {
   switch (scope.kind) {
     case 'released': return 'fixVersion in releasedVersions()';
     case 'unreleased': return 'fixVersion in unreleasedVersions()';
-    case 'pattern': return `fixVersion ~ ${quoteJql(scope.pattern)}`;
-    case 'exact': return `fixVersion = ${quoteJql(scope.name)}`;
+    case 'pattern': return `fixVersion ~ ${quoteJqlValue(scope.pattern)}`;
+    case 'exact': return `fixVersion = ${quoteJqlValue(scope.name)}`;
   }
 }
 
@@ -81,9 +71,9 @@ export function buildCleanupQuery(rule: CleanupRule, override?: string): Cleanup
   const warnings: string[] = [];
   const fixVersion = (override !== undefined ? parseFixVersionOverride(override) : undefined) ?? ruleFixVersion(rule);
   const parts = [
-    `project = ${quoteJql(rule.project)}`,
-    `issuetype = ${quoteJql(rule.issueType)}`,
-    `status != ${quoteJql(rule.targetState)}`,
+    `project = ${quoteJqlValue(rule.project)}`,
+    `issuetype = ${quoteJqlValue(rule.issueType)}`,
+    `status != ${quoteJqlValue(rule.targetState)}`,
     'resolution is EMPTY',
   ];
   if (fixVersion) parts.push(fixVersionClause(fixVersion));
@@ -101,8 +91,8 @@ export const SUBTASK_KEYS_PER_QUERY = 100;
 export function buildSubtaskQueries(parentKeys: string[], subtaskTargetState: string): string[] {
   const queries: string[] = [];
   for (let i = 0; i < parentKeys.length; i += SUBTASK_KEYS_PER_QUERY) {
-    const keys = parentKeys.slice(i, i + SUBTASK_KEYS_PER_QUERY).map(quoteJql).join(', ');
-    queries.push(`parent in (${keys}) AND status != ${quoteJql(subtaskTargetState)} AND resolution is EMPTY`);
+    const keys = parentKeys.slice(i, i + SUBTASK_KEYS_PER_QUERY).map(quoteJqlValue).join(', ');
+    queries.push(`parent in (${keys}) AND status != ${quoteJqlValue(subtaskTargetState)} AND resolution is EMPTY`);
   }
   return queries;
 }

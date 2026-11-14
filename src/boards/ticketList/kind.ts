@@ -2,7 +2,8 @@ import type { BoardKind, CheckMode } from '../../sessions/boardKind';
 import type { Conflict, Session } from '../../sessions/sessionTypes';
 import type { WorkflowGraph } from '../../services/WorkflowService';
 import type { CleanupRule } from '../../templates/TemplateService';
-import { SUBTASK_KEYS_PER_QUERY, buildCleanupQuery, buildSubtaskQueries, cleanupTargets, describeFixVersion, isClosedLike, pathProblem } from './cleanupSource';
+import { SUBTASK_KEYS_PER_QUERY, buildCleanupQuery, buildSubtaskQueries, cleanupTargets, describeFixVersion, pathProblem } from './cleanupSource';
+import { isFinalStatus } from '../../utils/finalStatus';
 
 // The ticket list board: the tickets of a JQL query or a saved filter, with a selection and one
 // change (a move to a status, or a field value) that is applied to the selected tickets after a
@@ -32,6 +33,8 @@ export interface TicketRow {
   /** On a cleanup: the status this ticket moves to, and the resolution the rule gives it. */
   target?: string;
   resolution?: string;
+  /** On a cleanup: the target is a final status, so a resolution chosen on the board goes with the move. */
+  final?: boolean;
   /** On a cleanup: why this ticket cannot be moved, so it cannot be selected. */
   blocked?: string;
   /** On a cleanup: the parent's open subtasks, moved before it. */
@@ -82,6 +85,8 @@ export interface TicketListData {
 export interface CleanupInfo {
   rule: string;
   targetState: string;
+  /** Moving a ticket to the target closes it (Jira's Done category, or the usual names). */
+  targetFinal: boolean;
   subtaskTargetState?: string;
   /** The rule names no resolution for a status that closes tickets: one is chosen on the board. */
   needsResolution: boolean;
@@ -152,6 +157,8 @@ export interface TicketListDeps {
   cleanupRules(): Promise<CleanupRule[]>;
   /** The workflow of a project's issue type, discovered once when the cache has none. */
   workflowGraph(projectKey: string, issueType: string): Promise<WorkflowGraph | undefined>;
+  /** The statuses Jira puts in the Done category, as the workflow cache keeps them; undefined when not known. */
+  doneStatuses(projectKey: string, issueType: string): Promise<string[] | undefined>;
   /** The resolution names Jira offers. */
   resolutions(): Promise<string[]>;
   now(): number;
@@ -338,13 +345,24 @@ async function readCleanup(source: Extract<ListSource, { type: 'rule' }>, deps: 
     if (!graphs.has(issueType)) graphs.set(issueType, deps.workflowGraph(rule.project, issueType).catch(() => undefined));
     return graphs.get(issueType)!;
   };
+  // Which statuses are final, per issue type, read after the workflow so a discovery has stored them.
+  const finals = new Map<string, Promise<string[] | undefined>>();
+  const finalOf = async (issueType: string, status: string) => {
+    await graphOf(issueType);
+    if (!finals.has(issueType)) finals.set(issueType, deps.doneStatuses(rule.project, issueType).catch(() => undefined));
+    return isFinalStatus(status, await finals.get(issueType));
+  };
 
   const rows: TicketRow[] = [];
   for (const parent of parents) {
     const subtasks: TicketRow[] = [];
     for (const sub of subtasksOf.get(parent.key) ?? []) {
       const blocked = pathProblem(await graphOf(sub.issueType), sub.status, targets.subtaskTargetState);
-      subtasks.push({ ...sub, target: targets.subtaskTargetState, ...(targets.subtaskResolution ? { resolution: targets.subtaskResolution } : {}), ...(blocked ? { blocked } : {}) });
+      const final = await finalOf(sub.issueType, targets.subtaskTargetState);
+      subtasks.push({
+        ...sub, target: targets.subtaskTargetState, final,
+        ...(targets.subtaskResolution ? { resolution: targets.subtaskResolution } : {}), ...(blocked ? { blocked } : {}),
+      });
     }
     const own = pathProblem(await graphOf(parent.issueType), parent.status, targets.targetState);
     const stuck = subtasks.find(sub => sub.blocked);
@@ -352,15 +370,18 @@ async function readCleanup(source: Extract<ListSource, { type: 'rule' }>, deps: 
       ?? (unreadSubtasks.has(parent.key) ? 'more open subtasks than the board can read; narrow the rule\'s query' : undefined)
       ?? (stuck ? `subtask ${stuck.key} cannot be moved: ${stuck.blocked}` : undefined);
     rows.push({
-      ...parent, target: targets.targetState, ...(targets.resolution ? { resolution: targets.resolution } : {}),
+      ...parent, target: targets.targetState, final: await finalOf(parent.issueType, targets.targetState),
+      ...(targets.resolution ? { resolution: targets.resolution } : {}),
       ...(blocked ? { blocked } : {}), ...(rule.closeSubtasks ? { subtasks } : {}),
     });
   }
 
-  const needsResolution = (isClosedLike(targets.targetState) && !targets.resolution)
-    || (rule.closeSubtasks === true && isClosedLike(targets.subtaskTargetState) && !targets.subtaskResolution);
+  // A resolution is asked for only when a listed move closes a ticket and the rule names none for it.
+  const targetFinal = rows.length > 0 ? rows.some(r => r.final) : await finalOf(rule.issueType, targets.targetState);
+  const needsResolution = (!targets.resolution && rows.some(r => r.final))
+    || (!targets.subtaskResolution && rows.some(r => (r.subtasks ?? []).some(sub => sub.final)));
   const cleanup: CleanupInfo = {
-    rule: rule.name, targetState: targets.targetState,
+    rule: rule.name, targetState: targets.targetState, targetFinal,
     ...(rule.closeSubtasks ? { subtaskTargetState: targets.subtaskTargetState } : {}),
     needsResolution, resolutions: needsResolution ? await deps.resolutions() : [],
     ...(describeFixVersion(query.fixVersion) ? { scope: describeFixVersion(query.fixVersion) } : {}),
@@ -539,7 +560,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     if (!change) return { ok: false, reason: 'Choose a change first: a status to move to, or a field and a value.' };
     const rows = selectedRows(session);
     if (rows.length === 0) return { ok: false, reason: isCleanup(session) ? 'Select at least one ticket on this page.' : 'Select at least one ticket.' };
-    const closes = change.type === 'transition' && isClosedLike(change.status);
+    const closes = change.type === 'transition' && isFinalStatus(change.status);
     return {
       ok: true,
       plan: {
@@ -656,7 +677,8 @@ function planCleanup(session: ListSession): ReturnType<NonNullable<typeof ticket
   const rows = selectedRows(session);
   if (rows.length === 0) return { ok: false, reason: 'Select at least one ticket on this page.' };
   const moveOf = (row: TicketRow): MoveTarget => {
-    const resolution = row.resolution ?? chosen;
+    // The board's choice goes only with a move that closes the ticket; a rule's own resolution always goes.
+    const resolution = row.resolution ?? (row.final ? chosen : undefined);
     return { key: row.key, updated: row.updated, status: row.status, target: row.target ?? info.targetState, ...(resolution ? { resolution } : {}) };
   };
   const describe = (move: MoveTarget, prefix = '') => ({
@@ -672,7 +694,7 @@ function planCleanup(session: ListSession): ReturnType<NonNullable<typeof ticket
     plan: {
       title: `Move ${rows.length} ticket(s) to ${info.targetState}${subtaskCount ? `, with ${subtaskCount} subtask(s) first` : ''}`,
       lines: targets.flatMap(t => [...(t.subtasks ?? []).map(sub => describe(sub, `Subtask of ${t.key}: `)), describe(t.move!)]),
-      risky: rows.length + subtaskCount > 1 || isClosedLike(info.targetState),
+      risky: rows.length + subtaskCount > 1 || info.targetFinal,
       payload: { change: null, targets },
     },
   };

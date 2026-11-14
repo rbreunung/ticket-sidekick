@@ -55,7 +55,7 @@ export interface JqlConstraints {
 // (which may originate from an LLM's own inference, not just human-typed chat text) cannot
 // terminate its clause early and inject additional JQL. Backslashes are escaped first so an
 // escaped quote's own backslash isn't re-escaped.
-function quoteJqlValue(value: string): string {
+export function quoteJqlValue(value: string): string {
   const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   return `"${escaped}"`;
 }

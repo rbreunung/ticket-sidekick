@@ -28,7 +28,7 @@ interface Fake extends TicketListDeps {
   discovered: string[];
 }
 
-function fake(options: { rules?: CleanupRule[]; tickets?: TicketRow[]; graph?: WorkflowGraph | undefined; failMove?: string } = {}): Fake {
+function fake(options: { rules?: CleanupRule[]; tickets?: TicketRow[]; graph?: WorkflowGraph | undefined; failMove?: string; done?: string[] } = {}): Fake {
   const tickets = options.tickets ?? [ticket('PROJ-1'), ticket('PROJ-2', 'In Progress')];
   const jira = new Map(tickets.map(t => [t.key, { ...t }]));
   const deps: Fake = {
@@ -53,6 +53,7 @@ function fake(options: { rules?: CleanupRule[]; tickets?: TicketRow[]; graph?: W
     setField: async () => 'set',
     cleanupRules: async () => options.rules ?? [RULE],
     workflowGraph: async (project, issueType) => { deps.discovered.push(`${project}/${issueType}`); return 'graph' in options ? options.graph : GRAPH; },
+    doneStatuses: async () => options.done,
     resolutions: async () => ['Fixed', "Won't Fix"],
     now: () => 1000,
   };
@@ -210,6 +211,24 @@ describe('choosing tickets on a cleanup', () => {
     const { plan } = await apply(s, deps);
     expect(plan.lines).toEqual([{ target: 'PROJ-1', change: 'Status: Open → Done, resolution Fixed' }, { target: 'PROJ-2', change: 'Status: In Progress → Done, resolution Fixed' }]);
     expect(deps.moved).toEqual(['PROJ-1→Done (Fixed)', 'PROJ-2→Done (Fixed)']);
+  });
+
+  it('sends the chosen resolution only with moves to a final status', async () => {
+    const rule: CleanupRule = { ...RULE, closeSubtasks: true, subtaskTargetState: 'Verification' };
+    const graph: WorkflowGraph = { ...GRAPH, Open: [...GRAPH.Open, { id: '7', name: 'Verify', to: 'Verification' }] };
+    const deps = fake({ rules: [rule], graph, tickets: [ticket('PROJ-10'), ticket('PROJ-11', 'Open', { parent: 'PROJ-10' })] });
+    const s = act(await open(deps), { type: 'resolution', resolution: 'Fixed' });
+    await apply(s, deps);
+    expect(deps.moved).toEqual(['PROJ-11→Verification', 'PROJ-10→Done (Fixed)']);
+  });
+
+  it('asks for a resolution for a final status Jira names, even with an unusual name', async () => {
+    const rule: CleanupRule = { ...RULE, targetState: 'Shipped' };
+    const graph: WorkflowGraph = { Open: [{ id: '8', name: 'Ship', to: 'Shipped' }], 'In Progress': [{ id: '9', name: 'Ship', to: 'Shipped' }] };
+    const withCategories = ticketListKind.view(await open(fake({ rules: [rule], graph, done: ['Shipped'] })));
+    expect(withCategories.cleanup).toMatchObject({ needsResolution: true, targetFinal: true });
+    const withoutCategories = ticketListKind.view(await open(fake({ rules: [rule], graph })));
+    expect(withoutCategories.cleanup).toMatchObject({ needsResolution: false, targetFinal: false });
   });
 
   it('can move without a resolution when none is chosen on purpose', async () => {

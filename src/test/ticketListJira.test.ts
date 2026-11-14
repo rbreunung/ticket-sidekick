@@ -218,6 +218,7 @@ describe('the workflow a cleanup board follows', () => {
     const first = await d.workflowGraph('PROJ', 'Bug');
     expect(first && Object.keys(first).length).toBeGreaterThan(0);
     expect(existsSync(join(folder, '.jira-workflow-cache.json'))).toBe(true);
+    expect(await d.doneStatuses('PROJ', 'Bug')).toEqual(['Done']);
     expect(await d.workflowGraph('PROJ', 'Bug')).toEqual(first);
     expect(asked).toBe(1);
   });

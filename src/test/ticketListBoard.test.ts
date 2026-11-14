@@ -40,6 +40,7 @@ function fake(rows: TicketRow[] = [row(1), row(2), row(3, 'Done')]): Fake {
     },
     cleanupRules: async () => [],
     workflowGraph: async () => undefined,
+    doneStatuses: async () => undefined,
     resolutions: async () => [],
     now: () => 1000,
   };
