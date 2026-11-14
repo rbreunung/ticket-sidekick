@@ -10,38 +10,26 @@ Create a `.jira-templates.json` file in your workspace root to define per-applic
 
 ### Generating a template from a ticket
 
-You don't have to hand-write `.jira-templates.json` from scratch — `@jira` can generate a template for you, either grounded in a real ticket's fields or, when there's nothing to copy from, in the target project's own required fields.
-
-**From a reference ticket:**
+You don't have to hand-write `.jira-templates.json` from scratch. In a Copilot chat, type:
 
 ```text
-@jira generate a template from PROJ-123 called "Billing Bug"
+/ts-jira-template PROJ-123 Billing Bug
 ```
 
-`@jira` fetches PROJ-123, proposes only the fields that are template-shaped (priority, labels, components, and similar — never summary, description, status, reporter, or other per-ticket fields), and shows them as an include/exclude review list:
+Without a name, Copilot asks you for one. The `jira_create_template` tool reads PROJ-123 and copies its issue type and the values of its template-shaped fields (priority, labels, components, sprint, team; never summary, description, status, reporter or other per-ticket fields). Fields that are empty on the ticket, or hidden by `ticketSidekick.jira.hiddenDisplayFields`, are left out.
+
+Before anything is saved, VS Code shows a confirmation with the name, the issue type and every field with its value:
 
 ```text
-_Generating from PROJ-123._
-
-| # | Field | Value | Include? |
-| --- | --- | --- | --- |
-| 1 | Priority | High | ✓ |
-| 2 | Labels | billing | ✓ |
-
-Reply post it to save, (c) to cancel, row numbers to toggle in/out (e.g. 2 4), or <number>=<value> to set a value (e.g. 3=High).
+Saved as:   Billing Bug
+Issue type: Bug
+Fields:     priority: High
+            labels: billing
 ```
 
-Reply with row numbers to toggle a field in or out, `<number>=<value>` to fill in a value, or **post it** to save. Once saved, `@jira` offers to create a first ticket from the new template right away.
+That confirmation is the only review: approve it and the template is added to `.jira-templates.json`, with the rest of the file kept as it is. To leave out a field, remove it from the file afterwards. The answer ends with the `/ts-jira-create` command that creates a ticket from the new template.
 
-**With no reference ticket:**
-
-```text
-@jira generate a template for VSJI called "Feature Request"
-```
-
-If the prompt didn't name an issue type, `@jira` first asks you to pick one from VSJI's available types, then builds the review list from that issue type's required fields instead — each starts with no value, filled in the same review step via `<number>=<value>`.
-
-**Name collisions:** if a template with the same name already exists, `@jira` never overwrites it silently — it asks you to reply with a different name, or **yes** to explicitly overwrite the existing one.
+**Name collisions:** an existing template is never replaced. When the name is taken, the new template is saved as `Billing Bug (2)`, `Billing Bug (3)` and so on, and the confirmation names the one used. A `.jira-templates.json` that cannot be read (for example invalid JSON) is never written over.
 
 ### Template examples
 

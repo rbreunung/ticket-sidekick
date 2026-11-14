@@ -29,7 +29,7 @@ import type { CachedTransition, WorkflowGraph } from '../services/WorkflowServic
 import type { CleanupRule } from '../templates/TemplateService';
 import type { Operation, ParsedIntent } from './jira/llmHelpers';
 import { parseIntent, extractFixVersionFromPrompt, generateContent, isLmRefusal, synthesizeComments, generateDescriptionAndCommentsSummary, isPointerPrompt, extractLastAssistantText, mapCommandToOperation } from './jira/llmHelpers';
-import { streamFieldUpdatePreview, continueSetField, handleSetField, handleSpellCheck } from './jira/fieldHandler';
+import { streamFieldUpdatePreview, continueSetField, handleSetField } from './jira/fieldHandler';
 import { getActiveJiraSession, resolveTicketFromBranch, resolveProjectKey, resolveIssueTypeOrPrompt, parseLastTicketFromContext, sessionWasSuperseded } from './jira/ticketContext';
 import { checkConnection } from '../tools/connectionCheck';
 import { gatherFileContent, buildContentContext, streamContentPreview, handleContentSession } from './jira/contentHandler';
@@ -52,16 +52,6 @@ import {
   handleImportWaltzReport, handleWaltzTemplateSelection, handleWaltzReviewReply,
 } from './jira/waltzHandler';
 import type { WaltzTemplateSelectionSession, WaltzReviewSession } from './sessionState';
-import {
-  TEMPLATE_GEN_SESSION_KEYS, TEMPLATE_GEN_KINDS,
-  handleGenerateTemplate, handleAwaitNameReply, handleTypePickReply, handleAwaitFreeTypeReply,
-  handleTemplateGenReviewReply, handleTemplateGenCollisionReply, handleOfferCreateReply, handleAwaitSummaryReply,
-} from './jira/templateGenerationHandler';
-import type {
-  TemplateGenerationAwaitNameSession, TemplateGenerationTypePickSession, TemplateGenerationAwaitFreeTypeSession,
-  TemplateGenerationReviewSession, TemplateGenerationCollisionSession,
-  TemplateGenerationOfferCreateSession, TemplateGenerationAwaitSummarySession,
-} from './sessionState';
 import { AWAIT_ISSUE_TYPE_SESSION_KEY, STALE_RESOLUTION_SESSION_KEY } from './jira/ticketContext';
 import {
   parseAwaitFreeTextReply, type AwaitIssueTypeSession, buildChatCommandLink, neutralizeMarkdownLinks, withLastTicket,
@@ -1527,66 +1517,6 @@ export function createJiraParticipant(
       }
     }
 
-    // Template generation — chat-ask for the template name (R2, no showInputBox)
-    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.awaitName)) {
-      const session = ws.get<TemplateGenerationAwaitNameSession>(TEMPLATE_GEN_SESSION_KEYS.awaitName);
-      if (session) {
-        const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-        return await handleAwaitNameReply(request.prompt, session, ticketService, templateGenWorkspaceRoot, config.hiddenDisplayFields, stream, ws);
-      }
-    }
-
-    // Template generation — issue-type pick list (no-reference path, no type named)
-    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.typePick)) {
-      const session = ws.get<TemplateGenerationTypePickSession>(TEMPLATE_GEN_SESSION_KEYS.typePick);
-      if (session) {
-        return await handleTypePickReply(request.prompt, session, ticketService, stream, ws);
-      }
-    }
-
-    // Template generation — chat-ask for a free-text issue type when the list couldn't be
-    // fetched (R3, no showInputBox)
-    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.awaitFreeType)) {
-      const session = ws.get<TemplateGenerationAwaitFreeTypeSession>(TEMPLATE_GEN_SESSION_KEYS.awaitFreeType);
-      if (session) {
-        return await handleAwaitFreeTypeReply(request.prompt, session, ticketService, stream, ws);
-      }
-    }
-
-    // Template generation — review list (toggle / setValue / confirm)
-    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.review)) {
-      const session = ws.get<TemplateGenerationReviewSession>(TEMPLATE_GEN_SESSION_KEYS.review);
-      if (session) {
-        const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-        return await handleTemplateGenReviewReply(request.prompt, session, templateGenWorkspaceRoot, stream, ws);
-      }
-    }
-
-    // Template generation — name-collision handling
-    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.collision)) {
-      const session = ws.get<TemplateGenerationCollisionSession>(TEMPLATE_GEN_SESSION_KEYS.collision);
-      if (session) {
-        const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-        return await handleTemplateGenCollisionReply(request.prompt, session, templateGenWorkspaceRoot, stream, ws);
-      }
-    }
-
-    // Template generation — offer to create a first ticket from the saved template
-    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.offerCreate)) {
-      const session = ws.get<TemplateGenerationOfferCreateSession>(TEMPLATE_GEN_SESSION_KEYS.offerCreate);
-      if (session) {
-        return await handleOfferCreateReply(request.prompt, session, ticketService, stream, ws, config.baseUrl);
-      }
-    }
-
-    // Template generation — awaiting the summary for the first ticket
-    if (getActiveJiraSession(chatContext)?.kinds.includes(TEMPLATE_GEN_KINDS.awaitSummary)) {
-      const session = ws.get<TemplateGenerationAwaitSummarySession>(TEMPLATE_GEN_SESSION_KEYS.awaitSummary);
-      if (session) {
-        return await handleAwaitSummaryReply(request.prompt, session, ticketService, stream, ws, config.baseUrl);
-      }
-    }
-
     // Comment list — user replied with a comment number to view in full. Fully self-contained
     // in JiraParticipant.ts — metadata-based (R1/R3).
     if (getActiveJiraSession(chatContext)?.kinds.includes('comment-list')) {
@@ -1732,23 +1662,6 @@ export function createJiraParticipant(
 
     if (intent.operation === 'importWaltzReport') {
       return await handleImportWaltzReport(request, stream, token, jiraClient, ticketService, ws, intent.projectKey);
-    }
-
-    if (intent.operation === 'generateTemplate') {
-      const templateGenWorkspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-      try {
-        return await handleGenerateTemplate(stream, ws, ticketService, templateGenWorkspaceRoot, config.hiddenDisplayFields, {
-          templateName: intent.templateName,
-          sourceTicketKey: intent.ticketKey,
-          projectKeyHint: intent.projectKey,
-          issueTypeHint: intent.issueType,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        logDiag('jira.participant', 'error', message, {});
-        stream.markdown(message);
-      }
-      return;
     }
 
     if (intent.operation === 'listMyFilters') {
@@ -2217,13 +2130,6 @@ export function createJiraParticipant(
         case 'validateFields':
           result = await ticketService.validateRequiredFields(ticketKey!, config.requiredFields);
           break;
-        case 'spellCheck': {
-          if (!ticketKey) {
-            stream.markdown('No ticket key found. Please specify a ticket, e.g. `@jira spell check PROJ-123`.');
-            return;
-          }
-          return await handleSpellCheck(ticketKey, ticketService, request.model, stream, token, ws);
-        }
         default: {
           // R8: replaces the bare "Unrecognised operation." message — an example-driven
           // response mirroring @bitbucket's existing no-PR-URL guidance, with the examples

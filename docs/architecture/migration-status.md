@@ -1,6 +1,6 @@
 # Migration status: from chat participants to tools and boards
 
-Last updated: 2026-11-13.
+Last updated: 2026-11-14.
 
 This page says where the migration stands and what is still open. It is the working list; the other documents hold the detail:
 
@@ -24,9 +24,10 @@ Update this page in every change that closes or adds an open point.
 
 | Area | State |
 | --- | --- |
-| Single-ticket Jira work | 14 tools: check connection, view, find, list filters, workflow, list templates, list fields, check required fields, load, move, create, comment, update any field (set, add, remove), upload |
+| Single-ticket Jira work | 16 tools: check connection, view, find, list filters, workflow, list templates, list fields, check required fields, load, move, create, comment, update any field (set, add, remove), upload, correct a description, create a template from a ticket |
 | Opening boards | `jira_open_board` tool, three Command Palette commands, `/ts-jira search`, `security-report`, `sessions` |
-| Skills | `/ts-jira` (typed commands), `/ts-jira-create`, `/ts-jira-brief` |
+| Skills | `/ts-jira` (typed commands), `/ts-jira-create`, `/ts-jira-brief`, `/ts-jira-spell-check`, `/ts-jira-template` |
+| Removed `@jira` flows | Spell check and template generation (replaced by `/ts-jira-spell-check` and `/ts-jira-template`) |
 | Session model | Sessions stored per workspace, shown from cache and checked in the background, conflicts, single-use write plans, native confirmation for risky writes, expiry and a clear command |
 | Boards | Security report (filters, sort, CSV and Excel export), ticket list (search, bulk move, bulk field update), stored sessions |
 | Documentation | README, manual, `CLAUDE.md`, glossary, architecture page and plan describe tools and boards as current and the participants as deprecated |
@@ -41,8 +42,6 @@ Ordered as the plan orders its steps. "Blocks removal of" names the participant 
 | --- | --- | --- | --- |
 | O1 | Cleanup on the ticket list board: load the board from the `cleanupRules` of `.jira-templates.json`, with the rules' extra fields | R9 | `@jira cleanup` |
 | O2 | Ticket list board parity: columns from `ticketSidekick.jira.searchFields`; narrowing by fix version, sprint, assignee and team JQL; more than 300 tickets; add or remove single values of a list field; resolving a conflict side by side instead of only dropping it | R7, R8, KL25 | `@jira search`, bulk transition, bulk field update |
-| O3 | `/ts-jira spell-check KEY` | R28 | `@jira spell check` |
-| O4 | `/ts-jira template KEY` (template entry from a ticket's fields) | R29 | `@jira` template generation |
 | O5 | Remove every `@jira` flow that has a replacement, each only once its row in the plan's Replacement Map is in place: create, view, summarize, show fields, check required fields, comment, field, move, load, upload, workflow, check, search, filters, `/security-report`, and the description and comment preview (dropped by R30) | R33 | — |
 | O6 | Written manual checklist for step 1, run on the managed machine before the normal release | R35 | — |
 

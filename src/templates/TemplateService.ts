@@ -40,23 +40,19 @@ export class TemplateService {
    * Saves a new template into .jira-templates.json, mirroring
    * WorkflowService.ts's writeFileSync/JSON.stringify(..., null, 2) pattern.
    *
-   * Never silently overwrites an existing template with the same name: if one
-   * is found, returns a 'collision' result instead of writing, unless the
-   * caller passes { overwrite: true } (used once the user explicitly confirms).
+   * Never overwrites an existing template with the same name: if one is found,
+   * returns a 'collision' result instead of writing.
    */
-  saveTemplate(template: JiraTemplate, options?: { overwrite?: boolean }): SaveTemplateResult {
+  saveTemplate(template: JiraTemplate): SaveTemplateResult {
     const filePath = join(this.workspaceRoot, '.jira-templates.json');
     const { templates, cleanupRules } = this.loadTemplates();
 
     const existingIndex = templates.findIndex((t) => t.name === template.name);
-    if (existingIndex !== -1 && !options?.overwrite) {
+    if (existingIndex !== -1) {
       return { status: 'collision', existing: templates[existingIndex] };
     }
 
-    const nextTemplates =
-      existingIndex !== -1
-        ? templates.map((t, i) => (i === existingIndex ? template : t))
-        : [...templates, template];
+    const nextTemplates = [...templates, template];
 
     try {
       writeFileSync(filePath, JSON.stringify({ templates: nextTemplates, cleanupRules }, null, 2), 'utf-8');

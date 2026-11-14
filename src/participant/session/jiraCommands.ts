@@ -52,10 +52,6 @@ export const JIRA_COMMAND_ENTRIES: readonly JiraCommandEntry[] = [
     id: 'upload', group: 'Tickets', covers: ['uploadAttachment'],
     help: '`upload the report to PROJ-123` attaches local files to a ticket after a confirmation.',
   },
-  {
-    id: 'spell-check', group: 'Tickets', covers: ['spellCheck'],
-    help: '`spell check PROJ-123` proofreads the description and shows the corrections before saving.',
-  },
 
   // --- Bulk work and setup ---
   {
@@ -65,10 +61,6 @@ export const JIRA_COMMAND_ENTRIES: readonly JiraCommandEntry[] = [
   {
     id: 'workflow', group: 'Bulk work and setup', covers: ['discoverWorkflow'],
     help: '`discover workflow for PROJ Bug` maps the status transitions for a project and issue type.',
-  },
-  {
-    id: 'template', group: 'Bulk work and setup', covers: ['generateTemplate'],
-    help: '`generate a template from PROJ-123 called "Billing Bug"` saves a reusable ticket template after you review it.',
   },
   {
     id: 'check', group: 'Bulk work and setup', covers: ['/check'],

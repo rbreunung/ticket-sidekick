@@ -132,24 +132,6 @@ describe('saveTemplate', () => {
     expect(written.templates).toEqual([existingTemplate]);
   });
 
-  it('overwrites the existing template when overwrite is explicitly confirmed', () => {
-    workspaceRoot = mkdtempSync(join(tmpdir(), 'ts-template-'));
-    const filePath = join(workspaceRoot, '.jira-templates.json');
-    const existingTemplate: JiraTemplate = {
-      name: 'New Template',
-      issueType: 'Bug',
-      defaultFields: { priority: 'High' },
-    };
-    writeFileSync(filePath, JSON.stringify({ templates: [existingTemplate], cleanupRules: [] }, null, 2), 'utf-8');
-    const service = new TemplateService(workspaceRoot);
-
-    const result = service.saveTemplate(NEW_TEMPLATE, { overwrite: true });
-
-    expect(result).toEqual({ status: 'saved', template: NEW_TEMPLATE });
-    const written = JSON.parse(readFileSync(filePath, 'utf-8'));
-    expect(written.templates).toEqual([NEW_TEMPLATE]);
-  });
-
   it('round-trips through loadTemplates after a save', () => {
     workspaceRoot = mkdtempSync(join(tmpdir(), 'ts-template-'));
     const service = new TemplateService(workspaceRoot);

@@ -125,7 +125,7 @@ describe('Jira tool catalog', () => {
   it('marks every tool that writes to Jira as destructive and never as read-only, so the harness always asks first', () => {
     const writes = JIRA_TOOLS.filter(t => !t.annotations.readOnlyHint && t.name !== LOAD_TICKET_TOOL);
     expect(writes.map(t => t.name).sort()).toEqual(
-      ['jira_add_comment', 'jira_create_ticket', 'jira_move_ticket', 'jira_update_field', 'jira_upload_attachment'],
+      ['jira_add_comment', 'jira_correct_description', 'jira_create_template', 'jira_create_ticket', 'jira_move_ticket', 'jira_update_field', 'jira_upload_attachment'],
     );
     for (const tool of writes) expect(tool.annotations, tool.name).toEqual({ destructiveHint: true });
   });

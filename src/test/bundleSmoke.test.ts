@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { JIRA_TOOLS } from '../tools/jiraTools/catalog';
 
 // Loads the *bundled* extension (out/extension.js, what the .vsix ships) with a stubbed `vscode`
 // and runs activate(). Unit tests import the TypeScript sources, so a dependency that breaks only
@@ -149,7 +150,7 @@ describe('bundled extension (out/extension.js)', () => {
   });
 
   it('registers every Jira tool with VS Code, with no local server and no MCP provider', () => {
-    expect(registered.tools.filter(name => name.startsWith('jira_'))).toHaveLength(15);
+    expect(registered.tools.filter(name => name.startsWith('jira_'))).toHaveLength(JIRA_TOOLS.length);
     expect((manifest.contributes as { mcpServerDefinitionProviders?: unknown }).mcpServerDefinitionProviders).toBeUndefined();
     expect((manifest.contributes as { chatPlugins?: unknown }).chatPlugins).toBeUndefined();
   });

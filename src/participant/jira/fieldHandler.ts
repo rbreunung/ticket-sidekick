@@ -1,12 +1,9 @@
 import * as vscode from 'vscode';
 import { logDiag } from '../../utils/diagLog';
-import { TicketService, resolveFieldIdFuzzy, extractTextFromAdf } from '../../services/TicketService';
+import { TicketService, resolveFieldIdFuzzy } from '../../services/TicketService';
 import type { JiraFieldMeta } from '../../jira/IJiraClient';
-import type { FieldUpdatePreviewSession, FieldSelectionSession, SprintSelectionSession, ContentSession, JiraSessionContinuity } from '../sessionState';
-import { isCancellation, buildChatCommandLink, withLastTicket } from '../sessionState';
-import { spellCheckValue } from './llmHelpers';
-import { streamContentPreview } from './contentHandler';
-import { wikiToMarkdown } from '../../utils/markdownFormatter';
+import type { FieldUpdatePreviewSession, FieldSelectionSession, SprintSelectionSession } from '../sessionState';
+import { isCancellation, buildChatCommandLink } from '../sessionState';
 import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 
 export async function streamFieldUpdatePreview(
@@ -143,43 +140,4 @@ export async function handleSetField(
     ticketKeys, resolution.field, fieldValueRaw, arrayOp,
     ticketService, stream, ws, model, token,
   );
-}
-
-export async function handleSpellCheck(
-  ticketKey: string,
-  ticketService: TicketService,
-  model: vscode.LanguageModelChat,
-  stream: vscode.ChatResponseStream,
-  token: vscode.CancellationToken,
-  ws: vscode.Memento,
-): Promise<vscode.ChatResult | void> {
-  const issue = await ticketService.getIssue(ticketKey);
-  const rawDescription = extractTextFromAdf(issue.fields.description);
-  if (!rawDescription.trim()) {
-    stream.markdown(`**${ticketKey}** has no description to check.`);
-    // R13: the response names the ticket, so carry it on metadata for bare follow-ups.
-    return withLastTicket(ticketKey);
-  }
-  const markdownDescription = wikiToMarkdown(rawDescription);
-  const result = await spellCheckValue(markdownDescription, model, token);
-  if (!result) {
-    stream.markdown(`No spelling or grammar issues found in **${ticketKey}**.`);
-    // R13: same — a completed no-op still references the ticket.
-    return withLastTicket(ticketKey);
-  }
-  if (result.changeSummary) {
-    stream.markdown(`**Changes:**\n${result.changeSummary}\n\n`);
-  }
-  const session: ContentSession = {
-    ticketKey,
-    operation: 'updateDescription',
-    currentContent: result.correctedText,
-    historyContext: undefined,
-    contentSource: 'generate',
-  };
-  const chatResult = await streamContentPreview(session, stream, ws);
-  // R13: carry the referenced ticket key on metadata instead of a visible marker. Merge into the
-  // preview session's existing metadata (which carries the 'previewing' kind) so both survive.
-  const prevSession = (chatResult?.metadata as { jiraSession?: JiraSessionContinuity } | undefined)?.jiraSession;
-  return withLastTicket(ticketKey, prevSession?.kinds ?? []);
 }

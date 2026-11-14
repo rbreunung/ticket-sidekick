@@ -20,7 +20,7 @@ This is the current way to use Ticket Sidekick. Set up the Jira connection first
 
 In a Copilot chat in **Agent** mode, ask in your own words ("show me PROJ-123", "add a comment to PROJ-123 saying the fix is deployed") and Copilot calls Ticket Sidekick's Jira tools. They view, find, load, move, create, comment on and update Jira tickets, upload attachments, list filters, fields, workflows and templates, and check the connection. A tool that changes something asks first and shows exactly what it will write.
 
-Three skills sit on top of the tools: `/ts-jira <command>` runs one Jira command you type, e.g. `/ts-jira load PROJ-123` (`/ts-jira help` lists them), `/ts-jira-brief` writes a developer brief of a ticket, and `/ts-jira-create` creates a ticket with you, from a template where one fits.
+Five skills sit on top of the tools: `/ts-jira <command>` runs one Jira command you type, e.g. `/ts-jira load PROJ-123` (`/ts-jira help` lists them), `/ts-jira-brief` writes a developer brief of a ticket, `/ts-jira-create` creates a ticket with you, from a template where one fits, `/ts-jira-spell-check` corrects the spelling of a ticket's description, and `/ts-jira-template` saves a new template built from a ticket.
 
 See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool and its inputs, the skills, approvals, troubleshooting and a checklist to try it out. The Bitbucket tools (`bitbucket_*`) are listed in [Agent Mode Tools](docs/manual/agent-mode-tools.md).
 
@@ -110,7 +110,6 @@ Open GitHub Copilot Chat and use `@jira`:
 | `@jira check` | Validates the base URL, tests the connection, and shows active configuration |
 | `@jira create from email` | Create a Jira ticket from an imported `.eml` file |
 | `@jira import veracode report` | Create Jira tickets from a Veracode Detailed Report XML export |
-| `@jira generate a template from PROJ-123 called "Billing Bug"` | Generate a reusable `.jira-templates.json` template from a reference ticket's fields — reviewed and confirmed before saving |
 | `@jira upload the report to PROJ-123` | Attach one or more local files to a ticket — shows a confirmation before uploading |
 
 **Slash commands** — typing `@jira /` in Copilot Chat lists shortcuts for the most common operations. Each one is the same as writing the request in your own words (`@jira /view PROJ-123` does what `@jira view PROJ-123` does):
@@ -270,7 +269,7 @@ You can include these directly in the create prompt and the plugin will extract 
 
 **Scope:** if your last search returned multiple tickets, the plugin asks whether to apply to the current ticket or all N results from the search.
 
-**Spell check on demand:** run `@jira spell check PROJ-123` to check and correct spelling and grammar on a ticket's description. The corrected version is shown as a preview before applying.
+**Spell check:** in a Copilot chat, `/ts-jira-spell-check PROJ-123` lists spelling and grammar corrections for a ticket's description and writes only the ones you approve; see [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md).
 
 ### Content generation and preview
 

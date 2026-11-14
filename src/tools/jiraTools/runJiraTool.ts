@@ -85,6 +85,22 @@ export function withRequestTimeouts(client: IJiraClient, requestTimeoutMs: numbe
  * `Could not read PROJ-123`); pass a function when the work itself decides what it names.
  * A `ToolFailure` the work throws is passed on as it is.
  */
+/**
+ * The ticket service a tool's confirmation preview reads Jira with: the same time limits as the
+ * tool itself, so an unreachable Jira ends the preview instead of holding the confirmation back.
+ * Null while Jira is not configured.
+ */
+export async function previewTicketService(deps: JiraToolDeps): Promise<{ ticketService: TicketService; config: ConfiguredJiraConfig } | null> {
+  const access = await deps.getJira();
+  if (!access.configured) return null;
+  const client = withRequestTimeouts(
+    access.client,
+    deps.jiraTimeoutMs ?? JIRA_REQUEST_TIMEOUT_MS,
+    deps.jiraDownloadTimeoutMs ?? JIRA_DOWNLOAD_TIMEOUT_MS,
+  );
+  return { ticketService: new TicketService(client, deps.onDiag), config: access.config };
+}
+
 export async function runJiraTool(
   deps: JiraToolDeps,
   tool: string,

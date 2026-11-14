@@ -94,37 +94,11 @@ export class PartialTransitionError extends Error {
   }
 }
 
-/** One field proposed for a generated template's review list. `value` is a literal snapshot
- * taken from a reference ticket; it's absent for a no-reference candidate pulled from
- * required-fields create-metadata, where the review step fills the value in later. */
+/** One field of a reference ticket that a new template copies, with its value as Jira gave it. */
 export interface TemplateFieldCandidate {
   id: string;
   name: string;
   value?: unknown;
-  /** The field's Jira schema, when known — lets a hand-typed replacement value (from the
-   * template-generation review list) be coerced into a Jira-writable shape instead of saved as a
-   * bare string. Absent only when the candidate came from a source with no schema to offer. */
-  schema?: JiraFieldMeta['schema'];
-}
-
-/**
- * Coerces a hand-typed review-list value (always a plain string) into the shape Jira's
- * create-issue API expects for the given field schema, so a value typed for a required field
- * with nothing to copy (no reference ticket) is writable rather than saved as a raw string that
- * Jira would reject. Array-of-string schemas (labels) become a one-element array; array-of-object
- * schemas (components, versions, custom multiselects) become a one-element array of `{ name }`;
- * other named-object schemas (priority, status, …) become `{ name }`; plain string/number schemas
- * pass through unchanged. A value copied from a reference ticket already has its real shape and
- * is never passed through this — only a fresh hand-typed string needs coercing.
- */
-export function coerceTypedFieldValue(rawInput: string, schema?: JiraFieldMeta['schema']): unknown {
-  if (!schema) return rawInput;
-  if (schema.type === 'array') {
-    const parts = rawInput.split(',').map(s => s.trim()).filter(Boolean);
-    return schema.items === 'string' ? parts : parts.map(name => ({ name }));
-  }
-  if (schema.type === 'string' || schema.type === 'number') return rawInput;
-  return { name: rawInput };
 }
 
 export function resolveFieldIdFuzzy(input: string, fields: JiraFieldMeta[]): FieldResolutionResult {
@@ -1207,8 +1181,10 @@ export class TicketService {
     issueKey: string,
     fieldMeta?: JiraFieldMeta[],
     hiddenIds?: Set<string>,
+    /** The ticket when the caller already fetched it, so it is not fetched again. */
+    fetched?: JiraIssue,
   ): Promise<TemplateFieldCandidate[]> {
-    const issue = await this.client.getIssue(issueKey);
+    const issue = fetched ?? await this.client.getIssue(issueKey);
     const meta = fieldMeta ?? await this.client.getFields();
     const metaById = new Map(meta.map(m => [m.id, m]));
     const hidden = hiddenIds ?? new Set<string>();
@@ -1226,29 +1202,14 @@ export class TicketService {
       if (fm.schema.custom?.includes('gh-sprint')) {
         const id = extractSprintIdCandidate(rawValue);
         if (id === null) continue; // unparseable — never write an unverified value
-        candidates.push({ id: fieldId, name: fm.name, value: { id }, schema: fm.schema });
+        candidates.push({ id: fieldId, name: fm.name, value: { id } });
         continue;
       }
 
-      candidates.push({ id: fieldId, name: fm.name, value: rawValue, schema: fm.schema });
+      candidates.push({ id: fieldId, name: fm.name, value: rawValue });
     }
 
     return candidates;
-  }
-
-  /**
-   * Template generation, no-reference path. `issueType` is an already-resolved input —
-   * this method never prompts or guesses one itself (that belongs to the vscode-coupled chat
-   * handler). Candidates come from Jira's own required-fields create-metadata, each with no
-   * value; the review step fills values in later.
-   */
-  async getTemplateCandidatesFromRequiredFields(
-    projectKey: string,
-    issueType: string,
-    issueTypeId?: string,
-  ): Promise<TemplateFieldCandidate[]> {
-    const required = await this.client.getRequiredFields(projectKey, issueType, issueTypeId);
-    return required.map(f => ({ id: f.id, name: f.name, schema: f.schema }));
   }
 
   async createTicket(

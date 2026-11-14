@@ -169,6 +169,12 @@ export function parseConstraintMatchSelection(
  * literal elsewhere in the JQL (e.g. `summary ~ "project = FOO"`) would be a false positive, but
  * that shape is vanishingly unlikely in a real saved filter and not worth a full JQL grammar here.
  */
+/** The project key of a ticket key (`PROJ-123` -> `PROJ`), or null for anything that is not one. */
+export function extractProjectKeyFromTicketKey(ticketKey: string): string | null {
+  const match = ticketKey.trim().match(/^([A-Z][A-Z0-9]+)-\d+$/);
+  return match ? match[1] : null;
+}
+
 export function extractProjectKeyFromJql(jql: string): string | null {
   if (/\bproject\s+in\s*\(/i.test(jql)) return null;
   const match = jql.match(/\bproject\s*=\s*"?([A-Za-z][A-Za-z0-9]*)"?/i);

@@ -434,6 +434,35 @@
         }
       },
       {
+        "name": "jira_create_template",
+        "displayName": "Create a ticket template from a Jira ticket",
+        "modelDescription": "Saves a new ticket template to the workspace's .jira-templates.json, built from one reference ticket: its issue type and the values of its template fields (priority, labels, components, sprint, team). Fields that are empty on the ticket are left out. When a template with that name exists, the new one is saved as \"<name> (2)\", \"<name> (3)\" and so on; no template is replaced. Ask the user for the name before calling. The same template within a minute is skipped.",
+        "userDescription": "Saves a new ticket template to the workspace's .jira-templates.json, built from one reference ticket.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraCreateTemplate",
+        "icon": "$(edit)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "The reference ticket, e.g. PROJ-123. Its issue type and its template fields (priority, labels, components, sprint, team) are copied."
+            },
+            "name": {
+              "type": "string",
+              "description": "The name of the new template, as the user gave it."
+            }
+          },
+          "required": [
+            "ticketKey",
+            "name"
+          ]
+        }
+      },
+      {
         "name": "jira_load_ticket",
         "displayName": "Load a Jira ticket into the workspace",
         "modelDescription": "Use when the user asks to load or download a ticket, e.g. \"load PROJ-123\". Downloads one Jira ticket into `.jira-context/<KEY>/` in the first workspace folder, so its content can be read as local files: `ticket.md` (fields, description, web links, attachment list), `comments.md` (all comments) and, in `attachments/`, the text, image, document and archive attachments. Binary attachments of other types are skipped unless named in attachments; files over 100 MB are always skipped. The answer lists every file written by its absolute path and every skipped attachment with its size and the reason. Without ticketKey, uses the ticket key in the current git branch of the first workspace folder and says which folder and branch it used. Changes nothing in Jira; it only writes local files, overwriting an earlier load.",
@@ -608,6 +637,54 @@
         }
       },
       {
+        "name": "jira_correct_description",
+        "displayName": "Correct the description of a Jira ticket",
+        "modelDescription": "Applies spelling and grammar corrections the user approved to one ticket's description, and changes nothing else: formatting, tables, code, links and mentions stay exactly as they are. Read the ticket with jira_view_ticket first and show the user the numbered corrections before calling this. Each correction must match exactly once and must not be inside code, monospace, a link target or a web address; if any correction does not fit, nothing is written and the answer names each one that did not fit. The same corrections to the same ticket within a minute are skipped.",
+        "userDescription": "Applies spelling and grammar corrections the user approved to one ticket's description, and changes nothing else.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "jiraCorrectDescription",
+        "icon": "$(edit)",
+        "tags": [
+          "jira"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "ticketKey": {
+              "type": "string",
+              "description": "The ticket key, e.g. PROJ-123."
+            },
+            "corrections": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "before": {
+                    "type": "string",
+                    "description": "The text to replace: the shortest plain-text fragment that is unique in the description, e.g. the misspelled word and the word next to it. Never across bold, italic or other formatting."
+                  },
+                  "after": {
+                    "type": "string",
+                    "description": "The corrected text."
+                  }
+                },
+                "required": [
+                  "before",
+                  "after"
+                ],
+                "additionalProperties": false
+              },
+              "description": "The corrections the user approved, in the order they were shown."
+            }
+          },
+          "required": [
+            "ticketKey",
+            "corrections"
+          ]
+        }
+      },
+      {
         "name": "jira_upload_attachment",
         "displayName": "Upload a file to a Jira ticket",
         "modelDescription": "Attaches one file from an open workspace folder to a Jira ticket. Files outside the workspace folders, in a dotfile or dotfolder (after following symlinks) or over 25 MB are refused. The same file uploaded to the same ticket within a minute is skipped.",
@@ -770,6 +847,12 @@
       },
       {
         "path": "./skills/ts-jira-create/SKILL.md"
+      },
+      {
+        "path": "./skills/ts-jira-spell-check/SKILL.md"
+      },
+      {
+        "path": "./skills/ts-jira-template/SKILL.md"
       },
       {
         "path": "./skills/ts-jira/SKILL.md"
@@ -1186,7 +1269,7 @@
           {
             "id": "jiraFirstTicket",
             "title": "Create your first ticket",
-            "description": "Generate a template from real project data, then create a ticket from it — or create one directly.\n[Ask @jira](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20generate%20a%20template%22%7D%5D)\n[Or create directly](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20create%20%3CTYPE%3E%20in%20%3CPROJECT%3E%3A%20%3CSUMMARY%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
+            "description": "Turn an example ticket into a template, then create a ticket from it — or create one directly.\n[Create a template](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%2Fts-jira-template%20%3CKEY%3E%20%3CNAME%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)\n[Or create directly](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20create%20%3CTYPE%3E%20in%20%3CPROJECT%3E%3A%20%3CSUMMARY%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
             "media": {
               "markdown": "walkthroughs/jira/first-ticket.md"
             },

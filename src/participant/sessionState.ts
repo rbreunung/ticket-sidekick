@@ -19,7 +19,6 @@ export * from './session/importScreens';
 export * from './session/importReplies';
 export * from './session/importSearch';
 export * from './session/staleTargets';
-export * from './session/templateGeneration';
 export * from './session/upload';
 export * from './session/toolMessages';
 export * from './session/followups';

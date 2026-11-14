@@ -265,7 +265,7 @@ setting/command it describes.
 | 2 | `jiraCredentials` | A Data Center PAT or Cloud email+API token, via `ticket-sidekick.setDataCenterToken` / `ticket-sidekick.configureCloud` | `onContext:ticketSidekick.jiraCredentialsSet` (U1's context key, kept in sync in `extension.ts`) |
 | 3 | `jiraDefaultProject` | `ticketSidekick.jira.defaultProject` setting | `onSettingChanged:ticketSidekick.jira.defaultProject` |
 | 4 | `jiraWorkflow` | Running `@jira discover workflow <PROJ> <IssueType>` | `onContext:ticketSidekick.workflowViewed` — set in `handleDiscoverWorkflow` (`workflowHandler.ts`) right after the workflow graph is actually cached, not on an attempted-but-empty sample |
-| 5 | `jiraFirstTicket` | Generating a template (`@jira generate a template`) and creating a ticket from it, or `@jira create` directly | `onContext:ticketSidekick.firstTicketCreated` — set at every real `ticketService.createTicket()` success point reachable from chat: `contentHandler.ts`'s `createTicket`-operation branch (backs the `createHandler.ts` flow) and `templateGenerationHandler.ts`'s `createFirstTicket()` |
+| 5 | `jiraFirstTicket` | Creating a template from a ticket (`/ts-jira-template`) and a ticket from it, or `@jira create` directly | `onContext:ticketSidekick.firstTicketCreated` — set at every real `ticketService.createTicket()` success point reachable from chat: `contentHandler.ts`'s `createTicket`-operation branch (backs the `createHandler.ts` flow) |
 | 6 | `jiraCopilotTools` | The Jira tools, `/ts-jira help` and the boards; says that `@jira` and `@bitbucket` are deprecated | `onCommand:ticket-sidekick.boards.sessions` |
 
 **First-touch auto-open (KTD11).** `extension.ts`'s `activate()` opens this
