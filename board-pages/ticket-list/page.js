@@ -130,8 +130,9 @@ function ticketRow(view, board, row, locked, subtask) {
     h('td', { class: row.blocked || (row.result && row.result.outcome !== 'done') ? 'flag-overdue' : undefined }, note));
 }
 
-function render(view, board, busy) {
-  const locked = busy || Boolean(view.outOfDate);
+function render(view, board, busy, state) {
+  // An out-of-date board, or one whose last check failed, offers paging and Refresh only.
+  const locked = busy || Boolean(view.outOfDate) || Boolean(state?.writesBlocked);
   const table = h('table', { 'aria-label': 'Tickets' },
     h('thead', {}, h('tr', {},
       h('th', { scope: 'col' }, 'Select'),

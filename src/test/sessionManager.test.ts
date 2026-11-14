@@ -298,6 +298,25 @@ describe('writing from a board', () => {
     await expect(m.apply('demo', state.id, preview.planId)).rejects.toMatchObject({ status: 409 });
   });
 
+  it('applies nothing while the last check failed, and again once a check passes', async () => {
+    const m = manager();
+    const state = await selected(m, ['PROJ-1']);
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    source.failRead = true;
+    const failed = await m.refresh('demo', state.id);
+    expect(failed.writesBlocked).toBe(true);
+    await expect(m.apply('demo', state.id, preview.planId)).rejects.toMatchObject({ status: 409, message: expect.stringContaining('once a check passes') });
+    await expect(m.preview('demo', state.id, failed.revision, { type: 'close' })).rejects.toMatchObject({ status: 409 });
+    expect(source.tickets['PROJ-1']).toBe('Open');
+
+    source.failRead = false;
+    const passed = await m.refresh('demo', state.id);
+    expect(passed.writesBlocked).toBe(false);
+    const again = await m.preview('demo', state.id, passed.revision, { type: 'close' });
+    await m.apply('demo', state.id, again.planId);
+    expect(source.tickets['PROJ-1']).toBe('Closed');
+  });
+
   it('refuses a target that changed in Jira since the board read it, and writes the others', async () => {
     const m = manager();
     const state = await selected(m, ['PROJ-1', 'PROJ-2']);
