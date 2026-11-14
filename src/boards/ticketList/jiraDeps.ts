@@ -128,10 +128,10 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
     }),
 
     // The same update the field tool makes: any field by name or id, a sprint by its name, a list
-    // field from comma-separated values. The board sets the whole value; it does not add or remove.
-    setField: (key, field, value) => guarded(async () => {
+    // field from comma-separated values, which can also gain or lose single values.
+    setField: (key, field, value, operation) => guarded(async () => {
       const { access, ticketService } = await jira();
-      const outcome = await ticketService.updateAnyField(key, field, value, 'set', access.config.baseUrl);
+      const outcome = await ticketService.updateAnyField(key, field, value, operation, access.config.baseUrl);
       if (!outcome.written) throw new Error(outcome.message);
       return outcome.message;
     }),

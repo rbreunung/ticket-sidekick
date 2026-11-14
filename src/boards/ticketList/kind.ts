@@ -1,9 +1,11 @@
-import type { BoardKind } from '../../sessions/boardKind';
+import type { BoardKind, CheckMode } from '../../sessions/boardKind';
 import type { Conflict, Session } from '../../sessions/sessionTypes';
 
 // The ticket list board: the tickets of a JQL query or a saved filter, with a selection and one
 // change (a move to a status, or a field value) that is applied to the selected tickets after a
-// preview. The agent may open it with a proposed change; it never gets the rows.
+// preview. The agent may open it with a proposed change; it never gets the rows. The rows are
+// shown a page at a time, and a board whose tickets changed in Jira says so and offers only
+// Refresh, so nothing is applied to tickets the developer has not seen as they are now.
 
 export const TICKET_LIST_KIND = 'ticket-list';
 
@@ -25,9 +27,12 @@ export type ListSource =
   | { type: 'jql'; jql: string }
   | { type: 'filter'; id: string; name: string; jql: string };
 
+/** How a field change treats a list field's current values: replace them, or add or remove single ones. */
+export type FieldOperation = 'set' | 'add' | 'remove';
+
 export type ListChange =
   | { type: 'transition'; status: string; resolution?: string }
-  | { type: 'field'; field: string; value: string };
+  | { type: 'field'; field: string; value: string; operation?: FieldOperation };
 
 export interface TicketListRecipe {
   source: ListSource;
@@ -52,8 +57,19 @@ export interface RowResult {
   reason?: string;
 }
 
+/** What a background check found that the board does not show yet. */
+export interface OutOfDate {
+  changed: string[];
+  gone: string[];
+  added: number;
+}
+
 export interface TicketListWorking {
   selection: Selection;
+  /** The page in view, counted from 0. */
+  page: number;
+  /** Set when a background check found tickets that differ from the rows on show. */
+  outOfDate: OutOfDate | null;
   change: ListChange | null;
   /** The change came from the agent and the developer has not touched it yet. */
   proposed: boolean;
@@ -68,6 +84,7 @@ export type TicketListAction =
   | { type: 'select-none' }
   | { type: 'change'; change: ListChange | null }
   | { type: 'sort'; column: SortColumn }
+  | { type: 'page'; page: number }
   | { type: 'apply' };
 
 export interface TicketListDeps {
@@ -80,7 +97,7 @@ export interface TicketListDeps {
   readTicket(key: string): Promise<{ status: string; updated: string } | undefined>;
   /** Moves a ticket; resolves with a note on success, rejects with a short reason. */
   move(key: string, status: string, resolution?: string): Promise<string>;
-  setField(key: string, field: string, value: string): Promise<string>;
+  setField(key: string, field: string, value: string, operation: FieldOperation): Promise<string>;
   now(): number;
 }
 
@@ -88,14 +105,22 @@ export interface TicketListView {
   title: string;
   jql: string;
   truncated: boolean;
+  /** The rows of the page in view. */
   rows: Array<TicketRow & { url: string | null; selected: boolean; result: RowResult | null }>;
+  totalRows: number;
+  page: number;
+  pageCount: number;
   selectedCount: number;
+  outOfDate: OutOfDate | null;
   change: ListChange | null;
   proposed: boolean;
   sort: TicketListWorking['sort'];
 }
 
 export const MAX_LIST_ROWS = 300;
+export const PAGE_SIZE = 50;
+const FIELD_OPERATIONS: readonly FieldOperation[] = ['set', 'add', 'remove'];
+const OUT_OF_DATE = 'The list is out of date: press Refresh to see the tickets as they are now.';
 const SORT_COLUMNS: readonly SortColumn[] = ['key', 'summary', 'status', 'issueType', 'assignee', 'priority'];
 
 type ListSession = Session<TicketListRecipe, TicketListData, TicketListWorking>;
@@ -120,7 +145,10 @@ export function asChange(value: unknown): ListChange | undefined {
     const field = text(v.field, 100);
     // An empty value clears nothing by accident: clearing a field is not offered here.
     const fieldValue = text(v.value, 2000);
-    return field && fieldValue ? { type: 'field', field, value: fieldValue } : undefined;
+    if (!field || !fieldValue) return undefined;
+    const operation = (v as { operation?: unknown }).operation;
+    if (operation === undefined || operation === 'set') return { type: 'field', field, value: fieldValue };
+    return FIELD_OPERATIONS.includes(operation as FieldOperation) ? { type: 'field', field, value: fieldValue, operation: operation as FieldOperation } : undefined;
   }
   return undefined;
 }
@@ -134,9 +162,28 @@ function selectedRows(session: ListSession): TicketRow[] {
 }
 
 function describeChange(change: ListChange, row: TicketRow): string {
-  return change.type === 'transition'
-    ? `Status: ${row.status} → ${change.status}${change.resolution ? `, resolution ${change.resolution}` : ''}`
-    : `Set ${change.field} to "${change.value}"`;
+  if (change.type === 'transition') return `Status: ${row.status} → ${change.status}${change.resolution ? `, resolution ${change.resolution}` : ''}`;
+  if (change.operation === 'add') return `Add "${change.value}" to ${change.field}`;
+  if (change.operation === 'remove') return `Remove "${change.value}" from ${change.field}`;
+  return `Set ${change.field} to "${change.value}"`;
+}
+
+function pageCount(rows: number): number {
+  return Math.max(1, Math.ceil(rows / PAGE_SIZE));
+}
+
+function clampPage(page: number, rows: number): number {
+  return Math.min(Math.max(0, Math.floor(page)), pageCount(rows) - 1);
+}
+
+/** What differs between the rows on show and a fresh reading. */
+function differences(shown: TicketRow[], fresh: TicketRow[]): OutOfDate | null {
+  const now = new Map(fresh.map(row => [row.key, row]));
+  const before = new Set(shown.map(row => row.key));
+  const changed = shown.filter(row => now.has(row.key) && now.get(row.key)!.updated !== row.updated).map(row => row.key);
+  const gone = shown.filter(row => !now.has(row.key)).map(row => row.key);
+  const added = fresh.filter(row => !before.has(row.key)).length;
+  return changed.length + gone.length + added > 0 ? { changed, gone, added } : null;
 }
 
 function sortValue(row: TicketRow, column: SortColumn): string {
@@ -147,13 +194,17 @@ function sortValue(row: TicketRow, column: SortColumn): string {
   return row[column].toLowerCase();
 }
 
+function fieldVerb(operation: FieldOperation | undefined): string {
+  return operation === 'add' ? 'Add to' : operation === 'remove' ? 'Remove from' : 'Set';
+}
+
 function sourceTitle(source: ListSource): string {
   return source.type === 'filter' ? `Tickets: filter "${source.name}"` : 'Tickets: JQL search';
 }
 
 export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketListWorking, TicketListAction, TicketListView, TicketListDeps> = {
   kind: TICKET_LIST_KIND,
-  formatVersion: 1,
+  formatVersion: 2,
   title: recipe => sourceTitle(recipe.source),
 
   validate: async (input, deps) => {
@@ -179,6 +230,8 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
   // With a proposed change every matching row starts selected; without one, none.
   initialWorking: recipe => ({
     selection: recipe.proposed ? { mode: 'all', except: [] } : { mode: 'only', keys: [] },
+    page: 0,
+    outOfDate: null,
     change: recipe.proposed ?? null,
     proposed: recipe.proposed !== undefined,
     sort: null,
@@ -195,31 +248,34 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     return { readAt: deps.now(), fingerprints: {}, data: { rows, truncated, baseUrl: await deps.baseUrl() } };
   },
 
-  // A selected ticket that changed in Jira, or left the list, is taken out of the selection and named.
-  reconcile: (session, fresh) => {
-    const before = new Map(session.derived.data.rows.map(row => [row.key, row]));
-    const now = new Map(fresh.data.rows.map(row => [row.key, row]));
-    const conflicts: Conflict[] = [];
-    const deselect: string[] = [];
-    for (const row of selectedRows(session)) {
-      const current = now.get(row.key);
-      if (!current) {
-        conflicts.push({ id: row.key, target: row.key, message: 'is no longer in this list and was taken out of the selection.', stored: row.status });
-        deselect.push(row.key);
-      } else if (current.updated !== row.updated) {
-        conflicts.push({ id: row.key, target: row.key, message: 'changed in Jira and was taken out of the selection.', stored: before.get(row.key)?.status, fresh: current.status });
-        deselect.push(row.key);
-      }
+  // By itself the check only says that the list is out of date and keeps the rows on show; on
+  // Refresh the fresh rows replace them, and the selection keeps every ticket still in the list.
+  reconcile: (session, fresh, mode: CheckMode) => {
+    const found = differences(session.derived.data.rows, fresh.data.rows);
+    if (mode === 'background') {
+      return found
+        ? { derived: session.derived, working: { ...session.working, outOfDate: found }, conflicts: [] }
+        : { derived: fresh, working: { ...session.working, outOfDate: null }, conflicts: [] };
     }
+    const now = new Set(fresh.data.rows.map(row => row.key));
     const selection: Selection = session.working.selection.mode === 'all'
-      ? { mode: 'all', except: [...session.working.selection.except.filter(k => now.has(k)), ...deselect.filter(k => now.has(k))] }
-      : { mode: 'only', keys: session.working.selection.keys.filter(k => !deselect.includes(k)) };
-    return { derived: fresh, working: { ...session.working, selection, results: {} }, conflicts };
+      ? { mode: 'all', except: session.working.selection.except.filter(k => now.has(k)) }
+      : { mode: 'only', keys: session.working.selection.keys.filter(k => now.has(k)) };
+    return {
+      derived: fresh,
+      working: { ...session.working, selection, outOfDate: null, results: {}, page: clampPage(session.working.page, fresh.data.rows.length) },
+      conflicts: [],
+    };
   },
 
   reduce: (session, action) => {
     const working = session.working;
     const known = new Set(session.derived.data.rows.map(r => r.key));
+    if (action?.type === 'page') {
+      if (typeof action.page !== 'number' || !Number.isFinite(action.page)) return { ok: false, reason: 'Unknown page.' };
+      return { ok: true, working: { ...working, page: clampPage(action.page, session.derived.data.rows.length) } };
+    }
+    if (working.outOfDate) return { ok: false, reason: OUT_OF_DATE };
     switch (action?.type) {
       case 'select': {
         if (typeof action.key !== 'string' || !known.has(action.key)) return { ok: false, reason: 'That ticket is not on the board.' };
@@ -250,6 +306,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
 
   plan: (session, action) => {
     if (action?.type !== 'apply') return { ok: false, reason: 'Unknown action.' };
+    if (session.working.outOfDate) return { ok: false, reason: OUT_OF_DATE };
     const { change } = session.working;
     if (!change) return { ok: false, reason: 'Choose a change first: a status to move to, or a field and a value.' };
     const rows = selectedRows(session);
@@ -258,7 +315,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     return {
       ok: true,
       plan: {
-        title: change.type === 'transition' ? `Move ${rows.length} ticket(s) to ${change.status}` : `Set ${change.field} on ${rows.length} ticket(s)`,
+        title: change.type === 'transition' ? `Move ${rows.length} ticket(s) to ${change.status}` : `${fieldVerb(change.operation)} ${change.field} on ${rows.length} ticket(s)`,
         lines: rows.map(row => ({ target: row.key, change: describeChange(change, row) })),
         risky: rows.length > 1 || closes,
         payload: { change, targets: rows.map(row => ({ key: row.key, updated: row.updated, status: row.status })) },
@@ -284,7 +341,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
           continue;
         }
         if (change.type === 'transition') await deps.move(target.key, change.status, change.resolution);
-        else await deps.setField(target.key, change.field, change.value);
+        else await deps.setField(target.key, change.field, change.value, change.operation ?? 'set');
         results[target.key] = { outcome: 'done' };
       } catch (err) {
         results[target.key] = { outcome: 'failed', reason: err instanceof Error ? err.message : String(err) };
@@ -314,7 +371,9 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
       const { column, descending } = working.sort;
       rows = [...rows].sort((a, b) => sortValue(a, column).localeCompare(sortValue(b, column)) * (descending ? -1 : 1));
     }
-    const view = rows.map(row => ({
+    const page = clampPage(working.page, rows.length);
+    const visible = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+    const view = visible.map(row => ({
       ...row,
       url: baseUrl ? `${baseUrl}/browse/${encodeURIComponent(row.key)}` : null,
       selected: isSelected(working.selection, row.key),
@@ -322,7 +381,8 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     }));
     return {
       title: sourceTitle(session.recipe.source), jql: session.recipe.source.jql, truncated: data.truncated, rows: view,
-      selectedCount: view.filter(r => r.selected).length, change: working.change, proposed: working.proposed, sort: working.sort,
+      totalRows: rows.length, page, pageCount: pageCount(rows.length), outOfDate: working.outOfDate,
+      selectedCount: data.rows.filter(r => isSelected(working.selection, r.key)).length, change: working.change, proposed: working.proposed, sort: working.sort,
     };
   },
 };
