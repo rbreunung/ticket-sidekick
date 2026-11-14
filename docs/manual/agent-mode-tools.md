@@ -51,6 +51,7 @@ A tool marked "asks first" shows a confirmation with every value it is about to 
 | `jira_create_ticket` | `#jiraCreateTicket` | asks first |
 | `jira_add_comment` | `#jiraAddComment` | asks first |
 | `jira_update_field` | `#jiraUpdateField` | asks first |
+| `jira_correct_description` | `#jiraCorrectDescription` | asks first |
 | `jira_upload_attachment` | `#jiraUploadAttachment` | asks first |
 | `jira_list_fields` | `#jiraListFields` | reads |
 | `jira_check_required_fields` | `#jiraCheckRequiredFields` | reads |

@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { callTool } from '../tools/toolDefinition';
+import { confirmationWithPreview } from '../tools/jiraToolConfirmation';
 import { JIRA_TOOLS } from '../tools/jiraTools/catalog';
 import type { JiraAccess, JiraToolDeps } from '../tools/jiraTools/jiraAccess';
 import type { IJiraClient, JiraIssue, JiraSearchResult, JiraTransition } from '../jira/IJiraClient';
@@ -36,6 +37,8 @@ function jiraConfig(overrides: Partial<JiraConfig> = {}): JiraConfig {
 
 interface Session {
   call(name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }>;
+  /** The lines the user is asked to confirm before the call runs. */
+  confirm(name: string, args: Record<string, unknown>): Promise<Array<{ name: string; value: string }>>;
 }
 
 /** Calls that share one set of long-lived deps, as the tools registered by the extension do. */
@@ -53,12 +56,18 @@ async function startSession(
     recentWrites: new RecentCallGuard(),
     onDiag: (_level, message, details) => options.logs?.push({ message, details }),
   };
+  const toolNamed = (name: string) => {
+    const tool = JIRA_TOOLS.find(t => t.name === name);
+    if (!tool) throw new Error(`no tool named ${name}`);
+    return tool;
+  };
   return {
     async call(name, args) {
-      const tool = JIRA_TOOLS.find(t => t.name === name);
-      if (!tool) throw new Error(`no tool named ${name}`);
-      const result = await callTool(tool, args, deps);
+      const result = await callTool(toolNamed(name), args, deps);
       return { text: result.text, isError: result.failed };
+    },
+    async confirm(name, args) {
+      return (await confirmationWithPreview(toolNamed(name), args, deps)).lines;
     },
   };
 }
@@ -487,6 +496,75 @@ describe('update field', () => {
     const other = await session.call('jira_update_field', { ticketKey: 'PROJ-123', fieldName: 'summary', value: 'Add SAML login' });
     expect(other.text).toContain('Updated summary on');
     expect(client.updateIssueCalls.map(c => c.fields.summary)).toEqual(['Add SSO login', 'Add SSO login', 'Add SAML login']);
+  });
+});
+
+/** PROJ-123 with a wiki description, the way Jira Data Center and Cloud return it over API v2. */
+class DescriptionClient extends FieldWriteClient {
+  constructor(public description: unknown) {
+    super();
+  }
+  override async getIssue(issueKey: string): Promise<JiraIssue> {
+    const issue = await super.getIssue(issueKey);
+    return { ...issue, fields: { ...issue.fields, description: this.description } } as JiraIssue;
+  }
+}
+
+const WIKI = 'h2. Steps\n{color:red}Urgent{color}\n|Open the page|Form is shwon|\n{code}\nString recieved;\n{code}\nAsk [~jdoe].';
+
+describe('correct description', () => {
+  it('writes only the approved corrections and keeps the rest of the description as it is', async () => {
+    const client = new DescriptionClient(WIKI);
+    const session = await startSession(client);
+    const { text } = await session.call('jira_correct_description', { ticketKey: 'PROJ-123', corrections: [{ before: 'shwon', after: 'shown' }] });
+    expect(client.updateIssueCalls).toEqual([{ issueKey: 'PROJ-123', fields: { description: WIKI.replace('shwon', 'shown') } }]);
+    expect(text).toBe('Corrected the description of PROJ-123: 1 correction.\n\n1. shwon → shown');
+  });
+
+  it('writes nothing when a correction does not fit, and names it with the reason', async () => {
+    const client = new DescriptionClient(WIKI);
+    const session = await startSession(client);
+    const { text } = await session.call('jira_correct_description', {
+      ticketKey: 'PROJ-123', corrections: [{ before: 'shwon', after: 'shown' }, { before: 'recieved', after: 'received' }],
+    });
+    expect(client.updateIssueCalls).toEqual([]);
+    expect(text).toContain('Nothing was changed on PROJ-123');
+    expect(text).toContain('2. "recieved": the text is inside code');
+    expect(text).not.toContain('1. "shwon"');
+  });
+
+  it('writes nothing to a ticket without a description', async () => {
+    const client = new DescriptionClient(null);
+    const session = await startSession(client);
+    const { text } = await session.call('jira_correct_description', { ticketKey: 'PROJ-123', corrections: [{ before: 'a', after: 'b' }] });
+    expect(text).toBe('PROJ-123 has no description. Nothing was changed.');
+    expect(client.updateIssueCalls).toEqual([]);
+  });
+
+  it('skips the same corrections sent again within a minute', async () => {
+    const client = new DescriptionClient(WIKI);
+    const session = await startSession(client);
+    const args = { ticketKey: 'PROJ-123', corrections: [{ before: 'shwon', after: 'shown' }] };
+    await session.call('jira_correct_description', args);
+    const second = await session.call('jira_correct_description', args);
+    expect(second.text).toBe('Skipped: the same corrections were written to PROJ-123 within the last minute.');
+    expect(client.updateIssueCalls).toHaveLength(1);
+  });
+
+  it('warns that a write Jira did not answer in time may still have been saved', async () => {
+    const client = new DescriptionClient(WIKI);
+    client.failWith = 'hang';
+    const session = await startSession(client, { timeoutMs: 50 });
+    const { text } = await session.call('jira_correct_description', { ticketKey: 'PROJ-123', corrections: [{ before: 'shwon', after: 'shown' }] });
+    expect(text).toContain('The change may still have been saved');
+  });
+
+  it('shows the resulting description before it writes, or that the call will be refused', async () => {
+    const session = await startSession(new DescriptionClient(WIKI));
+    const ok = await session.confirm('jira_correct_description', { ticketKey: 'PROJ-123', corrections: [{ before: 'shwon', after: 'shown' }] });
+    expect(ok.at(-1)).toEqual({ name: 'Resulting description', value: WIKI.replace('shwon', 'shown') });
+    const refused = await session.confirm('jira_correct_description', { ticketKey: 'PROJ-123', corrections: [{ before: 'Steps', after: 'x' }, { before: 'nowhere', after: 'x' }] });
+    expect(refused.at(-1)).toEqual({ name: 'Will be refused', value: '2. "nowhere": the text is not in the description (any more)' });
   });
 });
 
