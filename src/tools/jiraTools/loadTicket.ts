@@ -14,8 +14,7 @@ import type { JiraToolDeps } from './jiraAccess';
 import { runJiraTool } from './runJiraTool';
 import { LOAD_TICKET_TOOL } from './toolNames';
 
-// Loads a ticket into `.jira-context/<KEY>/` in the first workspace folder, the same load
-// `@jira load` does: `ticket.md`, `comments.md` and the attachments the default filter lets
+// Loads a ticket into `.jira-context/<KEY>/` in the first workspace folder: `ticket.md`, `comments.md` and the attachments the default filter lets
 // through, plus the attachments named in the call. The answer names every file written by its
 // absolute path and every attachment left out with its size and the reason.
 

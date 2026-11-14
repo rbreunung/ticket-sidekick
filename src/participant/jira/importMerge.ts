@@ -680,7 +680,7 @@ function finish<TItem, TRow extends ReviewRowBase>(
   stream.markdown(trustedChatMarkdown(
     `${heading}\n\n${ticketLines(run, baseUrl).join('\n')}` +
     `${missing.length > 0 ? `\n\nStill missing: ${missing.map(s => `${STEP_LABEL[s.kind]} (${formatKeyLink(s.key, baseUrl)})`).join(', ')}. Fix these in Jira by hand.` : ''}` +
-    `${run.closeSkipped?.some(s => /workflow/i.test(s.reason)) ? '\n\nIf a ticket could not be closed for lack of a workflow, run `@jira discover workflow` and close it from the Stale screen or in Jira.' : ''}\n\n`,
+    `${run.closeSkipped?.some(s => /workflow/i.test(s.reason)) ? '\n\nIf a ticket could not be closed for lack of a workflow, type `/ts-jira workflow <KEY>` with its key and close it from the Stale screen or in Jira.' : ''}\n\n`,
   ));
   logDiag(descriptor.scope, missing.length > 0 ? 'warn' : 'info', `${descriptor.importLabel} import — merge finished`, {
     survivor: run.survivor, sources: run.sources, closed: closedSources.length, missing: missing.length,

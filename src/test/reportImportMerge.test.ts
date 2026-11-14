@@ -350,7 +350,7 @@ describe('the close (R7, R9, AE3)', () => {
     vi.mocked(loadWorkflowCache).mockReturnValue({} as never);
     const { ws } = await importWaltz();
     const out = await reply('merge PROJ-15 into PROJ-12 confirm', ws);
-    expect(out.text).toMatch(/discover workflow/);
+    expect(out.text).toContain('/ts-jira workflow <KEY>');
     expect(log).toEqual(['rewrite:PROJ-12', 'comment:PROJ-12', 'link:PROJ-15', 'mark:PROJ-15']);
     expect(out.session.outcomes?.mergeFailed).toBe(1);
     // a cancelled ticket still open must not become the target of a rebuilt review

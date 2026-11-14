@@ -1,6 +1,6 @@
 import type { JiraAttachment } from '../jira/IJiraClient';
 
-// Which attachments the default load path (`@jira load` and the load tool) downloads
+// Which attachments the default load path (the load tool) downloads
 // automatically vs. skips — kept `vscode`-free so the rule itself is Vitest-loadable,
 // mirroring `src/utils/reportImport.ts`'s shared-primitives pattern. An attachment named in the
 // load tool's list bypasses this filter by design, but `ATTACHMENT_SIZE_LIMIT` still applies as

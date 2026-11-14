@@ -130,7 +130,7 @@ export async function buildStaleTicketGroups(
         const d = issueDetails.get(m.key)!;
         ineligible.push({
           key: m.key, summary: d.summary, currentStatus: d.currentStatus,
-          note: `no workflow cache for ${projectKey}/${issueType} — run @jira discover workflow ${projectKey} ${issueType}`,
+          note: `no workflow cache for ${projectKey}/${issueType} — type /ts-jira workflow with one of its tickets' keys`,
         });
       }
       continue;

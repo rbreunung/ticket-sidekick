@@ -1,6 +1,6 @@
 /**
  * Pure config validators (no `vscode` dependency) so misconfiguration is caught with a
- * clear message — surfaced via `@jira check` / `@bitbucket check` — instead of an opaque
+ * clear message — surfaced via `/ts-jira check` / `@bitbucket check` — instead of an opaque
  * 404/HTML error at request time.
  */
 

@@ -17,8 +17,8 @@ import { rewriteAttachmentLinks } from '../../utils/ticketText';
 
 // Loads a Jira ticket into `.jira-context/<KEY>/` under a workspace folder: `ticket.md`,
 // `comments.md` and the attachments the default filter lets through, plus any attachments named
-// by the caller. It writes through a small writer, so `@jira load` writes with VS Code's file
-// system and the load tool with Node's, and this module stays free of `vscode`.
+// by the caller. It writes through a small writer (the load tool uses Node's file system), so
+// this module stays free of `vscode`.
 
 /**
  * Writes below one workspace folder. Every path is relative to that folder and uses `/` as its

@@ -137,7 +137,7 @@ describe('buildStaleTicketGroups', () => {
 
     expect(result.groups).toEqual([]);
     expect(result.ineligible).toEqual([
-      { key: 'PROJ-2', summary: 'Task finding', currentStatus: 'Open', note: expect.stringContaining('@jira discover workflow PROJ Task') },
+      { key: 'PROJ-2', summary: 'Task finding', currentStatus: 'Open', note: expect.stringContaining('/ts-jira workflow') },
     ]);
   });
 
