@@ -62,8 +62,9 @@ export function api(op, body) {
 }
 
 /**
- * Runs a board page. `render(view, board)` returns the board's own content for the current view;
- * `board` offers `act`, `preview`, `save` and the current `state`.
+ * Runs a board page. `render(view, board, locked, state)` returns the board's own content for the
+ * current view; `locked` is true while a request runs or an Apply is in progress, and the page
+ * disables its controls then. `board` offers `act`, `preview`, `save` and the current `state`.
  */
 export function startBoard({ root, render }) {
   let state;
@@ -105,8 +106,13 @@ export function startBoard({ root, render }) {
     },
   };
 
+  /** An Apply in progress, on this page or another: nothing else is sent until it ends. */
+  function locked() {
+    return busy || Boolean(state?.applying);
+  }
+
   async function run(work) {
-    if (busy) return;
+    if (locked()) return;
     busy = true;
     message = undefined;
     paint();
@@ -161,23 +167,26 @@ export function startBoard({ root, render }) {
         h('ul', {}, state.conflicts.map(c => h('li', {},
           h('strong', {}, c.target), ` ${c.message}`,
           c.stored !== undefined || c.fresh !== undefined ? h('span', { class: 'muted' }, ` Stored: ${c.stored ?? 'none'}. Now: ${c.fresh ?? 'none'}.`) : null,
-          ' ', h('vscode-button', { secondary: true, onClick: () => board.act({ type: 'conflict/drop', id: c.id }) }, 'Drop'))))));
+          ' ', h('vscode-button', { secondary: true, disabled: locked(), onClick: () => board.act({ type: 'conflict/drop', id: c.id }) }, 'Drop'))))));
     }
     return items;
   }
 
   function paint() {
     const focusId = document.activeElement?.id;
+    const applying = state?.applying;
     const header = h('header', {},
       h('h1', {}, state?.title ?? rootElement.dataset.title ?? ''),
       state ? h('p', { class: 'muted', role: 'status' },
-        state.status === 'building' ? 'Reading…'
-          : state.status === 'checking' ? `As of ${formatTime(state.asOf)}. Checking for changes…`
-            : state.asOf ? `As of ${formatTime(state.asOf)}${state.restored ? ' (restored session)' : ''}.` : '') : null,
+        applying ? `Applying: ${applying.done} of ${applying.total} done…`
+          : state.status === 'building' ? 'Reading…'
+            : state.status === 'checking' ? `As of ${formatTime(state.asOf)}. Checking for changes…`
+              : state.asOf ? `As of ${formatTime(state.asOf)}${state.restored ? ' (restored session)' : ''}.` : '') : null,
+      applying ? h('progress', { id: 'apply-progress', max: applying.total, value: applying.done, 'aria-label': 'Apply progress' }) : null,
       state && !stopped ? h('div', { class: 'bar' },
-        h('vscode-button', { id: 'refresh', secondary: true, disabled: busy || state.status !== 'ready' && state.status !== 'failed', onClick: () => board.refresh() }, 'Refresh'),
-        h('vscode-button', { id: 'discard', secondary: true, disabled: busy, onClick: () => board.discard() }, 'Discard session')) : null);
-    const content = state?.view !== undefined && !stopped ? render(state.view, board, busy, state) : null;
+        h('vscode-button', { id: 'refresh', secondary: true, disabled: locked() || state.status !== 'ready' && state.status !== 'failed', onClick: () => board.refresh() }, 'Refresh'),
+        h('vscode-button', { id: 'discard', secondary: true, disabled: locked(), onClick: () => board.discard() }, 'Discard session')) : null);
+    const content = state?.view !== undefined && !stopped ? render(state.view, board, locked(), state) : null;
     root.replaceChildren(header, ...banners(), content ?? '');
     if (focusId) document.getElementById(focusId)?.focus();
   }
@@ -191,7 +200,8 @@ export function startBoard({ root, render }) {
       try {
         const before = state?.tick;
         await load(before);
-        if (state.tick !== before && !busy) paint();
+        // Painted while a request runs too, so an Apply shows its progress as each target finishes.
+        if (state.tick !== before) paint();
       } catch (err) {
         if (err.status === 404) {
           stopped = true;

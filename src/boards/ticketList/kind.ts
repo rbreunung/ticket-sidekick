@@ -103,6 +103,8 @@ export type SortColumn = 'key' | 'summary' | 'status' | 'issueType' | 'assignee'
 export interface RowResult {
   outcome: 'done' | 'failed' | 'refused';
   reason?: string;
+  /** Jira's `updated` time read right after this board wrote the ticket, so a later check knows that change was its own. */
+  updated?: string;
 }
 
 /** What a background check found that the board does not show yet. */
@@ -124,7 +126,7 @@ export interface TicketListWorking {
   /** The change came from the agent and the developer has not touched it yet. */
   proposed: boolean;
   sort: { column: SortColumn; descending: boolean } | null;
-  /** What the last Apply did, by ticket key. */
+  /** What the last Apply did, by ticket key; saved after each ticket while the Apply runs. */
   results: Record<string, RowResult>;
   /** On a cleanup whose rule names no resolution: the one chosen on the board, '' for none. */
   resolution: string | null;
@@ -164,7 +166,7 @@ export interface TicketListDeps {
   now(): number;
 }
 
-export type ViewRow = TicketRow & { url: string | null; selected: boolean; result: RowResult | null; subtasks?: ViewRow[] };
+export type ViewRow = TicketRow & { url: string | null; selected: boolean; result: Omit<RowResult, 'updated'> | null; subtasks?: ViewRow[] };
 
 export interface TicketListView {
   title: string;
@@ -279,14 +281,23 @@ function clampPage(page: number, rows: number): number {
   return Math.min(Math.max(0, Math.floor(page)), pageCount(rows) - 1);
 }
 
-/** What differs between the rows on show and a fresh reading. */
-function differences(shownRows: TicketRow[], freshRows: TicketRow[]): OutOfDate | null {
+/**
+ * What differs between the rows on show and a fresh reading. The board's own writes do not count:
+ * a ticket it wrote whose `updated` is still the one read after that write, or that left the list
+ * after it was written (a move out of the query).
+ */
+function differences(shownRows: TicketRow[], freshRows: TicketRow[], results: Record<string, RowResult>): OutOfDate | null {
   const shown = allTickets(shownRows);
   const fresh = allTickets(freshRows);
   const now = new Map(fresh.map(row => [row.key, row]));
   const before = new Set(shown.map(row => row.key));
-  const changed = shown.filter(row => now.has(row.key) && now.get(row.key)!.updated !== row.updated).map(row => row.key);
-  const gone = shown.filter(row => !now.has(row.key)).map(row => row.key);
+  const written = (key: string) => results[key]?.outcome === 'done';
+  const changed = shown.filter(row => {
+    const current = now.get(row.key);
+    if (!current || current.updated === row.updated) return false;
+    return !(written(row.key) && results[row.key].updated === current.updated);
+  }).map(row => row.key);
+  const gone = shown.filter(row => !now.has(row.key) && !written(row.key)).map(row => row.key);
   const added = fresh.filter(row => !before.has(row.key)).length;
   return changed.length + gone.length + added > 0 ? { changed, gone, added } : null;
 }
@@ -458,6 +469,19 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     results: {},
   }),
 
+  // After an update the stored list is opened again from its query, filter or cleanup rule.
+  revalidate: async (stored, deps) => {
+    const recipe = (typeof stored === 'object' && stored !== null ? stored : {}) as { source?: Partial<ListSource> & Record<string, unknown>; proposed?: unknown };
+    const source = recipe.source;
+    const input = source?.type === 'jql' ? { jql: source.jql }
+      : source?.type === 'filter' ? { filter: source.id }
+        : source?.type === 'rule' ? { cleanupRule: source.name, fixVersion: source.fixVersion }
+          : undefined;
+    if (!input) return { ok: false, reason: 'the stored list names no query, filter or cleanup rule.' };
+    const proposed = source?.type === 'rule' ? undefined : asChange(recipe.proposed);
+    return ticketListKind.validate({ ...input, ...(proposed ? { change: proposed } : {}) }, deps);
+  },
+
   // Asked for again with a new proposed change: the change replaces the old one and all rows are selected.
   reopen: (session, recipe) => (recipe.proposed && recipe.source.type !== 'rule'
     ? { ...session.working, selection: { mode: 'all', except: [] }, change: recipe.proposed, proposed: true, results: {}, columns: columnSetFor(recipe.proposed) }
@@ -476,21 +500,24 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
   },
 
   // By itself the check only says that the list is out of date and keeps the rows on show; on
-  // Refresh the fresh rows replace them, and the selection keeps every ticket still in the list.
+  // Refresh the fresh rows replace them, and the selection and the recorded results keep every
+  // ticket still in the list.
   reconcile: (session, fresh, mode: CheckMode) => {
-    const found = differences(session.derived.data.rows, fresh.data.rows);
+    const found = differences(session.derived.data.rows, fresh.data.rows, session.working.results);
     if (mode === 'background') {
       return found
         ? { derived: session.derived, working: { ...session.working, outOfDate: found }, conflicts: [] }
         : { derived: fresh, working: { ...session.working, outOfDate: null }, conflicts: [] };
     }
     const now = new Set(fresh.data.rows.map(row => row.key));
+    const listed = new Set(allTickets(fresh.data.rows).map(row => row.key));
     const selection: Selection = session.working.selection.mode === 'all'
       ? { mode: 'all', except: session.working.selection.except.filter(k => now.has(k)) }
       : { mode: 'only', keys: session.working.selection.keys.filter(k => now.has(k)) };
+    const results = Object.fromEntries(Object.entries(session.working.results).filter(([key]) => listed.has(key)));
     return {
       derived: fresh,
-      working: { ...session.working, selection, outOfDate: null, results: {}, page: clampPage(session.working.page, fresh.data.rows.length) },
+      working: { ...session.working, selection, outOfDate: null, results, page: clampPage(session.working.page, fresh.data.rows.length) },
       conflicts: [],
     };
   },
@@ -563,10 +590,31 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     };
   },
 
-  apply: async (session, plan, deps) => {
+  apply: async (session, plan, deps, progress) => {
     const { change, targets } = plan.payload as { change: ListChange | null; targets: PlannedTarget[] };
     const results: Record<string, RowResult> = {};
     const conflicts: Conflict[] = [];
+    const total = targets.reduce((n, t) => n + 1 + (t.subtasks?.length ?? 0), 0);
+    let finished = 0;
+    /**
+     * Saves what is finished before the next write. A written ticket leaves the selection, so a
+     * board restored after an interruption plans only the rest.
+     */
+    const report = async () => {
+      finished++;
+      if (!progress) return;
+      const written = targets.filter(t => results[t.key]?.outcome === 'done').map(t => t.key);
+      const { selection } = session.working;
+      await progress({
+        working: {
+          ...session.working, proposed: false, results: { ...results },
+          selection: selection.mode === 'all'
+            ? { mode: 'all', except: [...new Set([...selection.except, ...written])] }
+            : { mode: 'only', keys: selection.keys.filter(k => !written.includes(k)) },
+        },
+        done: finished, total,
+      });
+    };
     /** Reads the ticket again and writes it only when it is as the board read it; says whether it was written. */
     const writeOne = async (target: { key: string; updated: string; status: string }, write: () => Promise<unknown>): Promise<boolean> => {
       try {
@@ -582,7 +630,9 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
           return false;
         }
         await write();
-        results[target.key] = { outcome: 'done' };
+        // The time Jira gives the ticket after this write; when it cannot be read, a later check counts the ticket as changed.
+        const after = await deps.readTicket(target.key).catch(() => undefined);
+        results[target.key] = { outcome: 'done', ...(after ? { updated: after.updated } : {}) };
         return true;
       } catch (err) {
         results[target.key] = { outcome: 'failed', reason: err instanceof Error ? err.message : String(err) };
@@ -595,6 +645,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
         let failed: string | undefined;
         for (const sub of target.subtasks ?? []) {
           if (!(await writeOne(sub, () => deps.move(sub.key, sub.target, sub.resolution)))) failed ??= sub.key;
+          await report();
         }
         const move = target.move;
         if (failed) results[target.key] = { outcome: 'refused', reason: `not moved, because subtask ${failed} was not moved` };
@@ -604,6 +655,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
       } else if (change) {
         await writeOne(target, () => deps.setField(target.key, change.field, change.value, change.operation ?? 'set'));
       }
+      await report();
     }
     // Show what Jira holds now; when that read fails the rows stay as they were, with the results.
     let derived = session.derived;
@@ -613,7 +665,10 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
       // The results below still say what was written.
     }
     return {
-      results: targets.flatMap(t => [...(t.subtasks ?? []), t]).map(t => ({ target: t.key, ...results[t.key] })),
+      results: targets.flatMap(t => [...(t.subtasks ?? []), t]).map(t => {
+        const { outcome, reason } = results[t.key];
+        return { target: t.key, outcome, ...(reason !== undefined ? { reason } : {}) };
+      }),
       derived,
       // A cleanup's query no longer lists the tickets it moved, so the next ones move up onto the page in
       // view: the selection stays (rows that left are simply gone) and the developer applies again there.
@@ -638,7 +693,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
         ...rest,
         url: baseUrl ? `${baseUrl}/browse/${encodeURIComponent(row.key)}` : null,
         selected,
-        result: working.results[row.key] ?? null,
+        result: resultView(working.results[row.key]),
         ...(subtasks ? { subtasks: subtasks.map(sub => toView(sub, false)) } : {}),
       };
     };
@@ -656,6 +711,12 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     };
   },
 };
+
+function resultView(result: RowResult | undefined): ViewRow['result'] {
+  if (!result) return null;
+  const { outcome, reason } = result;
+  return reason !== undefined ? { outcome, reason } : { outcome };
+}
 
 /** The plan of a cleanup: the selected parents of the page in view, each after its subtasks. */
 function planCleanup(session: ListSession): ReturnType<NonNullable<typeof ticketListKind.plan>> {

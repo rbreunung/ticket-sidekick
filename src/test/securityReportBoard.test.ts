@@ -146,6 +146,14 @@ describe('a restored report checked against Jira', () => {
   });
 });
 
+describe('a stored report of an older format', () => {
+  it('is rebuilt for its own project, never the default one, while Jira is set up', async () => {
+    expect(await securityReportKind.revalidate!({ project: 'PROJ' }, deps({ defaultProject: () => 'DEF' }))).toEqual({ ok: true, recipe: { project: 'PROJ' } });
+    expect(await securityReportKind.revalidate!({}, deps({ defaultProject: () => 'DEF' }))).toMatchObject({ ok: false });
+    expect(await securityReportKind.revalidate!({ project: 'PROJ' }, deps({ jira: async () => undefined }))).toMatchObject({ ok: false });
+  });
+});
+
 describe('saving the report', () => {
   it('writes the full report as CSV whatever the filters, named after project and day', async () => {
     const s = await session({ tool: 'waltz' });

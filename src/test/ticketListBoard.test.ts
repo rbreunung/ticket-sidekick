@@ -1,7 +1,14 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { describe, it, expect } from 'vitest';
 import {
   ticketListKind, type TicketListData, type TicketListDeps, type TicketListRecipe, type TicketListWorking, type TicketRow, type TicketListAction,
 } from '../boards/ticketList/kind';
+import { registerKind, type ApplyProgressReport } from '../sessions/boardKind';
+import { sessionIdFor } from '../sessions/sessionId';
+import { SessionManager } from '../sessions/sessionManager';
+import { SessionStore } from '../sessions/sessionStore';
 import type { Session } from '../sessions/sessionTypes';
 
 // The ticket list board: a developer sees the tickets of a query, selects some, and moves them or
@@ -23,7 +30,7 @@ function fake(rows: TicketRow[] = [row(1), row(2), row(3, 'Done')]): Fake {
     jira, moved: [], fields: [],
     jiraConfigured: async () => true,
     baseUrl: async () => 'https://jira.example.com',
-    resolveFilter: async name => (name === 'mine' ? { id: '42', name: 'My open tickets', jql: 'assignee = currentUser()' } : `No saved filters found matching "${name}".`),
+    resolveFilter: async name => (name === 'mine' || name === '42' ? { id: '42', name: 'My open tickets', jql: 'assignee = currentUser()' } : `No saved filters found matching "${name}".`),
     extraColumns: async () => ({ search: [{ id: 'customfield_1', name: 'Team' }], cleanup: [{ id: 'fixVersions', name: 'Fix versions' }] }),
     search: async (_jql, _limit, fieldIds) => ({
       rows: [...jira.values()].map(r => ({ ...r, extra: Object.fromEntries(fieldIds.map(id => [id, `${id} of ${r.key}`])) })),
@@ -339,5 +346,108 @@ describe('asking for the same list again', () => {
     const s = act(await open(deps), { type: 'select', key: 'PROJ-1', on: true });
     const again = await ticketListKind.validate({ jql: 'project = PROJ' }, deps);
     expect(ticketListKind.reopen!(s, (again as { recipe: TicketListRecipe }).recipe)).toBe(s.working);
+  });
+});
+
+describe('an Apply interrupted and the board restored', () => {
+  /** Runs the plan until `stopAfter` tickets are finished, as if the window closed then; returns the last saved working state. */
+  async function interruptedApply(session: ListSession, deps: Fake, stopAfter: number): Promise<{ working: TicketListWorking; reports: ApplyProgressReport<TicketListWorking>[] }> {
+    const planned = ticketListKind.plan!(session, { type: 'apply' });
+    if (!planned.ok) throw new Error(planned.reason);
+    const reports: ApplyProgressReport<TicketListWorking>[] = [];
+    await expect(ticketListKind.apply!(session, planned.plan, deps, async report => {
+      reports.push(report);
+      if (reports.length === stopAfter) throw new Error('The window closed.');
+    })).rejects.toThrow('The window closed.');
+    return { working: reports[reports.length - 1].working, reports };
+  }
+
+  const five = () => fake([row(1), row(2), row(3), row(4), row(5)]);
+
+  it('shows the tickets moved before the interruption as done, is not out of date, and a new plan lists only the rest', async () => {
+    const deps = five();
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'transition', status: 'In Review' } });
+    const { working, reports } = await interruptedApply(s, deps, 2);
+    expect(reports.map(r => [r.done, r.total])).toEqual([[1, 5], [2, 5]]);
+    expect(deps.moved).toEqual(['PROJ-1→In Review', 'PROJ-2→In Review']);
+
+    // Restored: the rows as the board read them before the Apply, with the saved working state.
+    const restored: ListSession = { ...s, working };
+    const checked = ticketListKind.reconcile(restored, await ticketListKind.read(s.recipe, deps), 'background');
+    expect(checked.working.outOfDate).toBeNull();
+    const shown = { ...restored, derived: checked.derived, working: checked.working };
+    const view = ticketListKind.view(shown);
+    expect(view.rows.map(r => `${r.key} ${r.status} ${r.result?.outcome ?? '-'}`)).toEqual([
+      'PROJ-1 In Review done', 'PROJ-2 In Review done', 'PROJ-3 Open -', 'PROJ-4 Open -', 'PROJ-5 Open -',
+    ]);
+    const planned = ticketListKind.plan!(shown, { type: 'apply' });
+    expect(planned.ok && planned.plan.lines.map(l => l.target)).toEqual(['PROJ-3', 'PROJ-4', 'PROJ-5']);
+  });
+
+  it('is out of date when a ticket it moved was changed again in Jira by someone else', async () => {
+    const deps = five();
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'transition', status: 'In Review' } });
+    const { working } = await interruptedApply(s, deps, 2);
+    Object.assign(deps.jira.get('PROJ-1')!, { status: 'Done', updated: 't7' });
+    const checked = ticketListKind.reconcile({ ...s, working }, await ticketListKind.read(s.recipe, deps), 'background');
+    expect(checked.working.outOfDate).toEqual({ changed: ['PROJ-1'], gone: [], added: 0 });
+  });
+
+  it('does not count a ticket it moved out of the query as gone', async () => {
+    const deps = five();
+    deps.search = async () => ({ rows: [...deps.jira.values()].filter(r => r.status === 'Open').map(r => ({ ...r })), truncated: false });
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'transition', status: 'In Review' } });
+    const { working } = await interruptedApply(s, deps, 2);
+    const checked = ticketListKind.reconcile({ ...s, working }, await ticketListKind.read(s.recipe, deps), 'background');
+    expect(checked.working.outOfDate).toBeNull();
+    expect(ticketListKind.view({ ...s, derived: checked.derived, working: checked.working }).rows.map(r => r.key)).toEqual(['PROJ-3', 'PROJ-4', 'PROJ-5']);
+  });
+
+  it('keeps the recorded results of the tickets still listed through a Refresh', async () => {
+    const deps = fake();
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'transition', status: 'In Review' } });
+    s = (await apply(s, deps)).session;
+    deps.jira.delete('PROJ-3');
+    const refreshed = ticketListKind.reconcile(s, await ticketListKind.read(s.recipe, deps), 'refresh');
+    const view = ticketListKind.view({ ...s, derived: refreshed.derived, working: refreshed.working });
+    expect(view.rows.map(r => `${r.key} ${r.result?.outcome ?? '-'}`)).toEqual(['PROJ-1 done', 'PROJ-2 done']);
+    expect(Object.keys(refreshed.working.results)).toEqual(['PROJ-1', 'PROJ-2']);
+  });
+});
+
+describe('a stored ticket list of an older format', () => {
+  it('is rebuilt from its query instead of failing', async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ts-ticket-list-'));
+    try {
+      const deps = fake();
+      const store = new SessionStore(dir);
+      const session = await open(deps);
+      const id = sessionIdFor('ticket-list', ticketListKind.sourceKey(session.recipe));
+      await store.save({ ...session, id, formatVersion: ticketListKind.formatVersion - 1, working: { selected: ['PROJ-1'] } as never });
+      const manager = new SessionManager({
+        store, kinds: [registerKind(ticketListKind, () => deps)], now: () => 1000, confirm: async () => true, saveFile: async () => true,
+      });
+      let state = await manager.state('ticket-list', id);
+      while (state.status !== 'ready' && state.status !== 'failed') state = await manager.state('ticket-list', id, state.tick, 1000);
+      expect(state.status).toBe('ready');
+      expect(state.notice).toMatch(/rebuilt after an update/);
+      expect((state.view as { rows: { key: string }[]; selectedCount: number }).rows.map(r => r.key)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+      expect((state.view as { selectedCount: number }).selectedCount).toBe(0);
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('checks that its filter or cleanup rule still resolves', async () => {
+    const deps = fake();
+    expect(await ticketListKind.revalidate!({ source: { type: 'filter', id: '42', name: 'Old name', jql: 'x' } }, deps))
+      .toEqual({ ok: true, recipe: { source: { type: 'filter', id: '42', name: 'My open tickets', jql: 'assignee = currentUser()' } } });
+    expect(await ticketListKind.revalidate!({ source: { type: 'filter', id: '7', name: 'Gone', jql: 'x' } }, deps)).toMatchObject({ ok: false });
+    expect(await ticketListKind.revalidate!({ source: { type: 'rule', name: 'Old rule' } }, deps)).toMatchObject({ ok: false });
+    expect(await ticketListKind.revalidate!({ query: 'project = PROJ' }, deps)).toMatchObject({ ok: false });
   });
 });

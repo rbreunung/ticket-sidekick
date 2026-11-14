@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import type { DiagLogger } from '../utils/diagTypes';
-import type { CheckMode, ExportedFile, RegisteredKind } from './boardKind';
+import type { ApplyProgressReport, CheckMode, ExportedFile, RegisteredKind } from './boardKind';
 import { sessionIdFor } from './sessionId';
 import type { SessionStore } from './sessionStore';
 import { SessionError, type ApplyLineResult, type Conflict, type PlanLine, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
@@ -33,6 +33,8 @@ export interface BoardState {
   error?: string;
   /** The last check against the sources failed on a board that writes: nothing is applied until one passes. */
   writesBlocked: boolean;
+  /** Set while an Apply runs: how many of its targets are finished. The page disables its controls meanwhile. */
+  applying?: { done: number; total: number };
   view?: unknown;
 }
 
@@ -60,6 +62,7 @@ export interface SessionManagerDeps {
 
 const DEFAULT_PLAN_TTL_MS = 10 * 60 * 1000;
 const DROP_CONFLICT = 'conflict/drop';
+const REBUILT_NOTICE = 'This board was rebuilt after an update: the stored session came from another version of Ticket Sidekick, and its earlier choices were not kept.';
 
 interface Entry {
   id: string;
@@ -72,6 +75,7 @@ interface Entry {
   stored: boolean;
   notice?: string;
   error?: string;
+  applying?: { done: number; total: number };
   queue: Promise<unknown>;
   waiters: Set<() => void>;
 }
@@ -130,17 +134,47 @@ export class SessionManager {
     }
   }
 
-  /** Finds the session in memory or in the cache; a cached one of another format is discarded. */
+  /** A new entry that builds its session from `recipe`. */
+  private building(id: string, reg: RegisteredKind, recipe: unknown, notice?: string): Entry {
+    const entry: Entry = {
+      id, reg, recipe, status: 'building', tick: 1, restored: false, stored: false,
+      queue: Promise.resolve(), waiters: new Set(), notice,
+    };
+    this.entries.set(id, entry);
+    void this.enqueue(entry, () => this.build(entry));
+    return entry;
+  }
+
+  /** A stored session of another format: rebuilt from its recipe when that still holds, else discarded. */
+  private async rebuild(reg: RegisteredKind, id: string, recipe: unknown): Promise<Entry | undefined> {
+    const { kind } = reg;
+    let checked: { ok: true; recipe: unknown } | { ok: false; reason: string } = { ok: false, reason: 'the board cannot rebuild a stored session' };
+    if (kind.revalidate) {
+      try {
+        checked = await kind.revalidate(recipe, await reg.deps());
+      } catch (err) {
+        checked = { ok: false, reason: messageOf(err) };
+      }
+    }
+    if (!checked.ok) {
+      await this.deps.store.delete(id);
+      this.log('info', 'Discarded a stored session of another format', { kind: kind.kind, reason: checked.reason });
+      return undefined;
+    }
+    // Another caller may have rebuilt it while this one checked the recipe.
+    const raced = this.entries.get(id);
+    if (raced) return raced;
+    this.log('info', 'Rebuilt a stored session of another format', { kind: kind.kind });
+    return this.building(id, reg, checked.recipe, REBUILT_NOTICE);
+  }
+
+  /** Finds the session in memory or in the cache; a cached one of another format is rebuilt or discarded. */
   private async find(reg: RegisteredKind, id: string): Promise<Entry | undefined> {
     const known = this.entries.get(id);
     if (known) return known.reg === reg ? known : undefined;
     const stored = await this.deps.store.load(id);
     if (!stored || stored.session.kind !== reg.kind.kind) return undefined;
-    if (stored.session.formatVersion !== reg.kind.formatVersion) {
-      await this.deps.store.delete(id);
-      this.log('info', 'Discarded a stored session of another format', { kind: reg.kind.kind });
-      return undefined;
-    }
+    if (stored.session.formatVersion !== reg.kind.formatVersion) return this.rebuild(reg, id, stored.session.recipe);
     // Another caller may have loaded it while this one waited for the file.
     const raced = this.entries.get(id);
     if (raced) return raced;
@@ -209,7 +243,10 @@ export class SessionManager {
     if (!validated.ok) return validated;
     const id = sessionIdFor(reg.kind.kind, reg.kind.sourceKey(validated.recipe));
     const title = reg.kind.title(validated.recipe);
-    const formatBefore = (await this.deps.store.load(id))?.session.formatVersion;
+    const formatBefore = this.entries.has(id) ? undefined : (await this.deps.store.load(id))?.session.formatVersion;
+    const otherFormat = formatBefore !== undefined && formatBefore !== reg.kind.formatVersion;
+    // A stored session of another format is rebuilt from this request, which is what the board is opened with now.
+    if (otherFormat) await this.deps.store.delete(id);
     const existing = await this.find(reg, id);
     if (existing) {
       const { reopen } = reg.kind;
@@ -227,15 +264,8 @@ export class SessionManager {
       }
       return { ok: true, id, title };
     }
-    const entry: Entry = {
-      id, reg, recipe: validated.recipe, status: 'building', tick: 1, restored: false, stored: false,
-      queue: Promise.resolve(), waiters: new Set(),
-      notice: formatBefore !== undefined && formatBefore !== reg.kind.formatVersion
-        ? 'The stored session came from another version of Ticket Sidekick and was discarded.'
-        : undefined,
-    };
-    this.entries.set(id, entry);
-    void this.enqueue(entry, () => this.build(entry));
+    if (otherFormat) this.log('info', 'Rebuilt a stored session of another format', { kind: reg.kind.kind });
+    this.building(id, reg, validated.recipe, otherFormat ? REBUILT_NOTICE : undefined);
     return { ok: true, id, title };
   }
 
@@ -253,6 +283,7 @@ export class SessionManager {
       revision: session?.revision ?? 0, asOf: session?.derived.readAt, restored: entry.restored, stored: entry.stored,
       conflicts: session?.conflicts ?? [], notice: entry.notice, error: entry.error,
       writesBlocked: this.writesBlocked(entry),
+      ...(entry.applying ? { applying: { ...entry.applying } } : {}),
       view: session ? kind.view(session) : undefined,
     };
   }
@@ -356,7 +387,41 @@ export class SessionManager {
       if (plan.risky && !(await this.deps.confirm({ title: plan.title, lines: plan.lines }))) {
         throw new SessionError(409, 'Not applied: the confirmation was declined.');
       }
-      const applied = await kind.apply(session, plan, await entry.reg.deps());
+      // Each finished target is saved before the next write, without raising the revision: the
+      // page shows the progress, and a board restored after an interruption knows what is done.
+      entry.applying = { done: 0, total: plan.lines.length };
+      this.changed(entry);
+      let saved = Promise.resolve();
+      let progressed = false;
+      const progress = (report: ApplyProgressReport<unknown>): Promise<void> => {
+        // Saved one after the other, even when a kind reports again before the last save finished.
+        saved = saved.then(async () => {
+          // A session discarded meanwhile is not written back.
+          if (!entry.session || this.entries.get(entry.id) !== entry) return;
+          progressed = true;
+          entry.session = { ...entry.session, working: report.working, lastUsedAt: this.deps.now() };
+          entry.applying = { done: report.done, total: report.total };
+          await this.persist(entry);
+          this.changed(entry);
+        });
+        return saved;
+      };
+      let applied;
+      try {
+        applied = await kind.apply(session, plan, await entry.reg.deps(), progress);
+        await saved;
+      } catch (err) {
+        await saved.catch(() => undefined);
+        entry.applying = undefined;
+        // What was saved meanwhile is a change: a preview of the session before it is no longer valid.
+        if (progressed && entry.session) {
+          entry.session = { ...entry.session, revision: session.revision + 1 };
+          await this.persist(entry);
+        }
+        this.changed(entry);
+        throw err;
+      }
+      entry.applying = undefined;
       for (const result of applied.results) {
         this.log(result.outcome === 'done' ? 'info' : 'warn', `Board write ${result.outcome}: ${result.target}`, {
           kind: kind.kind, plan: plan.title, reason: result.reason,

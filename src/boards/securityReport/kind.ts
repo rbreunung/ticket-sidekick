@@ -177,6 +177,15 @@ export const securityReportKind: BoardKind<
     return { ok: true, recipe: { project } };
   },
 
+  // After an update the stored report is opened again for its own project; the default project is not read.
+  revalidate: async (stored, deps) => {
+    const raw = typeof stored === 'object' && stored !== null ? (stored as { project?: unknown }).project : undefined;
+    const project = typeof raw === 'string' ? normalizeProjectKey(raw) : undefined;
+    if (!project) return { ok: false, reason: 'the stored report names no project.' };
+    if (!(await deps.jira())) return { ok: false, reason: 'Jira is not set up in that window\'s Ticket Sidekick settings.' };
+    return { ok: true, recipe: { project } };
+  },
+
   sourceKey: recipe => recipe.project,
   sourceLabel: recipe => `Jira project ${recipe.project}`,
   initialWorking: () => ({ ...NO_FILTERS }),
