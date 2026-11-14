@@ -1,4 +1,4 @@
-Set a default Jira project key so `@jira create` and the report importers don't need one spelled out in every prompt.
+Set a default Jira project key so creating tickets, the security report and the report importers don't need one spelled out in every prompt.
 
 [Open default project setting](command:workbench.action.openSettings?%22ticketSidekick.jira.defaultProject%22)
 

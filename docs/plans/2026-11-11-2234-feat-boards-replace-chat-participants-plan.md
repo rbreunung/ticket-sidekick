@@ -89,7 +89,7 @@ Made for this plan:
 - **Step 1 closes the gaps 0.9.0 left, then removes every `@jira` flow except the imports.** (session-settled: user-approved — chosen over dropping any-field updates and the field commands, and over keeping `@jira` for them until step 2.) Governs R33, R40 to R42.
 - **Fields can be listed per ticket and per project and issue type.** (session-settled: user-directed — chosen over per ticket only, and over every field of the Jira instance.) Governs R41.
 - **`@jira /security-report` is removed in step 1.** (session-settled: user-approved — chosen over removal with the imports or with `@jira` itself.) Governs R33.
-- **Each step is a preview release first.** (session-settled: user-approved — chosen over a checklist before merge, and over automated tests only.) Governs R35.
+- **Every release of the migration is a preview; the one normal release comes at the end.** (session-settled: user-directed — chosen over a normal release after each step and over a hotfix branch for the stable channel: colleagues are not interrupted, and work in the middle of a branch never has to stop for a release. Amended on 2026-11-14 by [`2026-11-14-1257-feat-ticket-list-parity-and-step1-removal-plan.md`](2026-11-14-1257-feat-ticket-list-parity-and-step1-removal-plan.md); it replaced "each step is a preview release first".) Governs R35.
 - **(Withdrawn, see R36.) The minimum VS Code version rises in step 1.** (session-settled: user-directed — chosen over raising it with the last step, and over keeping the floor and showing a notice.) Governs R36.
 - **The target architecture is documented and approved before any board code.** (session-settled: user-directed — chosen over writing the page while step 1 is built, over rewriting the migration document, and over a folder of separate decision records: the design is settled in advance and later feature work reads one page.) Governs R47 to R49.
 - **The work ends with a full documentation review.** (session-settled: user-directed.) Governs R50.
@@ -178,7 +178,7 @@ Made for this plan:
 - R32. The work ships in three steps, in this order, after the architecture page of R47 and a foundation step with the session model, the security report board and the sessions board (R51 to R61): ticket list board with R28, R29 and R40 to R42, import board, PR review board with R27.
 - R33. Each step deletes the participant flows it replaces. Step 1 removes every `@jira` flow except the imports, including `/security-report`, each only once its row in the Replacement Map is in place. Step 2 removes the imports and `@jira` itself. Step 3 removes `@bitbucket` and the three Bitbucket Agent Mode tools.
 - R34. Step 2 removes the three Command Palette import commands.
-- R35. Each step first goes out on the preview channel with the old flows already removed. It becomes a normal release only after a written manual checklist passes on the maintainer's managed machine, with proxy, the organisation's Copilot policies and real Jira and Bitbucket Data Center.
+- R35. Every step goes out on the preview channel only, with the old flows already removed, and the stable channel stays on its current version with no hotfix release until the whole migration is done. Each step adds its part to a written manual checklist and runs it on the preview build on the maintainer's managed machine, with proxy, the organisation's Copilot policies and real Jira and Bitbucket Data Center; the one normal release at the end reruns the whole checklist.
 - R36. (Withdrawn.) The minimum VS Code version stays at 1.95, the first with language model tools; no MCP server provider is needed.
 - R37. After step 3 no participant, `@jira` help screen, follow-up chip, disambiguation entry or Local harness support remains, and both walkthroughs describe the Copilot chat.
 - R38. Each step updates the README tables and the user manual pages for what it adds and removes.
@@ -255,7 +255,7 @@ Every `@jira` and `@bitbucket` command, with what replaces it and the step that 
 - AE14. **Covers R58, R59.** Given a session last used 15 days ago and the default setting, when the extension starts, then that session is deleted. Given a session stored by an older format, when its board is opened, then a notice says it was discarded and the board starts from the sources.
 - AE15. **Covers R54.** Given an unfinished import of `report.xml`, when the developer asks to import `report.xml` again, then the existing session opens with its choices.
 - AE12. **Covers R44, R2.** Given the board cannot open, when the developer asks in plain words to move five tickets to Closed, then the answer is the message of R2 and no ticket is moved.
-- AE9. **Covers R33, R35.** Given step 1 is out as a preview, when a colleague on the stable channel types `@jira search`, then it still works until the step becomes a normal release.
+- AE9. **Covers R33, R35.** Given step 1 is out as a preview, when a colleague on the stable channel types `@jira search`, then it still works, because no normal release ships before the whole migration is done.
 
 ### Success Criteria
 

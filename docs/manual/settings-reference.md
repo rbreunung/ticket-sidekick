@@ -48,11 +48,11 @@ Sprint lookups automatically search all Scrum boards for the project, skipping K
 "ticketSidekick.jira.requiredFields": ["assignee", "priority", "fixVersions"]
 ```
 
-Used by the `check required fields` command.
+Used by `jira_check_required_fields` (`/ts-jira check-fields <KEY>`).
 
 **Optional: always-show fields**
 
-By default `@jira show` omits fields that are null. Add field IDs to `additionalDisplayFields` to always show them (as `_Not set_` when empty). Run `@jira show fields on PROJ-123` to discover available field IDs.
+By default viewing or loading a ticket (`jira_view_ticket`, `jira_load_ticket`) omits fields that are null. Add field IDs to `additionalDisplayFields` to always show them (as `_Not set_` when empty). Run `/ts-jira fields PROJ-123` to discover available field IDs.
 
 ```json
 "ticketSidekick.jira.additionalDisplayFields": ["customfield_10020", "customfield_10500"]
@@ -60,23 +60,23 @@ By default `@jira show` omits fields that are null. Add field IDs to `additional
 
 **Optional: search result columns**
 
-By default `@jira find …` shows Key, Summary, Status, and Assignee. Add field IDs to `searchFields` to append them as extra columns in the results table:
+By default a search (`jira_find_tickets`) shows Key, Summary, Status, Assignee and Priority, and the ticket list board shows Ticket, Summary, Status, Type, Assignee and Priority. Add field IDs to `searchFields` to append them as extra columns to both:
 
 ```json
 "ticketSidekick.jira.searchFields": ["priority", "customfield_10020"]
 ```
 
-Run `@jira show fields on PROJ-123` to discover field IDs. Values render the same way as in `@jira show`.
+Run `/ts-jira fields PROJ-123` to discover field IDs. Values render the same way as when you view a ticket.
 
 **Optional: cleanup review columns**
 
-By default the review screen of `@jira run cleanup …` and other bulk transitions lists each ticket's type, key, summary, current and target status, and the resolution when one is set. Add field IDs to `cleanupFields` to show them as extra columns, so you can check e.g. the fix version before confirming:
+A cleanup board, and a ticket list opened with a proposed move, shows `cleanupFields` as extra columns in place of `searchFields`, so you can check e.g. the fix version before applying:
 
 ```json
 "ticketSidekick.jira.cleanupFields": ["fixVersions", "priority"]
 ```
 
-Subtasks in the batch get their own values for these columns. Run `@jira show fields on PROJ-123` to discover field IDs.
+Subtasks on a cleanup board get their own values for these columns. Run `/ts-jira fields PROJ-123` to discover field IDs.
 
 **Optional: team JQL**
 
@@ -84,11 +84,11 @@ Subtasks in the batch get their own values for these columns. Run `@jira show fi
 "ticketSidekick.jira.myTeamJql": "project = BACKEND AND assignee in membersOf(\"backend-team\")"
 ```
 
-A JQL fragment that describes your team's tickets. When a search mentions "my team" or "our team" (e.g. `@jira open bugs for my team`), `@jira` combines this fragment with the rest of your request. If the request adds no other conditions, only unresolved tickets are listed. If the setting is empty, `@jira` tells you to set it instead of guessing.
+A JQL fragment that describes your team's tickets. When you ask Copilot for "my team" or "our team" (e.g. "open bugs for my team"), the search tool and the ticket list board combine this fragment with the rest of your request. If the setting is empty, the tool tells you to set it instead of guessing.
 
 **Optional: hidden fields**
 
-By default `@jira show` already omits several noisy system fields (e.g. `statusCategory`, `watches`, `votes`). To suppress additional fields, add their IDs to `hiddenDisplayFields`. Fields listed in `additionalDisplayFields` always override this list.
+By default viewing a ticket already omits several noisy system fields (e.g. `statusCategory`, `watches`, `votes`). To suppress additional fields, add their IDs to `hiddenDisplayFields`. Fields listed in `additionalDisplayFields` always override this list.
 
 ```json
 "ticketSidekick.jira.hiddenDisplayFields": ["customfield_10900", "workratio"]
@@ -100,7 +100,7 @@ By default `@jira show` already omits several noisy system fields (e.g. `statusC
 "ticketSidekick.jira.showConnectionInfo": true
 ```
 
-When enabled, every `@jira` response starts with an italic line showing the active base URL, API version, and auth type. Useful during initial setup or when switching between instances. Off by default.
+When enabled, every `@jira` import response starts with an italic line showing the active base URL, API version, and auth type. Useful during initial setup or when switching between instances. Off by default. `/ts-jira check` shows the same and more at any time.
 
 ## Board session settings
 

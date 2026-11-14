@@ -897,7 +897,7 @@
           "ticketSidekick.jira.showConnectionInfo": {
             "type": "boolean",
             "default": false,
-            "description": "When enabled, each @jira response starts with an italic line showing the active base URL, API version, and auth type."
+            "description": "When enabled, each @jira import response starts with an italic line showing the active base URL, API version, and auth type."
           },
           "ticketSidekick.jira.additionalDisplayFields": {
             "type": "array",
@@ -905,7 +905,7 @@
               "type": "string"
             },
             "default": [],
-            "description": "Field IDs always shown in @jira show output even when their value is null. Use @jira show fields on PROJ-123 to discover field IDs (e.g. [\"customfield_10020\", \"customfield_10500\"])."
+            "description": "Field IDs always shown when a ticket is viewed or loaded, even when their value is null. Type /ts-jira fields PROJ-123 to discover field IDs (e.g. [\"customfield_10020\", \"customfield_10500\"])."
           },
           "ticketSidekick.jira.searchFields": {
             "type": "array",
@@ -913,7 +913,7 @@
               "type": "string"
             },
             "default": [],
-            "description": "Field IDs to add as extra columns in @jira search results (e.g. [\"priority\", \"customfield_10020\"]). Use @jira show fields on PROJ-123 to discover field IDs."
+            "description": "Field IDs to add as extra columns to search results and the ticket list board (e.g. [\"priority\", \"customfield_10020\"]). Type /ts-jira fields PROJ-123 to discover field IDs."
           },
           "ticketSidekick.jira.cleanupFields": {
             "type": "array",
@@ -921,7 +921,7 @@
               "type": "string"
             },
             "default": [],
-            "description": "Field IDs to add as extra columns in the @jira run cleanup / bulk transition review table (e.g. [\"fixVersions\", \"priority\"]). Use @jira show fields on PROJ-123 to discover field IDs."
+            "description": "Field IDs to add as extra columns on a cleanup board and on a ticket list opened with a proposed move, in place of searchFields (e.g. [\"fixVersions\", \"priority\"]). Type /ts-jira fields PROJ-123 to discover field IDs."
           },
           "ticketSidekick.jira.hiddenDisplayFields": {
             "type": "array",
@@ -940,11 +940,11 @@
               "updated",
               "statuscategorychangedate"
             ],
-            "description": "Field IDs excluded from @jira show output. Fields in additionalDisplayFields override this list. Use @jira show fields on PROJ-123 to discover field IDs."
+            "description": "Field IDs left out when a ticket is viewed or loaded. Fields in additionalDisplayFields override this list. Type /ts-jira fields PROJ-123 to discover field IDs."
           },
           "ticketSidekick.jira.myTeamJql": {
             "type": "string",
-            "description": "JQL fragment representing your team's tickets (e.g. 'project = BACKEND AND assignee in membersOf(\"backend-team\")'). When you ask '@jira open tickets for my team', this is ANDed with the rest of your query."
+            "description": "JQL fragment representing your team's tickets (e.g. 'project = BACKEND AND assignee in membersOf(\"backend-team\")'). When you ask Copilot for your team's tickets, the search tool and the ticket list board AND this with the rest of the query."
           }
         }
       },
@@ -1231,7 +1231,7 @@
           {
             "id": "jiraDefaultProject",
             "title": "Set a default project",
-            "description": "So `@jira create` and the report importers don't need a project key in every prompt.\n[Open setting](command:workbench.action.openSettings?%22ticketSidekick.jira.defaultProject%22)",
+            "description": "So creating tickets, the security report and the report importers don't need a project key in every prompt.\n[Open setting](command:workbench.action.openSettings?%22ticketSidekick.jira.defaultProject%22)",
             "media": {
               "markdown": "walkthroughs/jira/default-project.md"
             },
@@ -1241,8 +1241,8 @@
           },
           {
             "id": "jiraWorkflow",
-            "title": "Discover your ticket types & workflow",
-            "description": "Sample your project's real tickets to learn its issue types and status-transition graph.\n[Ask @jira](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20discover%20workflow%20%3CPROJECT%3E%20%3CISSUE_TYPE%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
+            "title": "See your ticket workflow",
+            "description": "See the statuses a ticket can reach; the project's workflow is discovered the first time.\n[Show the workflow](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%2Fts-jira%20workflow%20%3CKEY%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
             "media": {
               "markdown": "walkthroughs/jira/workflow.md"
             },
@@ -1253,7 +1253,7 @@
           {
             "id": "jiraFirstTicket",
             "title": "Create your first ticket",
-            "description": "Turn an example ticket into a template, then create a ticket from it — or create one directly.\n[Create a template](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%2Fts-jira-template%20%3CKEY%3E%20%3CNAME%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)\n[Or create directly](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40jira%20create%20%3CTYPE%3E%20in%20%3CPROJECT%3E%3A%20%3CSUMMARY%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
+            "description": "Turn an example ticket into a template, then create a ticket from it — or create one directly.\n[Create a template](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%2Fts-jira-template%20%3CKEY%3E%20%3CNAME%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)\n[Or create directly](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%2Fts-jira-create%20%3CTYPE%3E%20in%20%3CPROJECT%3E%3A%20%3CSUMMARY%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
             "media": {
               "markdown": "walkthroughs/jira/first-ticket.md"
             },

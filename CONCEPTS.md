@@ -56,7 +56,7 @@ A ticket field whose value is usually the same across many tickets of a kind —
 ## Boards
 
 ### Board
-A page in an editor tab (a VS Code webview) that shows a session and sends the developer's actions to the extension over the tab's message channel; the page holds no state. Also called an editor view. A write is shown as a preview before a second Apply click, and a write to several tickets, a close or a Bitbucket post also needs a VS Code confirmation. Built: the security report (no writes), the ticket list (search, bulk move, bulk field update) and the sessions board. Planned: cleanup on the ticket list, the import board (Veracode, Waltz, email) and the PR review board.
+A page in an editor tab (a VS Code webview) that shows a session and sends the developer's actions to the extension over the tab's message channel; the page holds no state. Also called an editor view. A write is shown as a preview before a second Apply click, and a write to several tickets, a close or a Bitbucket post also needs a VS Code confirmation. Built: the security report (no writes), the ticket list (search, bulk move, bulk field update, cleanup) and the sessions board. Planned: the import board (Veracode, Waltz, email) and the PR review board.
 *Avoid:* "canvas" — VS Code canvases were tried and removed; a board is never one.
 
 ### Cleanup board

@@ -1,8 +1,6 @@
 # Jira Templates and Cleanup Rules
 
-> **Note.** `.jira-templates.json` is used by the Copilot tools too (`jira_create_ticket`, `jira_list_templates`, `/ts-jira-create`). The `@jira` commands on this page (generating a template from a ticket, `@jira cleanup`) belong to the deprecated chat participant and stay until the tools and the ticket list board cover them; see [Jira Tools for Copilot Chats](copilot-tools.md).
-
-Part of `@jira` — `.jira-templates.json` defines per-application templates with guided description collection, plus named cleanup rules for bulk status transitions. See the main [README](../../README.md) for setup and core commands first.
+`.jira-templates.json` defines per-application ticket templates and named cleanup rules. The Copilot tools create tickets from the templates (`jira_list_templates`, `jira_create_ticket`, `/ts-jira-create`, `/ts-jira-template`), and the ticket list board runs the cleanup rules; see [Jira Tools for Copilot Chats](copilot-tools.md) and [Boards](boards.md#cleanup). The Veracode, Waltz and email imports of `@jira` use the templates too. See the main [README](../../README.md) for setup first.
 
 ## Templates and cleanup rules
 
@@ -138,21 +136,21 @@ That confirmation is the only review: approve it and the template is added to `.
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `name` | yes | — | Rule identifier — used in `@jira run cleanup "name"` |
+| `name` | yes | — | Rule identifier — used in `/ts-jira cleanup "name"`, "run the cleanup name" and `Ticket Sidekick: Run a cleanup rule` |
 | `project` | yes | — | Jira project key — always anchors the search query and workflow graph lookup |
 | `issueType` | yes | — | Issue type — always anchors the query; use the exact Jira name (e.g. `Bug`, `Story`) |
 | `targetState` | yes | — | Destination Jira status name (e.g. `Done`, `Closed`) |
 | `resolution` | no | — | Resolution applied to parent ticket transitions (e.g. `Fixed`, `Won't Fix`) |
 | `subtaskResolution` | no | same as `resolution` | Resolution applied to subtask transitions — falls back to `resolution` if omitted |
 | `subtaskTargetState` | no | same as `targetState` | Destination status for subtask transitions — falls back to `targetState` if omitted |
-| `closeSubtasks` | no | `false` | When `true`, open subtasks are transitioned before their parent |
+| `closeSubtasks` | no | `false` | When `true`, open subtasks are listed beneath their parent and transitioned before it |
 | `jql` | no | — | Extra JQL filter ANDed onto the base query — write only the additional conditions; `project`, `issueType`, and `status` are always included |
 | `fixVersionFilter` | no | — | `"released"` or `"unreleased"` — adds `fixVersion in releasedVersions()` / `fixVersion in unreleasedVersions()` to the query |
 | `fixVersionPattern` | no | — | Glob-style pattern (e.g. `"Release*"`) — adds `fixVersion ~ "pattern"` to the query (requires Jira 11+ / modern Data Center) |
 
 > **Note:** `project` and `issueType` are always prepended to the effective JQL even when `jql` is set — they are never replaced. The `jql` field adds extra conditions such as `sprint in openSprints()`.
 >
-> `fixVersionFilter` and `fixVersionPattern` are mutually exclusive in a rule — `fixVersionFilter` takes precedence if both are set. A prompt override (`in "v1.2"`, `in released`, or `in "Release*"`) always wins over the rule setting.
+> `fixVersionFilter` and `fixVersionPattern` are mutually exclusive in a rule — `fixVersionFilter` takes precedence if both are set. A fix version given when the cleanup starts (`in 3.2`, `in released` or `in Release*`) always wins over the rule setting.
 
 ### Version filter examples
 
@@ -166,37 +164,38 @@ That confirmation is the only review: approve it and the template is added to `.
 ```
 → `AND fixVersion ~ "Release*"`
 
-You can also specify a version filter in the prompt without touching the rule:
+You can also give a fix version when the cleanup starts, without touching the rule:
 
 ```text
-@jira run cleanup "Close released bugs" in released
-@jira run cleanup "Close released bugs" in "Release*"
-@jira run cleanup "Close released bugs" in "Release 3.2"
-@jira run cleanup "Close released bugs" in "released"
+/ts-jira cleanup "Close released bugs" in released
+/ts-jira cleanup "Close released bugs" in Release*
+/ts-jira cleanup "Close released bugs" in 3.2
+/ts-jira cleanup "Close released bugs" in "released"
 ```
 
-The last example (quoted `"released"`) targets a Jira version literally named _"released"_ — it does **not** trigger `releasedVersions()`. Only the unquoted form does.
+The last example (`"released"` in double quotes) targets a Jira version literally named _released_ — it does **not** use `releasedVersions()`. `Ticket Sidekick: Run a cleanup rule` asks for the same value after you pick the rule.
 
-### Interaction model
+### What the cleanup board does
 
-| Prompt | JQL used | Resolution |
+| Started with | JQL used | Resolution |
 |---|---|---|
-| `@jira run cleanup "Name"` | base + `rule.jql` if set | `rule.resolution`, or prompted if absent |
-| `@jira run cleanup "Name" in "v1.2"` | base + `fixVersion = "v1.2"` + `rule.jql` | same |
-| `@jira run cleanup "Name" in released` | base + `fixVersion in releasedVersions()` | same |
-| `@jira run cleanup "Name" in unreleased` | base + `fixVersion in unreleasedVersions()` | same |
-| `@jira run cleanup "Name" in "Release*"` | base + `fixVersion ~ "Release*"` | same |
-| `@jira run cleanup "Name" with resolution "Won't Fix"` | same JQL | prompt value overrides rule |
-| `@jira close PROJ Bug` | auto-built (matches rule by project + type if available) | prompted if closing to a closed state |
-| `@jira close PROJ bugs in "v1.2" with resolution Released` | auto-built + fixVersion | prompt value — no dialog |
+| `/ts-jira cleanup "Name"` | base + the rule's fix version + `rule.jql` if set | `rule.resolution`; chosen on the board when the target closes tickets and the rule names none |
+| `/ts-jira cleanup "Name" in 3.2` | base + `fixVersion = "3.2"` + `rule.jql` | same |
+| `/ts-jira cleanup "Name" in released` | base + `fixVersion in releasedVersions()` + `rule.jql` | same |
+| `/ts-jira cleanup "Name" in unreleased` | base + `fixVersion in unreleasedVersions()` + `rule.jql` | same |
+| `/ts-jira cleanup "Name" in Release*` | base + `fixVersion ~ "Release*"` + `rule.jql` | same |
 
-The base query always includes `AND resolution is EMPTY` — tickets that were previously resolved (even if since reopened) are automatically excluded.
+The base query always includes `AND resolution is EMPTY` — tickets that were previously resolved (even if since reopened) are automatically excluded. The board lists the tickets 50 to a page and applies the selected tickets of the page in view; see [Boards → Cleanup](boards.md#cleanup).
 
-When you run `@jira create`, the plugin shows a numbered list of your templates. Choosing one:
+To close tickets without a rule, ask Copilot ("close the PROJ bugs in fix version 3.2"): it opens the ticket list with the move proposed, and you apply it a page at a time.
 
-- Pre-populates custom fields from `defaultFields` and resolved `resolveFields` entries
-- Guides you through each `descriptionSections` entry with a follow-up question per turn, building the description incrementally
-- Resumes automatically if the conversation is interrupted — session state is preserved in the chat history
+### Creating a ticket from a template
+
+When you create a ticket with `/ts-jira-create` (or ask Copilot in Agent mode to create one), Copilot lists your templates with `jira_list_templates` and uses the one that fits, or asks you to pick. Using a template:
+
+- Sets the fields from `defaultFields` and the resolved `resolveFields` entries
+- Uses each `descriptionSections` entry as a heading of the drafted description, filled from your request; a section Copilot cannot fill becomes a short question to you
+- Shows the draft before anything is created
 
 **`resolveFields` entries** support two forms:
 

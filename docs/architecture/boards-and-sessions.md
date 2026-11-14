@@ -13,9 +13,10 @@ This page describes how Ticket Sidekick is built once the chat participants are 
 - **Tools:** the Jira tool catalog (`src/tools/jiraTools/`) is registered with VS Code as language model tools by `src/tools/registerJiraTools.ts`. That is the only route; no setting chooses one. Decision D21.
 - **Host:** a board is a webview in an editor tab the extension opens (`src/boards/boardPanels.ts`). The tab loads the page from the extension's own files and the page talks to the extension with `postMessage`. Decisions D18 and D20.
 - **Removed on 2026-11-13:** the MCP server with its lifecycle, keys, request guard and diagnostics command; the `ticketSidekick.jira.toolsFrom` setting; the local HTTP server and the `http.noProxy` requirement; the canvas program, the agent plugin and the `@github/copilot-sdk` and `@modelcontextprotocol/sdk` dependencies. Why: an organisation's Copilot policy blocked the MCP server while extension tools got through, VS Code 1.146 did not register an extension's canvas, and two routes for the same tools was a switch nobody wanted to operate.
-- **Built:** the session core, the board message handling, the security report board, the ticket list board (search, bulk move, bulk field update), the sessions board, and of the plan's step 1 tools R40 to R42, plus spell check (R28) and template from a ticket (R29) as `/ts-jira-spell-check` and `/ts-jira-template` with their tools.
+- **Built:** the session core, the board message handling, the security report board, the ticket list board (search with narrowing, paging, configurable columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules`, the out-of-date state), the sessions board, and of the plan's step 1 tools R40 to R42, plus spell check (R28) and template from a ticket (R29) as `/ts-jira-spell-check` and `/ts-jira-template` with their tools.
 - **Open points:** the full list, with the requirement each belongs to and the participant flow it blocks, is in [`migration-status.md`](migration-status.md).
-- **Not built:** cleanup on the ticket list board (R9), the import board, the PR review board with its Bitbucket tool additions, and the removal of the deprecated `@jira` and `@bitbucket` participants.
+- **Removed on 2026-11-14:** every Step 1 flow of `@jira`; it runs only the report imports now.
+- **Not built:** the import board, the PR review board with its Bitbucket tool additions, and the removal of `@jira` (its imports) and `@bitbucket`.
 
 ## 1. The idea in one paragraph
 
@@ -162,8 +163,8 @@ stateDiagram-v2
 
 ### 4.2 Freshness and conflicts (R55, R56)
 
-- After showing a stored session, the manager asks the board kind to **check** the sources in the background. Refresh runs the same check on demand.
-- The board kind's `reconcile` compares stored and fresh data and returns the updated derived data plus a list of **conflicts**: working state whose target changed or disappeared.
+- After showing a stored session, the manager asks the board kind to **check** the sources in the background. Refresh runs the same check on demand. The manager tells `reconcile` which of the two it is (`CheckMode`: `background` or `refresh`).
+- The board kind's `reconcile` compares stored and fresh data and returns the updated derived data plus a list of **conflicts**: working state whose target changed or disappeared. A kind may instead keep the stored data after a background check and mark itself out of date: the ticket list does, allows only paging until Refresh, and on Refresh takes the fresh rows and keeps the selection of every ticket still listed.
 - A board shows a banner with the count, marks each conflict in place, can show the stored and the fresh value, and offers **resolve** (accept the fresh state and redo or keep the choice) or **drop** per conflict.
 - A PR review is never re-run by a check. The check only compares the PR's head commit and sets "the PR has moved since this review"; re-running is the developer's choice.
 
@@ -243,7 +244,7 @@ The interface is `BoardKind` in `src/sessions/boardKind.ts`.
 
 `reduce`, `plan` and `reconcile` being pure is what keeps the boards testable as scenarios in Vitest, the way `sessionState.ts` is today. The existing import, cleanup and review logic moves behind these members; its parsers, builders and services are reused, and only the reply parsing and chat rendering are dropped.
 
-Built kinds: `security-report`, `ticket-list`. Planned: cleanup on `ticket-list`, `import` (Veracode, Waltz, email, as descriptors like today), `review`. The sessions board is not a kind: it lists sessions and has its own requests.
+Built kinds: `security-report`, `ticket-list` (a JQL query, a saved filter or a cleanup rule as its source; the cleanup rules are in `src/boards/ticketList/cleanupSource.ts`). Planned: `import` (Veracode, Waltz, email, as descriptors like today), `review`. The sessions board is not a kind: it lists sessions and has its own requests.
 
 ---
 
