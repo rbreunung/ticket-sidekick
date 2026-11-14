@@ -91,6 +91,7 @@ function render(view, board, busy) {
     h('thead', {}, h('tr', {},
       h('th', { scope: 'col' }, 'Select'),
       COLUMNS.map(([column, text]) => sortHeader(view, board, column, text, locked)),
+      view.columns.map(column => h('th', { scope: 'col' }, column.name)),
       h('th', { scope: 'col' }, 'Last result'))),
     h('tbody', {}, view.rows.map(row => h('tr', {},
       h('td', {}, h('input', {
@@ -99,6 +100,7 @@ function render(view, board, busy) {
       })),
       h('td', {}, row.url ? h('a', { href: row.url, target: '_blank', rel: 'noreferrer' }, row.key) : row.key),
       h('td', {}, row.summary), h('td', {}, row.status), h('td', {}, row.issueType), h('td', {}, row.assignee), h('td', {}, row.priority),
+      view.columns.map(column => h('td', {}, row.extra?.[column.id] ?? '')),
       h('td', { class: row.result && row.result.outcome !== 'done' ? 'flag-overdue' : undefined },
         row.result ? `${RESULT_TEXT[row.result.outcome]}${row.result.reason ? `: ${row.result.reason}` : ''}` : '')))));
 

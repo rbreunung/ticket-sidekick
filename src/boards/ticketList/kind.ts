@@ -21,7 +21,18 @@ export interface TicketRow {
   priority: string;
   /** Jira's `updated` time, used to notice that a ticket changed since the board read it. */
   updated: string;
+  /** The configured extra fields as plain text, by field id. */
+  extra?: Record<string, string>;
 }
+
+/** An extra column from the settings: the field id and the name shown as its header. */
+export interface ExtraColumn {
+  id: string;
+  name: string;
+}
+
+/** Which extra columns a board shows: the search columns, or the cleanup columns for a board that closes or moves tickets. */
+export type ColumnSet = 'search' | 'cleanup';
 
 export type ListSource =
   | { type: 'jql'; jql: string }
@@ -42,6 +53,8 @@ export interface TicketListRecipe {
 
 export interface TicketListData {
   rows: TicketRow[];
+  /** The extra columns of `ticketSidekick.jira.searchFields` and `ticketSidekick.jira.cleanupFields`. */
+  columns?: Record<ColumnSet, ExtraColumn[]>;
   /** More tickets match than were read. */
   truncated: boolean;
   baseUrl?: string;
@@ -68,6 +81,8 @@ export interface TicketListWorking {
   selection: Selection;
   /** The page in view, counted from 0. */
   page: number;
+  /** Chosen when the board opens: a proposed move shows the cleanup columns. */
+  columns: ColumnSet;
   /** Set when a background check found tickets that differ from the rows on show. */
   outOfDate: OutOfDate | null;
   change: ListChange | null;
@@ -92,7 +107,9 @@ export interface TicketListDeps {
   baseUrl(): Promise<string | undefined>;
   /** Resolves a saved filter by id or name; a string is the reason it could not. */
   resolveFilter(filter: string): Promise<{ id: string; name: string; jql: string } | string>;
-  search(jql: string, limit: number): Promise<{ rows: TicketRow[]; truncated: boolean }>;
+  /** The extra columns the settings ask for, with their field names. */
+  extraColumns(): Promise<Record<ColumnSet, ExtraColumn[]>>;
+  search(jql: string, limit: number, extraFieldIds: string[]): Promise<{ rows: TicketRow[]; truncated: boolean }>;
   /** The ticket as it is now, or undefined when it no longer exists. */
   readTicket(key: string): Promise<{ status: string; updated: string } | undefined>;
   /** Moves a ticket; resolves with a note on success, rejects with a short reason. */
@@ -107,6 +124,8 @@ export interface TicketListView {
   truncated: boolean;
   /** The rows of the page in view. */
   rows: Array<TicketRow & { url: string | null; selected: boolean; result: RowResult | null }>;
+  /** The extra columns shown after the fixed ones. */
+  columns: ExtraColumn[];
   totalRows: number;
   page: number;
   pageCount: number;
@@ -194,6 +213,10 @@ function sortValue(row: TicketRow, column: SortColumn): string {
   return row[column].toLowerCase();
 }
 
+function columnSetFor(change: ListChange | undefined): ColumnSet {
+  return change?.type === 'transition' ? 'cleanup' : 'search';
+}
+
 function fieldVerb(operation: FieldOperation | undefined): string {
   return operation === 'add' ? 'Add to' : operation === 'remove' ? 'Remove from' : 'Set';
 }
@@ -232,6 +255,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     selection: recipe.proposed ? { mode: 'all', except: [] } : { mode: 'only', keys: [] },
     page: 0,
     outOfDate: null,
+    columns: columnSetFor(recipe.proposed),
     change: recipe.proposed ?? null,
     proposed: recipe.proposed !== undefined,
     sort: null,
@@ -240,12 +264,14 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
 
   // Asked for again with a new proposed change: the change replaces the old one and all rows are selected.
   reopen: (session, recipe) => (recipe.proposed
-    ? { ...session.working, selection: { mode: 'all', except: [] }, change: recipe.proposed, proposed: true, results: {} }
+    ? { ...session.working, selection: { mode: 'all', except: [] }, change: recipe.proposed, proposed: true, results: {}, columns: columnSetFor(recipe.proposed) }
     : session.working),
 
   read: async (recipe, deps) => {
-    const { rows, truncated } = await deps.search(recipe.source.jql, MAX_LIST_ROWS);
-    return { readAt: deps.now(), fingerprints: {}, data: { rows, truncated, baseUrl: await deps.baseUrl() } };
+    const columns = await deps.extraColumns();
+    const fieldIds = [...new Set([...columns.search, ...columns.cleanup].map(c => c.id))];
+    const { rows, truncated } = await deps.search(recipe.source.jql, MAX_LIST_ROWS, fieldIds);
+    return { readAt: deps.now(), fingerprints: {}, data: { rows, truncated, columns, baseUrl: await deps.baseUrl() } };
   },
 
   // By itself the check only says that the list is out of date and keeps the rows on show; on
@@ -381,6 +407,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     }));
     return {
       title: sourceTitle(session.recipe.source), jql: session.recipe.source.jql, truncated: data.truncated, rows: view,
+      columns: data.columns?.[working.columns] ?? [],
       totalRows: rows.length, page, pageCount: pageCount(rows.length), outOfDate: working.outOfDate,
       selectedCount: data.rows.filter(r => isSelected(working.selection, r.key)).length, change: working.change, proposed: working.proposed, sort: working.sort,
     };

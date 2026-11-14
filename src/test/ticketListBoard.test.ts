@@ -24,7 +24,11 @@ function fake(rows: TicketRow[] = [row(1), row(2), row(3, 'Done')]): Fake {
     jiraConfigured: async () => true,
     baseUrl: async () => 'https://jira.example.com',
     resolveFilter: async name => (name === 'mine' ? { id: '42', name: 'My open tickets', jql: 'assignee = currentUser()' } : `No saved filters found matching "${name}".`),
-    search: async () => ({ rows: [...jira.values()].map(r => ({ ...r })), truncated: false }),
+    extraColumns: async () => ({ search: [{ id: 'customfield_1', name: 'Team' }], cleanup: [{ id: 'fixVersions', name: 'Fix versions' }] }),
+    search: async (_jql, _limit, fieldIds) => ({
+      rows: [...jira.values()].map(r => ({ ...r, extra: Object.fromEntries(fieldIds.map(id => [id, `${id} of ${r.key}`])) })),
+      truncated: false,
+    }),
     readTicket: async key => { const t = jira.get(key); return t ? { status: t.status, updated: t.updated } : undefined; },
     move: async (key, status) => {
       if (key === 'PROJ-2' && status === 'Blocked') throw new Error('no path to Blocked');
@@ -236,6 +240,29 @@ describe('a list checked against Jira', () => {
     const s = await open(deps);
     const merged = ticketListKind.reconcile(s, await ticketListKind.read(s.recipe, deps), 'background');
     expect(merged.working.outOfDate).toBeNull();
+  });
+});
+
+describe('extra columns from the settings', () => {
+  it('shows the search columns for a query, with each ticket\'s value', async () => {
+    const view = ticketListKind.view(await open(fake()));
+    expect(view.columns).toEqual([{ id: 'customfield_1', name: 'Team' }]);
+    expect(view.rows[0].extra?.customfield_1).toBe('customfield_1 of PROJ-1');
+  });
+
+  it('shows the cleanup columns when the board opens with a proposed move, and keeps them when the change is edited', async () => {
+    let s = await open(fake(), { jql: 'project = PROJ', change: { type: 'transition', status: 'Closed' } });
+    expect(ticketListKind.view(s).columns).toEqual([{ id: 'fixVersions', name: 'Fix versions' }]);
+    s = act(s, { type: 'change', change: { type: 'field', field: 'labels', value: 'x' } });
+    expect(ticketListKind.view(s).columns).toEqual([{ id: 'fixVersions', name: 'Fix versions' }]);
+  });
+
+  it('switches to the cleanup columns when the same list is asked for again with a proposed move', async () => {
+    const deps = fake();
+    const s = await open(deps);
+    const again = await ticketListKind.validate({ jql: 'project = PROJ', change: { type: 'transition', status: 'Done' } }, deps);
+    const working = ticketListKind.reopen!(s, (again as { recipe: TicketListRecipe }).recipe);
+    expect(ticketListKind.view({ ...s, working }).columns).toEqual([{ id: 'fixVersions', name: 'Fix versions' }]);
   });
 });
 

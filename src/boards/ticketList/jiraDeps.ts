@@ -3,7 +3,9 @@ import { TicketService } from '../../services/TicketService';
 import { discoverAndCacheWorkflow, resolveAndApplyTransition } from '../../services/WorkflowService';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
-import type { TicketListDeps, TicketRow } from './kind';
+import type { JiraFieldMeta } from '../../jira/IJiraClient';
+import { renderFieldValue } from '../../services/TicketService';
+import type { ExtraColumn, TicketListDeps, TicketRow } from './kind';
 
 // What the ticket list board needs from Jira, built on the services the Jira tools use: the same
 // search, the same move (direct, along the cached workflow, or after discovering it once) and the
@@ -18,6 +20,12 @@ export interface TicketListJiraOptions {
   workspaceFolder(): string | undefined;
   now(): number;
   onDiag?: DiagLogger;
+}
+
+/** A field value as the board shows it: plain text, without the markdown emphasis the chat tables use. */
+function plainFieldText(value: unknown, meta: JiraFieldMeta | undefined): string {
+  if (!meta) return 'Not set';
+  return renderFieldValue(value, meta).replace(/^_(.*)_$/, '$1');
 }
 
 function textOf(value: unknown): string {
@@ -42,7 +50,29 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
     }
   };
 
+  // Field names are read once per window and only when an extra column is configured.
+  let fieldMeta: Promise<JiraFieldMeta[]> | undefined;
+  const metaById = async (): Promise<Map<string, JiraFieldMeta>> => {
+    const { ticketService } = await jira();
+    fieldMeta ??= ticketService.getFieldMeta().catch(err => { fieldMeta = undefined; throw err; });
+    return new Map((await fieldMeta).map(m => [m.id, m]));
+  };
+
   return {
+    extraColumns: async () => {
+      const access = await options.getJira();
+      const search = access.configured ? access.config.searchFields : [];
+      const cleanup = access.configured ? access.config.cleanupFields : [];
+      if (search.length + cleanup.length === 0) return { search: [], cleanup: [] };
+      const meta = await guarded(metaById);
+      const column = (setting: string) => (id: string): ExtraColumn => {
+        const known = meta.get(id);
+        if (!known) options.onDiag?.('warn', `Unrecognized field in ${setting}: ${id}`, { fieldId: id });
+        return { id, name: known?.name ?? id };
+      };
+      return { search: search.map(column('searchFields')), cleanup: cleanup.map(column('cleanupFields')) };
+    },
+
     jiraConfigured: async () => (await options.getJira()).configured,
     baseUrl: async () => {
       const access = await options.getJira();
@@ -66,14 +96,15 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
       }
     },
 
-    search: (jql, limit) => guarded(async () => {
+    search: (jql, limit, extraFieldIds) => guarded(async () => {
       const { ticketService } = await jira();
+      const meta = extraFieldIds.length > 0 ? await metaById() : new Map<string, JiraFieldMeta>();
       const rows: TicketRow[] = [];
       let startAt = 0;
       let token: string | undefined;
       let more = true;
       while (more && rows.length < limit) {
-        const page = await ticketService.searchTicketsRaw(jql, Math.min(PAGE_SIZE, limit - rows.length), ['updated'], startAt, token);
+        const page = await ticketService.searchTicketsRaw(jql, Math.min(PAGE_SIZE, limit - rows.length), ['updated', ...extraFieldIds], startAt, token);
         for (const issue of page.issues) {
           rows.push({
             key: issue.key,
@@ -83,6 +114,9 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
             assignee: textOf(issue.fields.assignee),
             priority: issue.fields.priority?.name ?? '',
             updated: typeof issue.fields.updated === 'string' ? issue.fields.updated : '',
+            ...(extraFieldIds.length > 0 ? {
+              extra: Object.fromEntries(extraFieldIds.map(id => [id, plainFieldText((issue.fields as Record<string, unknown>)[id], meta.get(id))])),
+            } : {}),
           });
         }
         startAt += page.issues.length;
