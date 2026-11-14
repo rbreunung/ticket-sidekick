@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import type { DiagLogger } from '../utils/diagTypes';
-import type { ExportedFile, RegisteredKind } from './boardKind';
+import type { CheckMode, ExportedFile, RegisteredKind } from './boardKind';
 import { sessionIdFor } from './sessionId';
 import type { SessionStore } from './sessionStore';
 import { SessionError, type ApplyLineResult, type Conflict, type PlanLine, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
@@ -173,7 +173,7 @@ export class SessionManager {
   }
 
   /** Reads the sources again and lays the working state over the fresh reading. */
-  private async check(entry: Entry): Promise<void> {
+  private async check(entry: Entry, mode: CheckMode = 'background'): Promise<void> {
     const session = entry.session;
     if (!session) return this.build(entry);
     entry.status = 'checking';
@@ -182,7 +182,7 @@ export class SessionManager {
     try {
       const { kind } = entry.reg;
       const fresh = await kind.read(session.recipe, await entry.reg.deps());
-      const merged = kind.reconcile(session, fresh);
+      const merged = kind.reconcile(session, fresh, mode);
       // A conflict stays until the developer resolves or drops it; a later check must not erase it.
       const fresher = new Set(merged.conflicts.map(c => c.id));
       entry.session = {
@@ -298,7 +298,7 @@ export class SessionManager {
   /** Checks the session against its sources now. */
   async refresh(kindName: string, id: string): Promise<BoardState> {
     const entry = await this.entry(kindName, id);
-    await this.enqueue(entry, () => this.check(entry));
+    await this.enqueue(entry, () => this.check(entry, 'refresh'));
     return this.toState(entry);
   }
 

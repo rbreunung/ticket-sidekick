@@ -14,7 +14,7 @@ interface Recipe { project: string }
 interface Derived { tickets: Record<string, string> }
 interface Working { selected: string[] }
 type Action = { type: 'select'; key: string } | { type: 'close' };
-interface Deps { tickets: Record<string, string>; reads: { count: number }; failRead?: boolean }
+interface Deps { tickets: Record<string, string>; reads: { count: number }; failRead?: boolean; modes?: string[] }
 
 function makeKind(formatVersion = 1): BoardKind<Recipe, Derived, Working, Action, { tickets: Record<string, string>; selected: string[] }, Deps> {
   return {
@@ -33,7 +33,8 @@ function makeKind(formatVersion = 1): BoardKind<Recipe, Derived, Working, Action
       if (deps.failRead) throw new Error('Jira answered 503');
       return { readAt: deps.reads.count, fingerprints: {}, data: { tickets: { ...deps.tickets } } };
     },
-    reconcile: (session, fresh) => {
+    reconcile: (session, fresh, mode) => {
+      source.modes?.push(mode ?? 'none');
       const gone = session.working.selected.filter(key => fresh.data.tickets[key] !== session.derived.data.tickets[key]);
       return {
         derived: fresh,
@@ -205,6 +206,19 @@ describe('restart', () => {
 
     const dropped = await restarted.action('demo', state.id, checked.revision, { type: 'conflict/drop', id: 'PROJ-1' });
     expect(dropped.conflicts).toEqual([]);
+  });
+
+  it('tells the board whether a check ran by itself or on Refresh', async () => {
+    const first = manager();
+    const state = await openReady(first);
+    source.modes = [];
+
+    const restarted = manager();
+    await ready(restarted, state.id);
+    expect(source.modes).toEqual(['background']);
+
+    await restarted.refresh('demo', state.id);
+    expect(source.modes).toEqual(['background', 'refresh']);
   });
 
   it('keeps the stored state on show when the check fails', async () => {
