@@ -58,7 +58,7 @@ O1, O2 and O5 are closed by [`../plans/2026-11-14-1257-feat-ticket-list-parity-a
 
 #### Import board parity ledger
 
-What the `@jira` import does today and what the import board does with it. The list is built from the reply commands (`IMPORT_COMMAND_ENTRIES` in `src/participant/session/importCommands.ts`) and the optional capabilities of `ReportImportDescriptor` and `ImportChangeTracking` (`src/participant/jira/reportImportTypes.ts`); `src/test/importBoardParity.test.ts` fails when one of them is missing here. "Carry over" means the board keeps the behaviour with the same rules and results (R16); "Dropped" means a recorded decision not to. The behaviour is described in [`docs/report-import.md`](../report-import.md). Why this ledger exists: [`docs/solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md`](../solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md).
+What the `@jira` import did and what the import board does with it. The list is built from the reply commands (`IMPORT_COMMAND_ENTRIES` in `src/participant/session/importCommands.ts`) and the optional capabilities of `ReportImportDescriptor` and `ImportChangeTracking` (`src/imports/descriptor.ts`); `src/test/importBoardParity.test.ts` fails when one of them is missing here. "Carry over" means the board keeps the behaviour with the same rules and results (R16); "Dropped" means a recorded decision not to. Every Veracode and Waltz "Carry over" row is on the import board: the parity test maps each one to the board action or rule that keeps it and to the board scenario test that proves the result, and fails when a row has no such entry. The email rows (`email-*`, `afterCreate`) stay with `@jira`, which still runs the email import. The behaviour is described in [`docs/report-import.md`](../report-import.md). Why this ledger exists: [`docs/solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md`](../solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md).
 
 **Reply commands**
 
@@ -100,7 +100,7 @@ What the `@jira` import does today and what the import board does with it. The l
 | `overviewExport` | Carry over | See `export` above |
 | `rewriteDueDate`, `dueDateNote` | Carry over | The Due Date a rewrite writes: Veracode sets it once and only moves it earlier, Waltz takes the regenerated group's date; the result line names it |
 
-**Rules with no command or capability of their own** (not checked by the test)
+**Rules with no command or capability of their own** (each one mapped by the test like the rows above)
 
 | Rule | Board | Note |
 | --- | --- | --- |

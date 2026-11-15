@@ -10,7 +10,7 @@ import { createVeracodeDescriptor } from '../imports/veracode';
 import { createWaltzDescriptor } from '../imports/waltz';
 import type { JiraCreatedIssue, JiraIssue, JiraSearchResult } from '../jira/IJiraClient';
 import type { Session, WritePlan } from '../sessions/sessionTypes';
-import { buildGroupDescriptionWiki, buildGroupLabels, sanitizeComponentLabel, type WaltzComponent } from '../utils/waltzReport';
+import { buildGroupDescriptionWiki, buildGroupLabels, buildGroupSummary, buildRatingLabel, sanitizeComponentLabel, type WaltzComponent } from '../utils/waltzReport';
 import type { RemediationDates } from '../utils/waltzDates';
 import { MockJiraClient } from './mocks/MockJiraClient';
 
@@ -439,6 +439,28 @@ describe('applying the Already ticketed actions', () => {
     const after = view(applied.session);
     expect(after.ticketed!.rows.every(r => r.written && !r.needsDecision)).toBe(true);
     expect(importKind.plan!(applied.session, { type: 'ticketed-apply' } as never).ok).toBe(false);
+  });
+
+  it('a Waltz rewrite of a merged ticket whose member left the report drops its label and swaps the rating label', async () => {
+    const kept = comp('example-lib:1.2.3');
+    const gone = { ...comp('other-lib:2.0.0'), maxVulnRating: 'Critical' };
+    jira.tickets = {
+      'PROJ-1': {
+        labels: buildGroupLabels([kept, gone]), summary: buildGroupSummary([kept, gone]),
+        description: buildGroupDescriptionWiki([kept, gone]), updated: 't1',
+      },
+    };
+    const session = onTicketed(await open(recipe('waltz', writeWaltz([kept]))));
+    const v = view(session);
+    expect(rowOf(v, 'PROJ-1').action).toBe('rewrite');
+
+    const applied = await apply(session, plan(session));
+    expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'done' })]);
+    const labels = jira.tickets['PROJ-1'].labels;
+    expect(labels).toEqual(expect.arrayContaining(buildGroupLabels([kept])));
+    expect(labels).not.toContain(sanitizeComponentLabel('other-lib:2.0.0'));
+    expect(labels).not.toContain(buildRatingLabel('Critical'));
+    expect(jira.tickets['PROJ-1'].summary).toBe(buildGroupSummary([kept]));
   });
 
   it('a new ticket for a resolved Waltz ticket is a full ticket linked to it', async () => {
