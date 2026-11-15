@@ -285,16 +285,16 @@ describe('what is missing around the import', () => {
     await expect(screen.handle('open', {})).rejects.toMatchObject({ status: 409 });
   });
 
-  it('asks for the project from Jira\'s list when the setting is empty, saves the pick, and does not ask again', async () => {
+  it('asks for the project when the setting is empty, with Jira\'s projects as suggestions, saves it, and does not ask again', async () => {
     settings.waltz = 'OSS finding';
     defaultProject = '';
     const { screen, view } = await screenWithFile('waltz');
     expect(view.project.options).toEqual([{ key: 'PROJ', name: 'Sample Project' }, { key: 'SEC', name: 'Security' }]);
     expect(view.project.askReason).toContain('ticketSidekick.jira.defaultProject');
     expect(view.canOpen).toBe(false);
-    expect(view.blocker).toBe('Pick a project.');
+    expect(view.blocker).toBe('Type or choose a project.');
 
-    const picked = await screen.handle('project', { key: 'SEC' }) as StartScreenView;
+    const picked = await screen.handle('project', { key: 'sec' }) as StartScreenView;
     expect(projectWrites).toEqual(['SEC']);
     expect(picked.project).toEqual({ key: 'SEC' });
     expect(picked.canOpen).toBe(true);
@@ -302,6 +302,15 @@ describe('what is missing around the import', () => {
     const next = (await screenWithFile('waltz', report('next.xlsx'))).view;
     expect(next.project).toEqual({ key: 'SEC' });
     expect(projectWrites).toHaveLength(1);
+  });
+
+  it('takes a typed key that is not in Jira\'s list once Jira finds the project, as a long list may be cut short', async () => {
+    settings.waltz = 'OSS finding';
+    defaultProject = '';
+    const { screen } = await screenWithFile('waltz');
+    const typed = await screen.handle('project', { key: 'OPS' }) as StartScreenView;
+    expect(projectWrites).toEqual(['OPS']);
+    expect(typed.project).toEqual({ key: 'OPS' });
   });
 
   it('asks for the project when the setting is not a key or names a project Jira does not have', async () => {
@@ -318,32 +327,40 @@ describe('what is missing around the import', () => {
     expect(unknown.project.key).toBeUndefined();
   });
 
-  it('refuses a picked project that is not in Jira\'s list and writes nothing', async () => {
+  it('refuses a typed key Jira does not have, or that is not a key, and writes nothing', async () => {
     defaultProject = '';
     const { screen } = await screenWithFile('waltz');
-    await expect(screen.handle('project', { key: 'OTHER' })).rejects.toMatchObject({ status: 400 });
+    projectFails = new JiraApiError('Not found', 404, 'https://jira.example.com/rest/api/2/project/OTHER');
+    await expect(screen.handle('project', { key: 'OTHER' })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('Jira has no project OTHER') });
+    await expect(screen.handle('project', { key: 'not a key' })).rejects.toMatchObject({ status: 400 });
     await expect(screen.handle('project', { key: '' })).rejects.toMatchObject({ status: 400 });
     expect(projectWrites).toEqual([]);
   });
 
-  it('shows the notice with Open Setting when Jira\'s project list cannot be read', async () => {
+  it('still takes a typed key when Jira\'s project list cannot be read, and says the list is missing', async () => {
     settings.waltz = 'OSS finding';
     defaultProject = '';
     listFails = new Error('connect ETIMEDOUT');
     const { screen, view } = await screenWithFile('waltz');
-    expect(view.project.options).toBeUndefined();
-    expect(view.project.problem).toContain('ticketSidekick.jira.defaultProject');
-    expect(view.project.problem).toContain('connect ETIMEDOUT');
+    expect(view.project.options).toEqual([]);
+    expect(view.project.listWarning).toContain('connect ETIMEDOUT');
     expect(view.canOpen).toBe(false);
 
     await screen.handle('open-setting', { setting: 'project' });
     expect(openedSettings).toEqual(['ticketSidekick.jira.defaultProject']);
     await expect(screen.handle('open-setting', { setting: 'anything.else' })).rejects.toMatchObject({ status: 400 });
-    expect(projectWrites).toEqual([]);
 
-    // The list is read again on the next view, once Jira answers.
-    listFails = undefined;
-    expect((await screen.view()).project.options).toHaveLength(2);
+    const typed = await screen.handle('project', { key: 'PROJ' }) as StartScreenView;
+    expect(projectWrites).toEqual(['PROJ']);
+    expect(typed.canOpen).toBe(true);
+  });
+
+  it('shows only the notice with Open Setting while Jira is not set up', async () => {
+    configured = false;
+    defaultProject = '';
+    const { view } = await screenWithFile('waltz');
+    expect(view.project.problem).toContain('ticketSidekick.jira.defaultProject');
+    expect(view.project.askReason).toBeUndefined();
   });
 
   it('says so when the workspace has no templates', async () => {

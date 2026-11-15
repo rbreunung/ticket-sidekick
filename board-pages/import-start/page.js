@@ -10,6 +10,7 @@ let view;
 let message;
 let busy = false;
 let typedIssueType = '';
+let typedProject = '';
 
 async function run(op, body) {
   if (busy) return;
@@ -77,12 +78,23 @@ function issueTypeCell() {
 
 function projectCell() {
   const { project } = view;
-  if (project.options) {
+  if (project.askReason) {
+    // A text field with Jira's projects as suggestions: a long corporate list is filtered as you type.
+    const submit = () => { if (typedProject.trim()) void run('project', { key: typedProject.trim() }); };
+    const input = h('input', {
+      id: 'project', type: 'text', 'aria-label': 'Project key', size: 16, value: typedProject, disabled: busy, autocomplete: 'off', placeholder: 'PROJ',
+      onInput: e => { typedProject = e.target.value; },
+      onKeydown: e => { if (e.key === 'Enter') submit(); },
+    });
+    // `list` is read-only as a property; only the attribute ties the field to its suggestions.
+    if (project.options.length > 0) input.setAttribute('list', 'project-options');
     return [
       h('p', {}, project.askReason),
-      h('select', { id: 'project', 'aria-label': 'Project', disabled: busy, onChange: e => { if (e.target.value) void run('project', { key: e.target.value }); } },
-        h('option', { value: '', selected: true }, 'Choose a project…'),
-        project.options.map(p => h('option', { value: p.key }, `${p.key} — ${p.name}`))),
+      project.listWarning ? h('p', { class: 'banner' }, project.listWarning) : null,
+      input,
+      project.options.length > 0 ? h('datalist', { id: 'project-options' }, project.options.map(p => h('option', { value: p.key }, p.name))) : null,
+      ' ', h('vscode-button', { id: 'project-use', secondary: true, disabled: busy, onClick: submit }, 'Use'),
+      ' ', h('vscode-button', { id: 'open-project-setting', secondary: true, disabled: busy, onClick: () => run('open-setting', { setting: 'project' }) }, 'Open Setting'),
     ];
   }
   if (!project.problem) return [h('span', {}, project.key ?? ''), project.key ? h('span', { class: 'muted' }, ' (from ticketSidekick.jira.defaultProject)') : null];
