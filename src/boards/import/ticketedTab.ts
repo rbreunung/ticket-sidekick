@@ -9,7 +9,7 @@ import {
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import type { HandlerPayload, ImportHandler, ImportSession } from './handlers';
 import { rowKeyOf, ticketedRows, type ImportData, type ImportDeps, type ImportRow } from './read';
-import type { ImportWorking } from './kind';
+import { decided, type ImportWorking } from './kind';
 
 // The import board's handler for the Already ticketed tab: filters, per-row actions and their writes. vscode-free.
 //
@@ -77,7 +77,7 @@ function boardRows(session: ImportSession): ImportRow[] {
     if (r.existingTicketKey === null) return r;
     const chosen = choices.actions[rowKeyOf(data, r)];
     const action = chosen ?? r.action ?? 'leave';
-    const written = writes.tickets[ticketedTargetKey(r)] !== undefined;
+    const written = decided(writes, ticketedTargetKey(r));
     return {
       ...r, action,
       ...(written && !isTicketedRowFinished(r) ? { result: { status: 'done' as const, action: 'rewrite' as const } } : {}),
@@ -103,7 +103,7 @@ function actionsFrom(data: ImportData, rows: ImportRow[], base: Record<string, T
 
 function needsDecision(session: ImportSession, row: ImportRow): boolean {
   const ticket = ticketedTargetKey(row);
-  return row.change !== null && row.change !== undefined && !session.working.writes.tickets[ticket] && row.result?.status !== 'done';
+  return row.change !== null && row.change !== undefined && !decided(session.working.writes, ticket) && row.result?.status !== 'done';
 }
 
 function hasNoDueDate(row: ImportRow): boolean {
@@ -378,7 +378,7 @@ export const ticketedTabHandler: ImportHandler = {
     return {
       filter: filterOf(session),
       shown: shownRows(session).map(r => r.id),
-      noDueDate: rows.filter(r => hasNoDueDate(r) && !session.working.writes.tickets[ticketedTargetKey(r)]).map(r => r.id),
+      noDueDate: rows.filter(r => hasNoDueDate(r) && !decided(session.working.writes, ticketedTargetKey(r))).map(r => r.id),
       notice: stateOf(session.working).notice ?? null,
       counts: { changed, unchanged, all: rows.length },
       actionLabels: LABELS,

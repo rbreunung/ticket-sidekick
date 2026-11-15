@@ -242,7 +242,7 @@ function isCreated(created: Set<string>, rowKey: string): boolean {
 }
 
 /** Whether the board wrote a ticket in a way that settles its Already-ticketed rows (a comment-only add does not). */
-function decided(writes: ImportWrites, ticket: string): boolean {
+export function decided(writes: ImportWrites, ticket: string): boolean {
   const record = writes.tickets[ticket];
   return record !== undefined && !record.commentOnly;
 }
@@ -481,6 +481,14 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
   reconcile: (session, fresh, mode: CheckMode) => {
     const tabs = tabsOf(session.recipe);
     if (mode === 'refresh') {
+      // A running ticket merge works from the Already-ticketed reading it started from: a Refresh
+      // takes every other tab and leaves that one marked until the merge ends.
+      if (IMPORT_HANDLERS.some(h => h.blocksPlans?.(session))) {
+        const take = new Set(tabs.filter(tab => tab !== 'ticketed'));
+        const derived = compose(session.derived, fresh, take, tabs);
+        const kept = keepChoices(session, derived.data);
+        return { derived, working: { ...session.working, ...kept, outOfDate: ['ticketed'] }, conflicts: [] };
+      }
       const kept = keepChoices(session, fresh.data);
       return { derived: fresh, working: { ...session.working, ...kept, outOfDate: [] }, conflicts: [] };
     }
