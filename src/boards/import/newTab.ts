@@ -2,7 +2,7 @@ import type { Applied, ApplyProgress, Planned, Reduced } from '../../sessions/bo
 import type { ApplyLineResult, WritePlan } from '../../sessions/sessionTypes';
 import type { ReportImportDescriptor } from '../../imports/descriptor';
 import { createTicketForRow, droppedFieldsNote } from '../../imports/create';
-import { addRowsToTicket } from '../../imports/rewrite';
+import { addRowsToTicket, checkAddTarget, type AddTargetCheck } from '../../imports/rewrite';
 import { mergeNewRows } from '../../imports/rows';
 import type { AddMode, ReviewRowBase, ReviewSession } from '../../imports/types';
 import { BATCH_LIMIT, templateLabelsOf } from '../../utils/reportImport';
@@ -151,7 +151,7 @@ function lineFor(group: Group, issueType: string): { target: string; change: str
   };
 }
 
-function planNew(session: ImportSession, action: { type: string } & Record<string, unknown>): Planned | undefined {
+function planNew(session: ImportSession, action: { type: string } & Record<string, unknown>, prepared?: unknown): Planned | undefined {
   if (action.type !== 'new-create' && action.type !== 'new-add') return undefined;
   const { working, recipe } = session;
   if (working.outOfDate.includes('new')) return { ok: false, reason: OUT_OF_DATE };
@@ -178,10 +178,22 @@ function planNew(session: ImportSession, action: { type: string } & Record<strin
   const groups = groupsOfIds(session, action.ids);
   if (!groups) return { ok: false, reason: 'Pick new rows that have no ticket yet.' };
   const ref = groups.map(groupRef).join('; ');
+  // What the target ticket holds now, read before the preview: the same check the chat makes first.
+  const check = prepared as AddTargetCheck | undefined;
+  if (check?.kind === 'rows-gone') return { ok: false, reason: GONE };
+  if (check?.kind === 'read-failed') return { ok: false, reason: `${ticket} could not be read: ${check.error}` };
+  const warnings: Array<{ target: string; change: string }> = [];
+  if (check?.kind === 'ready') {
+    warnings.push({ target: ticket, change: `Now: ${check.summary}${check.status ? ` (${check.status})` : ''}` });
+    if (check.resolved) warnings.push({ target: ticket, change: 'This ticket is resolved. You can still add to it, but nobody may be watching it.' });
+    if (action.mode === 'rewrite' && check.droppedKeys.length > 0) {
+      warnings.push({ target: ticket, change: `The rewrite drops these findings the ticket records, because the report does not cover them here: ${check.droppedKeys.join(', ')}` });
+    }
+  }
   const payload: NewPayload = { handler: NAME, op: 'add', groups: groups.map(g => g.keys), ticket, mode: action.mode };
   const plan: WritePlan<NewPayload> = {
     title: `Add ${ref} to ${ticket} as a ${action.mode}`,
-    lines: [{
+    lines: [...warnings, {
       target: ticket,
       change: action.mode === 'comment'
         ? `Add the record labels of ${ref} and post a comment listing the added findings`
@@ -219,6 +231,27 @@ const GONE = 'This row is no longer a new row without a ticket, so nothing was w
 
 function dedupKeysOf(group: Group): string[] {
   return group.keys.flatMap(key => key.split('\n'));
+}
+
+/** The engine's review with the rows an add writes: the ticketed rows and the add's own new rows, merged ones built as the chat builds them. */
+function addSession(session: ImportSession, groups: Group[], descriptor: AnyDescriptor): { engineSession: ReviewSession<ImportRow>; rows: ImportRow[] } {
+  const review = session.derived.data.review;
+  const rows = groups.map(g => engineRow(g, review, descriptor));
+  return { engineSession: { ...review, rows: [...ticketedRows(session.derived.data), ...rows] }, rows };
+}
+
+/** Before an add's preview: reads the target ticket and works out what a rewrite would drop. */
+function prepareNew(session: ImportSession, action: { type: string } & Record<string, unknown>, deps: ImportDeps): Promise<AddTargetCheck> | undefined {
+  if (action.type !== 'new-add' || session.working.outOfDate.includes('new')) return undefined;
+  const ticket = typeof action.key === 'string' ? action.key.trim().toUpperCase() : '';
+  const groups = groupsOfIds(session, action.ids);
+  if (!ISSUE_KEY.test(ticket) || !groups) return undefined;
+  return (async () => {
+    const descriptor = descriptorOf(session, deps);
+    const { engineSession, rows } = addSession(session, groups, descriptor);
+    const { ticketService } = await deps.writeAccess();
+    return checkAddTarget(engineSession, rows.map(r => r.id), ticket, ticketService, descriptor, deps.onDiag);
+  })();
 }
 
 async function applyNew(
@@ -263,8 +296,7 @@ async function applyNew(
     return { results: [{ target: ticket, outcome: 'refused', reason: GONE }], derived: session.derived, working };
   }
   const live = groups as Group[];
-  const rows = live.map(g => engineRow(g, review, descriptor));
-  const engineSession: ReviewSession<ImportRow> = { ...review, rows: [...ticketedRows(session.derived.data), ...rows] };
+  const { engineSession, rows } = addSession(session, live, descriptor);
   const target = `${live.map(groupRef).join('; ')}: ${ticket}`;
   const result = await addRowsToTicket(engineSession, rows.map(r => r.id), ticket, payload.mode, ticketService, descriptor, baseUrl, deps.onDiag);
   if (result.kind === 'rows-gone') {
@@ -278,7 +310,8 @@ async function applyNew(
     } catch {
       // Without it a later check sees the ticket as changed by someone else.
     }
-    record(live.flatMap(dedupKeysOf), ticket, { ...working.writes.tickets, [ticket]: updated !== undefined ? { updated } : {} });
+    const commentOnly = payload.mode === 'comment' ? { commentOnly: true } : {};
+    record(live.flatMap(dedupKeysOf), ticket, { ...working.writes.tickets, [ticket]: { ...(updated !== undefined ? { updated } : {}), ...commentOnly } });
     const ext = extOf(working);
     working = { ...working, ext: { ...working.ext, [NAME]: { added: [...new Set([...ext.added, ticket])] } satisfies NewExt } };
     const notes = [
@@ -295,6 +328,7 @@ async function applyNew(
 export const newTabHandler: ImportHandler = {
   name: NAME,
   reduce: reduceNew,
+  prepare: prepareNew,
   plan: planNew,
   apply: applyNew,
   view: (session, tab) => {

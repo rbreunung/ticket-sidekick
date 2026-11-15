@@ -79,8 +79,13 @@ export interface BoardKind<R, D, W, A, V, X> {
   reconcile(session: Session<R, D, W>, fresh: DerivedPart<D>, mode: CheckMode): Reconciled<D, W>;
   /** A non-writing action: select, filter, pick, resolve or drop a conflict. */
   reduce(session: Session<R, D, W>, action: A): Reduced<W>;
-  /** The write plan for a writing action. Kinds without writes omit it. */
-  plan?(session: Session<R, D, W>, action: A): Planned;
+  /**
+   * What a writing action needs to read before its plan can be shown, such as the target ticket of
+   * an add; its result is passed to `plan`. Kinds whose plans read nothing omit it.
+   */
+  prepare?(session: Session<R, D, W>, action: A, deps: X): Promise<unknown>;
+  /** The write plan for a writing action, given what `prepare` read. Kinds without writes omit it. */
+  plan?(session: Session<R, D, W>, action: A, prepared?: unknown): Planned;
   /** Reads the targets again, writes the unchanged ones and reports each, through `progress` as each finishes. */
   apply?(session: Session<R, D, W>, plan: WritePlan, deps: X, progress?: ApplyProgress<W>): Promise<Applied<D, W>>;
   /** A file the developer saves from the board, always built from the reading the board shows. */

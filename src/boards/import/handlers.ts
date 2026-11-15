@@ -20,8 +20,10 @@ export interface ImportHandler {
   name: string;
   /** A non-writing action; undefined when the action is not this handler's. */
   reduce?(session: ImportSession, action: { type: string } & Record<string, unknown>): Reduced<ImportWorking> | undefined;
-  /** A writing action's plan; undefined when the action is not this handler's. */
-  plan?(session: ImportSession, action: { type: string } & Record<string, unknown>): Planned | undefined;
+  /** What a writing action of this handler reads before its plan (for example the target ticket of an add); undefined when it reads nothing. */
+  prepare?(session: ImportSession, action: { type: string } & Record<string, unknown>, deps: ImportDeps): Promise<unknown> | undefined;
+  /** A writing action's plan, given what this handler's `prepare` read; undefined when the action is not this handler's. */
+  plan?(session: ImportSession, action: { type: string } & Record<string, unknown>, prepared?: unknown): Planned | undefined;
   /** Carries out a plan this handler built. */
   apply?(session: ImportSession, plan: WritePlan, deps: ImportDeps, progress?: ApplyProgress<ImportWorking>): Promise<Applied<ImportData, ImportWorking>>;
   /** A file saved from the board. */

@@ -374,7 +374,8 @@ export class SessionManager {
       const { kind } = entry.reg;
       if (!kind.plan || !kind.apply) throw new SessionError(400, 'This board does not write.');
       this.requireWritable(entry);
-      const planned = kind.plan(session, action);
+      const prepared = kind.prepare ? await kind.prepare(session, action, await entry.reg.deps()) : undefined;
+      const planned = kind.plan(session, action, prepared);
       if (!planned.ok) throw new SessionError(400, planned.reason);
       this.sweepPlans();
       const planId = randomBytes(24).toString('hex');

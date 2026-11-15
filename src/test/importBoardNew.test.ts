@@ -25,6 +25,7 @@ interface Ticket {
   updated: string;
   duedate?: string | null;
   description?: string;
+  resolved?: boolean;
 }
 
 class FakeJira extends MockJiraClient {
@@ -42,7 +43,7 @@ class FakeJira extends MockJiraClient {
       id: key, key,
       fields: {
         labels: t.labels, summary: t.summary ?? `Ticket ${key}`, status: { name: 'Open' },
-        resolution: null, created: '2026-01-01T09:00:00.000+0000', duedate: t.duedate ?? null,
+        resolution: t.resolved ? { name: 'Fixed' } : null, created: '2026-01-01T09:00:00.000+0000', duedate: t.duedate ?? null,
         updated: t.updated, issuetype: { name: 'Bug' }, fixVersions: [], description: t.description ?? '',
       },
     } as unknown as JiraIssue;
@@ -355,10 +356,23 @@ describe('adding New rows to an existing ticket', () => {
     expect(jira.addCommentCalls[0].body).toContain('104');
     expect(applied.results).toEqual([{ target: 'Flaw 104: SEC-12', outcome: 'done' }]);
     expect(after.working.writes.created).toEqual([{ dedupKeys: ['104'], key: 'SEC-12' }]);
-    expect(after.working.writes.tickets['SEC-12']).toEqual({ updated: jira.tickets['SEC-12'].updated });
+    expect(after.working.writes.tickets['SEC-12']).toEqual({ updated: jira.tickets['SEC-12'].updated, commentOnly: true });
     expect(view(after).ext.new).toMatchObject({ addedTo: { [rowId(session, '104')]: 'SEC-12' } });
     // The row left the create.
     expect(plan(after, { type: 'new-create' }).lines.map(l => l.target)).toEqual(['Flaw 101']);
+  });
+
+  it('a comment add leaves the target ticket\'s own Already-ticketed decision open, as the chat does', async () => {
+    const session = await openVeracode(flaws('101', '104', '108'));
+    const ticketedBefore = importKind.view({ ...session, working: { ...session.working, tab: 'ticketed', ticketedShow: 'all' } }).ticketed!.rows;
+    const sec12 = ticketedBefore.find(r => r.ticket === 'SEC-12')!;
+    expect(sec12.needsDecision).toBe(true);
+
+    const { session: after } = await apply(session, plan(session, { type: 'new-add', ids: [rowId(session, '104')], key: 'SEC-12', mode: 'comment' }));
+
+    const row = importKind.view({ ...after, working: { ...after.working, tab: 'ticketed', ticketedShow: 'all' } }).ticketed!.rows.find(r => r.ticket === 'SEC-12')!;
+    expect(row.needsDecision).toBe(true);
+    expect(row.written).toBe(false);
   });
 
   it('as a rewrite: rebuilds the ticket from its findings and the added row, with the SLA Due Date', async () => {
@@ -374,6 +388,33 @@ describe('adding New rows to an existing ticket', () => {
     expect(fields.duedate).toBe(SLA_DUE);
     expect(jira.addCommentCalls.map(c => c.issueKey)).toEqual(['SEC-12']);
     expect(applied.results).toEqual([{ target: 'Flaw 104: SEC-12', outcome: 'done', reason: `Due Date set to ${SLA_DUE} from your SLA table` }]);
+  });
+
+  it('reads the target before the preview and warns that it is resolved and what a rewrite drops', async () => {
+    jira.tickets['SEC-12'].resolved = true;
+    // The report no longer holds flaw 108, which the ticket records.
+    const session = await openVeracode(flaws('101', '104'));
+    const action = { type: 'new-add', ids: [rowId(session, '104')], key: 'SEC-12', mode: 'rewrite' };
+
+    const prepared = await importKind.prepare!(session, action as never, deps);
+    const planned = importKind.plan!(session, action as never, prepared);
+
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    const changes = planned.plan.lines.map(l => l.change);
+    expect(changes).toContain('Now: Hard-coded password (Open)');
+    expect(changes).toContain('This ticket is resolved. You can still add to it, but nobody may be watching it.');
+    expect(changes.some(c => /drops these findings[^]*108/.test(c))).toBe(true);
+    expect(jira.updateIssueCalls).toHaveLength(0);
+  });
+
+  it('refuses the preview when the target ticket cannot be read', async () => {
+    const session = await openVeracode(flaws('101'));
+    const action = { type: 'new-add', ids: [rowId(session, '101')], key: 'SEC-99', mode: 'comment' };
+
+    const prepared = await importKind.prepare!(session, action as never, deps);
+
+    expect(importKind.plan!(session, action as never, prepared)).toEqual({ ok: false, reason: expect.stringMatching(/^SEC-99 could not be read/) });
   });
 
   it('refuses a ticket key that is not one', async () => {

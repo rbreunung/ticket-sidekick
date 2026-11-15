@@ -41,6 +41,8 @@ export interface CreatedRecord {
 /** An existing ticket the board wrote: Jira's `updated` read right after the write, so a later check knows the change was its own. */
 export interface TicketWriteRecord {
   updated?: string;
+  /** Only labels and a comment were added: the ticket's Already-ticketed rows still need their own decision. */
+  commentOnly?: boolean;
 }
 
 /** What the board wrote, saved after each write while an Apply runs. */
@@ -239,9 +241,15 @@ function isCreated(created: Set<string>, rowKey: string): boolean {
   return rowKey.split('\n').every(k => created.has(k));
 }
 
+/** Whether the board wrote a ticket in a way that settles its Already-ticketed rows (a comment-only add does not). */
+function decided(writes: ImportWrites, ticket: string): boolean {
+  const record = writes.tickets[ticket];
+  return record !== undefined && !record.commentOnly;
+}
+
 function needsDecision(row: ImportRow, writes: ImportWrites): boolean {
   const ticket = row.target?.key ?? row.existingTicketKey!;
-  return row.change !== null && row.change !== undefined && !writes.tickets[ticket] && row.result?.status !== 'done';
+  return row.change !== null && row.change !== undefined && !decided(writes, ticket) && row.result?.status !== 'done';
 }
 
 function eligibleStale(data: ImportData): string[] {
@@ -285,7 +293,7 @@ function hasUnfinishedChoices(data: ImportData, working: ImportWorking, tab: Imp
     const rows = new Map(ticketedRows(data).map(r => [rowKeyOf(data, r), r]));
     return Object.keys(choices.actions).some(key => {
       const row = rows.get(key);
-      return row !== undefined && !writes.tickets[row.target?.key ?? row.existingTicketKey!];
+      return row !== undefined && !decided(writes, row.target?.key ?? row.existingTicketKey!);
     });
   }
   if (tab === 'stale') return choices.staleSelected.some(key => !writes.tickets[key]);
@@ -325,6 +333,8 @@ function changedTabs(stored: DerivedPart<ImportData>, fresh: DerivedPart<ImportD
     } else if (s && f) {
       if (s.sig === f.sig && s.ticket === f.ticket && sameUpdated(s.updated, f.updated)) continue;
       if (s.ticket === f.ticket && own(f.ticket, f.updated)) continue;
+      // A new ticket the board created for this row: the row now points at it instead of the ticket it replaced.
+      if (s.ticket !== f.ticket && s.ticket && writes.tickets[s.ticket] && own(f.ticket, f.updated)) continue;
     }
     changed.add('ticketed');
     break;
@@ -513,10 +523,21 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
     }
   },
 
-  plan: (session, action) => {
-    if (typeof action?.type !== 'string') return { ok: false, reason: 'Unknown action.' };
+  prepare: async (session, action, deps) => {
+    const read: Record<string, unknown> = {};
+    if (typeof action?.type !== 'string') return read;
     for (const handler of IMPORT_HANDLERS) {
-      const planned = handler.plan?.(session, action as { type: string } & Record<string, unknown>);
+      const pending = handler.prepare?.(session, action as { type: string } & Record<string, unknown>, deps);
+      if (pending) read[handler.name] = await pending;
+    }
+    return read;
+  },
+
+  plan: (session, action, prepared) => {
+    if (typeof action?.type !== 'string') return { ok: false, reason: 'Unknown action.' };
+    const read = (prepared ?? {}) as Record<string, unknown>;
+    for (const handler of IMPORT_HANDLERS) {
+      const planned = handler.plan?.(session, action as { type: string } & Record<string, unknown>, read[handler.name]);
       if (!planned) continue;
       if (planned.ok) {
         const blocked = IMPORT_HANDLERS.filter(h => h !== handler).map(h => h.blocksPlans?.(session)).find(Boolean);
@@ -621,7 +642,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
               id: r.id, ref: rowRef(r), summary: r.summary, ticket, status: r.target?.status ?? null, resolved: r.target?.resolved ?? false,
               url: browse(data.baseUrl, ticket), change: describeChange(r),
               action: choices.actions[key] ?? r.action ?? 'leave', allowedActions: [...(r.allowedActions ?? ['leave'])],
-              needsDecision: needsDecision(r, writes), written: writes.tickets[ticket] !== undefined,
+              needsDecision: needsDecision(r, writes), written: decided(writes, ticket),
             };
           }),
       };
