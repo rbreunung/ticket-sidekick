@@ -126,6 +126,8 @@ Preparation: a test project; a `.jira-templates.json` with two templates (one wi
 - [ ] Move the report file, then restore the board: writes are refused and **Pick the file again…** is offered; after picking it at its new place, the choices are still there and writes work.
 - [ ] Turn Jira off (wrong base URL) and **Refresh**: the board keeps what it showed and refuses writes until a check passes.
 - [ ] When every tab is handled, the board says there is nothing left to do and offers **Discard**; export still works.
+- [ ] Save a newer scan over the report file and open the same import again: tickets the board wrote for the earlier scan ask for a decision again where the new scan changed them.
+- [ ] Two Already-ticketed rows on one resolved ticket: a new ticket for one row leaves the other row to decide.
 
 **`@jira` and the ticket list**
 
