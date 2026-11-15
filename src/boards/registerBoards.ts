@@ -92,6 +92,7 @@ export function registerBoards(
     workspaceFolder,
     descriptors,
     now: () => Date.now(),
+    csvDelimiter: () => resolveCsvDelimiter(vscode.workspace.getConfiguration('ticketSidekick').get('jira.overviewCsvDelimiter')),
     onDiag: (level, message, details) => logDiag('boards.import', level, message, details),
   });
   const kinds = [

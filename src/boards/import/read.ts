@@ -51,6 +51,8 @@ export interface ImportDeps {
   /** The folder the accepted list lives in. */
   workspaceRoot(): string | undefined;
   now(): number;
+  /** The separator the overview CSV uses, from the same setting as every other overview export. */
+  csvDelimiter?(): string;
   onDiag?: DiagLogger;
 }
 

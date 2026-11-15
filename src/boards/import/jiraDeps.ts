@@ -20,6 +20,7 @@ export interface ImportJiraOptions {
   workspaceFolder(): string | undefined;
   descriptors: ImportDescriptors | (() => ImportDescriptors);
   now(): number;
+  csvDelimiter?(): string;
   onDiag?: DiagLogger;
 }
 
@@ -112,6 +113,7 @@ export function importJiraDeps(options: ImportJiraOptions): ImportDeps {
     },
 
     now: options.now,
+    ...(options.csvDelimiter ? { csvDelimiter: options.csvDelimiter } : {}),
     onDiag: options.onDiag,
   };
 }
