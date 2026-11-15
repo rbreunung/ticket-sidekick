@@ -55,6 +55,8 @@ export interface ImportWrites {
   tickets: Record<string, TicketWriteRecord>;
   /** The accepted list's fingerprint after the board's own last write to it. */
   acceptedFile?: string;
+  /** Already-ticketed rows (by row key) a per-row write finished, such as a follow-up, which settles that row and not the ticket's others. */
+  rows?: string[];
 }
 
 export interface ImportWorking {
@@ -273,9 +275,13 @@ export function decided(writes: ImportWrites, ticket: string): boolean {
   return record !== undefined && !record.commentOnly;
 }
 
-function needsDecision(row: ImportRow, writes: ImportWrites): boolean {
-  const ticket = row.target?.key ?? row.existingTicketKey!;
-  return row.change !== null && row.change !== undefined && !decided(writes, ticket) && row.result?.status !== 'done';
+/** Whether the board's writes settled an Already-ticketed row: a write that settles its ticket, or a per-row write of the row itself. */
+export function rowWritten(data: ImportData, writes: ImportWrites, row: ImportRow): boolean {
+  return decided(writes, row.target?.key ?? row.existingTicketKey!) || (writes.rows ?? []).includes(rowKeyOf(data, row));
+}
+
+function needsDecision(data: ImportData, row: ImportRow, writes: ImportWrites): boolean {
+  return row.change !== null && row.change !== undefined && !rowWritten(data, writes, row) && row.result?.status !== 'done';
 }
 
 function eligibleStale(data: ImportData): string[] {
@@ -290,8 +296,8 @@ function hasWork(data: ImportData, writes: ImportWrites, choices: ImportChoices,
       return !isCreated(created, key) && !choices.excluded.includes(key);
     });
   }
-  if (tab === 'ticketed') return ticketedRows(data).some(r => needsDecision(r, writes));
-  if (tab === 'stale') return !data.staleFailed && eligibleStale(data).some(key => !writes.tickets[key]);
+  if (tab === 'ticketed') return ticketedRows(data).some(r => needsDecision(data, r, writes));
+  if (tab === 'stale') return !data.staleFailed && eligibleStale(data).some(key => !decided(writes, key));
   return false;
 }
 
@@ -319,10 +325,10 @@ function hasUnfinishedChoices(data: ImportData, working: ImportWorking, tab: Imp
     const rows = new Map(ticketedRows(data).map(r => [rowKeyOf(data, r), r]));
     return Object.keys(choices.actions).some(key => {
       const row = rows.get(key);
-      return row !== undefined && !decided(writes, row.target?.key ?? row.existingTicketKey!);
+      return row !== undefined && !rowWritten(data, writes, row);
     });
   }
-  if (tab === 'stale') return choices.staleSelected.some(key => !writes.tickets[key]);
+  if (tab === 'stale') return choices.staleSelected.some(key => !decided(writes, key));
   return false;
 }
 
@@ -424,6 +430,21 @@ function compose(stored: DerivedPart<ImportData>, fresh: DerivedPart<ImportData>
   return { readAt: stored.readAt, fingerprints, data };
 }
 
+/**
+ * The board's writes as a fresh reading of another report file at the same path sees them: each
+ * written ticket keeps the `updated` that tells its own change apart, but no longer counts as
+ * decided, because the new scan's rows were never decided on. The New creates stay recorded.
+ */
+function writesFor(session: ImportSession, fresh: DerivedPart<ImportData>): ImportWrites {
+  const { writes } = session.working;
+  const before = session.derived.fingerprints.report;
+  const now = fresh.fingerprints.report;
+  if (before === undefined || now === undefined || before === now) return writes;
+  const tickets = Object.fromEntries(Object.entries(writes.tickets).map(([key, record]) => [key, { ...record, commentOnly: true }]));
+  const { rows: _rows, ...rest } = writes;
+  return { ...rest, tickets };
+}
+
 /** Lays the stored choices over a fresh reading: keeps each whose rows still exist and names the others. */
 function keepChoices(session: ImportSession, fresh: ImportData): { choices: ImportChoices; dropped: string[] } {
   const stored = session.derived.data;
@@ -440,14 +461,18 @@ function keepChoices(session: ImportSession, fresh: ImportData): { choices: Impo
     return row ? `it has a ticket now (${row.target?.key ?? row.existingTicketKey})` : 'it is no longer a new row';
   };
 
+  // A row the board created a ticket for has had its choice carried out: it goes without a message.
+  const created = createdKeySet(session.working.writes);
   const excluded = choices.excluded.filter(key => {
     if (freshNew.has(key)) return true;
+    if (isCreated(created, key)) return false;
     dropped.push(`${refOf(key)}: leaving it out of the create was dropped, because ${why(key)}.`);
     return false;
   });
   const merges = choices.merges.filter(merge => {
     const gone = merge.find(key => !freshNew.has(key));
     if (gone === undefined) return true;
+    if (merge.every(key => isCreated(created, key))) return false;
     dropped.push(`The merge of ${merge.map(refOf).join(' and ')} was dropped, because for ${refOf(gone)} ${why(gone)}.`);
     return false;
   });
@@ -501,8 +526,9 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
 
   read: (recipe, deps) => readImport(recipe, deps),
 
-  reconcile: (session, fresh, mode: CheckMode) => {
-    const tabs = tabsOf(session.recipe);
+  reconcile: (current, fresh, mode: CheckMode) => {
+    const tabs = tabsOf(current.recipe);
+    const session: ImportSession = { ...current, working: { ...current.working, writes: writesFor(current, fresh) } };
     if (mode === 'refresh') {
       // A running ticket merge works from the Already-ticketed reading it started from: a Refresh
       // takes every other tab and leaves that one marked until the merge ends.
@@ -603,7 +629,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
     const current = working.tab && tabs.includes(working.tab) ? working.tab : opening;
     const filter = working.filters[current];
     const created = createdKeySet(writes);
-    const decisions = ticketedRows(data).filter(r => needsDecision(r, writes)).length;
+    const decisions = ticketedRows(data).filter(r => needsDecision(data, r, writes)).length;
 
     const counts: Record<ImportTab, number> = {
       new: newRows(data).length,
@@ -668,7 +694,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
       view.ticketed = {
         show,
         rows: ticketedRows(data)
-          .filter(r => (show === 'all' || needsDecision(r, writes)) && matches(filter, rowRef(r), r.summary, r.target?.key ?? r.existingTicketKey))
+          .filter(r => (show === 'all' || needsDecision(data, r, writes)) && matches(filter, rowRef(r), r.summary, r.target?.key ?? r.existingTicketKey))
           .map(r => {
             const ticket = r.target?.key ?? r.existingTicketKey!;
             const key = rowKeyOf(data, r);
@@ -677,7 +703,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
               id: r.id, ref: rowRef(r), summary: r.summary, ticket, status: r.target?.status ?? null, resolved: r.target?.resolved ?? false,
               url: browseUrl(data.baseUrl, ticket), ...(alsoOpen.length > 0 ? { alsoOpen } : {}), change: describeChange(r),
               action: choices.actions[key] ?? r.action ?? 'leave', allowedActions: [...(r.allowedActions ?? ['leave'])],
-              needsDecision: needsDecision(r, writes), written: decided(writes, ticket),
+              needsDecision: needsDecision(data, r, writes), written: rowWritten(data, writes, r),
             };
           }),
       };

@@ -485,14 +485,87 @@ describe('applying the Already ticketed actions', () => {
     expect(jira.tickets[created].description).toContain('CVE-2099-0001');
     expect(jira.tickets[created].description).toContain('CVE-2099-0002');
     expect(jira.links).toEqual([{ from: created, to: 'PROJ-1' }]);
+    // The link settles this row only, not the resolved ticket's other rows.
     expect(applied.session.working.writes.tickets).toEqual({
-      'PROJ-1': { updated: jira.tickets['PROJ-1'].updated },
+      'PROJ-1': { updated: jira.tickets['PROJ-1'].updated, commentOnly: true },
       [created]: { updated: jira.tickets[created].updated },
     });
+    expect(applied.session.working.writes.rows).toHaveLength(1);
     // The follow-up is the row's ticket in the next reading, not a New row's create.
     expect(applied.session.working.writes.created).toEqual([]);
     v = view(applied.session);
     expect(rowOf(v, 'PROJ-1').written).toBe(true);
+  });
+
+  it('a new ticket for one row of a resolved ticket leaves the ticket\'s other row to decide', async () => {
+    jira.tickets = { 'PROJ-1': veracodeTicket(['101', '201'], { resolved: true, status: 'Done' }) };
+    const file = writeVeracode([
+      { id: '101', file: 'A.java' }, { id: '102', file: 'A.java', line: 20 },
+      { id: '201', file: 'B.java' }, { id: '202', file: 'B.java', line: 20 },
+    ]);
+    let session = onTicketed(await open(recipe('veracode', file)));
+    const [first, second] = view(act(session, { type: 'ticketed-filter', filter: 'all' })).ticketed!.rows;
+    expect(first.allowedActions).toContain('follow-up');
+    session = act(session, { type: 'ticketed-action', id: first.id, action: 'follow-up' });
+    session = act(session, { type: 'ticketed-action', id: second.id, action: 'leave' });
+
+    session = (await apply(session, plan(session))).session;
+    const rows = view(act(session, { type: 'ticketed-filter', filter: 'all' })).ticketed!.rows;
+    expect(rows.find(r => r.id === first.id)!.written).toBe(true);
+    expect(rows.find(r => r.id === second.id)).toEqual(expect.objectContaining({ written: false, needsDecision: true }));
+
+    // The other row can still get its own new ticket.
+    session = act(session, { type: 'ticketed-action', id: second.id, action: 'follow-up' });
+    expect(plan(session).lines).toEqual([expect.objectContaining({ target: 'PROJ-1' })]);
+  });
+
+  it('writes after the board\'s own comment on the same ticket, which is not someone else\'s change', async () => {
+    let session = await twoRowsOneTicket();
+    // A New row was added to PROJ-1 as a comment: Jira's update time moved, and the board recorded it.
+    jira.tickets['PROJ-1'].updated = 'c1';
+    session = { ...session, working: { ...session.working, writes: { ...session.working.writes, tickets: { 'PROJ-1': { updated: 'c1', commentOnly: true } } } } };
+
+    const applied = await apply(session, plan(session));
+    expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'done' })]);
+    expect(applied.conflicts).toEqual([]);
+  });
+
+  it('refuses to write when the tickets\' update times could not be read, and says so', async () => {
+    jira.tickets = { 'PROJ-1': veracodeTicket(['101', '201']) };
+    const file = writeVeracode([
+      { id: '101', file: 'A.java' }, { id: '102', file: 'A.java', line: 20 },
+      { id: '201', file: 'B.java' }, { id: '202', file: 'B.java', line: 20 },
+    ]);
+    const working = deps;
+    deps = { ...working, updatedTimes: async () => { throw new Error('Jira answered 500'); } };
+    const session = onTicketed(await open(recipe('veracode', file)));
+    deps = working;
+    expect(session.derived.data.notices.join(' ')).toMatch(/update times could not be read/);
+
+    const applied = await apply(session, plan(session));
+    expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'refused' })]);
+    expect(jira.updateIssueCalls).toHaveLength(0);
+  });
+
+  it('a new scan saved over the same report file asks for a decision on a ticket written before', async () => {
+    jira.tickets = { 'PROJ-1': veracodeTicket(['101', '201']) };
+    const flaws: Flaw[] = [
+      { id: '101', file: 'A.java' }, { id: '102', file: 'A.java', line: 20 },
+      { id: '201', file: 'B.java' }, { id: '202', file: 'B.java', line: 20 },
+    ];
+    const r = recipe('veracode', writeVeracode(flaws));
+    let session = onTicketed(await open(r));
+    session = (await apply(session, plan(session))).session;
+    expect(view(session).ticketed!.rows.every(row => row.written)).toBe(true);
+
+    // The next scan, downloaded to the same path, has another flaw in A.java.
+    writeVeracode([...flaws, { id: '103', file: 'A.java', line: 30 }]);
+    const fresh = await importKind.read(r, deps);
+    const refreshed = importKind.reconcile(session, fresh, 'refresh');
+    const next = { ...session, derived: refreshed.derived, working: refreshed.working };
+    const rows = view(act(next, { type: 'ticketed-filter', filter: 'all' })).ticketed!.rows;
+    expect(rows.some(row => row.needsDecision && !row.written)).toBe(true);
+    expect(importKind.plan!(next, { type: 'ticketed-apply' } as never).ok).toBe(true);
   });
 
   it('a later check does not count the row moving to the board\'s own new ticket as a change', async () => {

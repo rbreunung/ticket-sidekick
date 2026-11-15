@@ -18,7 +18,7 @@ const MERGE_STATES = new Map([
 const MERGE_RUNNING = { heading: 'The merge is running.', tab: 'running' };
 
 // Transient drafts, kept across repaints.
-const drafts = { addKey: '', addMode: 'comment', reason: '', keepKey: '', keepRow: '', search: undefined, filter: {} };
+const drafts = { addKey: '', addMode: 'comment', reason: '', keepKey: '', keepRow: '', setShown: '', search: undefined, filter: {} };
 /** Already-ticketed rows picked for a merge or an accept, by row id. */
 const picked = new Set();
 /** The tab the page shows instead of the session's: the merge tab, or a tab chosen while an Apply runs. */
@@ -172,8 +172,9 @@ function ticketedTab(view, board, ctx) {
       onClick: () => board.act({ type: 'ticketed-filter', filter: id }),
     }, ext.counts?.[id] !== undefined ? `${text} (${ext.counts[id]})` : text)));
 
-  const setShown = h('select', { id: 'set-shown', 'aria-label': 'Action for every row shown', disabled: off },
-    actions.map(a => h('option', { value: a }, labels[a] ?? a)));
+  if (!actions.includes(drafts.setShown)) drafts.setShown = actions[0] ?? '';
+  const setShown = h('select', { id: 'set-shown', 'aria-label': 'Action for every row shown', disabled: off, onChange: e => { drafts.setShown = e.target.value; } },
+    actions.map(a => h('option', { value: a, selected: a === drafts.setShown }, labels[a] ?? a)));
 
   const table = h('div', { class: 'table-wrap' }, h('table', { 'aria-label': 'Already ticketed rows' },
     headRow('Pick', 'Ticket', 'Finding', 'Change', 'Action', 'Result'),
@@ -210,7 +211,7 @@ function ticketedTab(view, board, ctx) {
     filterBar,
     ext.notice ? h('p', { class: 'muted' }, ext.notice) : null,
     h('div', { class: 'bar' }, h('label', {}, 'Set all shown to', setShown),
-      h('vscode-button', { id: 'set-shown-apply', secondary: true, disabled: off || rows.length === 0, onClick: () => board.act({ type: 'ticketed-set-shown', action: setShown.value }) }, 'Set'),
+      h('vscode-button', { id: 'set-shown-apply', secondary: true, disabled: off || rows.length === 0, onClick: () => board.act({ type: 'ticketed-set-shown', action: drafts.setShown }) }, 'Set'),
       h('span', { class: 'muted' }, 'Apply writes every row\'s action, shown or not.')),
     ctx.summary,
     rows.length === 0 ? h('p', {}, 'No row matches this filter.') : table,

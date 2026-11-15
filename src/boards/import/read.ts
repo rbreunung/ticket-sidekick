@@ -281,7 +281,8 @@ async function readWith<TItem, TRow extends ReviewRowBase & ImportRow>(
       try {
         data.updated = await deps.updatedTimes(shown);
       } catch (err) {
-        // Without `updated` a later check compares the rows' content only.
+        // Without `updated` the board cannot tell a change in Jira, so Already ticketed refuses to write.
+        notices.push('The tickets\' update times could not be read, so Already ticketed writes nothing until a Refresh reads them.');
         deps.onDiag?.('warn', 'Import board: the tickets\' update times could not be read', { error: messageOf(err) });
       }
     })(),

@@ -9,7 +9,7 @@ import {
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import type { HandlerPayload, ImportHandler, ImportSession } from './handlers';
 import { rowKeyOf, ticketedRows, type ImportData, type ImportDeps, type ImportRow } from './read';
-import { decided, type ImportWorking } from './kind';
+import { rowWritten, type ImportWorking } from './kind';
 
 // The import board's handler for the Already ticketed tab: filters, per-row actions and their writes. vscode-free.
 //
@@ -77,7 +77,7 @@ function boardRows(session: ImportSession): ImportRow[] {
     if (r.existingTicketKey === null) return r;
     const chosen = choices.actions[rowKeyOf(data, r)];
     const action = chosen ?? r.action ?? 'leave';
-    const written = decided(writes, ticketedTargetKey(r));
+    const written = rowWritten(data, writes, r);
     return {
       ...r, action,
       ...(written && !isTicketedRowFinished(r) ? { result: { status: 'done' as const, action: 'rewrite' as const } } : {}),
@@ -102,8 +102,7 @@ function actionsFrom(data: ImportData, rows: ImportRow[], base: Record<string, T
 }
 
 function needsDecision(session: ImportSession, row: ImportRow): boolean {
-  const ticket = ticketedTargetKey(row);
-  return row.change !== null && row.change !== undefined && !decided(session.working.writes, ticket) && row.result?.status !== 'done';
+  return row.change !== null && row.change !== undefined && !rowWritten(session.derived.data, session.working.writes, row) && row.result?.status !== 'done';
 }
 
 function hasNoDueDate(row: ImportRow): boolean {
@@ -294,20 +293,23 @@ export const ticketedTabHandler: ImportHandler = {
       }
 
       // The truth is Jira: a ticket changed since the board read it is not written to.
-      const expected = own[unit.ticket] ?? data.updated[unit.ticket];
-      if (expected !== undefined) {
-        let current: string | undefined;
-        try {
-          current = (await deps.updatedTimes([unit.ticket]))[unit.ticket];
-        } catch (err) {
-          await finish({ target: unit.ticket, outcome: 'failed', reason: `could not be read: ${messageOf(err)}` });
-          continue;
-        }
-        if (current !== expected) {
-          conflicts.push({ id: unit.ticket, target: unit.ticket, message: 'changed in Jira and was not written to.', stored: expected, fresh: current ?? 'gone' });
-          await finish({ target: unit.ticket, outcome: 'refused', reason: 'changed in Jira since the board read it' });
-          continue;
-        }
+      // The board's own earlier writes (a comment add on New, a merge link) are not someone else's change.
+      const expected = own[unit.ticket] ?? working.writes.tickets[unit.ticket]?.updated ?? data.updated[unit.ticket];
+      if (expected === undefined) {
+        await finish({ target: unit.ticket, outcome: 'refused', reason: 'its update time was not read, so a change in Jira could not be ruled out; Refresh and apply again' });
+        continue;
+      }
+      let current: string | undefined;
+      try {
+        current = (await deps.updatedTimes([unit.ticket]))[unit.ticket];
+      } catch (err) {
+        await finish({ target: unit.ticket, outcome: 'failed', reason: `could not be read: ${messageOf(err)}` });
+        continue;
+      }
+      if (current !== expected) {
+        conflicts.push({ id: unit.ticket, target: unit.ticket, message: 'changed in Jira and was not written to.', stored: expected, fresh: current ?? 'gone' });
+        await finish({ target: unit.ticket, outcome: 'refused', reason: 'changed in Jira since the board read it' });
+        continue;
       }
 
       const ids = new Set(unitRows.map(r => r.id));
@@ -357,12 +359,21 @@ export const ticketedTabHandler: ImportHandler = {
           deps.onDiag?.('warn', 'Import board: the update time after a write could not be read', { keys: written, error: messageOf(err) });
         }
         const tickets = { ...working.writes.tickets };
+        // A rewrite rebuilds the whole ticket and settles all its rows. Any other action is one row's
+        // write (a follow-up links, an update adds labels and a comment): it settles that row only.
+        const settlesTicket = unit.action === 'rewrite';
         for (const key of written) {
-          tickets[key] = times[key] !== undefined ? { updated: times[key] } : {};
+          const isTarget = key === unit.ticket;
+          tickets[key] = {
+            ...(times[key] !== undefined ? { updated: times[key] } : {}),
+            // An earlier write that settled the ticket stays settling.
+            ...(isTarget && !settlesTicket && (working.writes.tickets[key]?.commentOnly ?? true) ? { commentOnly: true } : {}),
+          };
           if (times[key] !== undefined) own[key] = times[key];
         }
+        const rowsDone = settlesTicket ? working.writes.rows : [...new Set([...(working.writes.rows ?? []), ...unit.rowKeys])];
         // A created follow-up is not recorded as a New create: the next reading finds it as the row's ticket.
-        working = { ...working, writes: { ...working.writes, tickets } };
+        working = { ...working, writes: { ...working.writes, tickets, ...(rowsDone ? { rows: rowsDone } : {}) } };
       }
       await finish(outcome);
     }
@@ -378,7 +389,7 @@ export const ticketedTabHandler: ImportHandler = {
     return {
       filter: filterOf(session),
       shown: shownRows(session).map(r => r.id),
-      noDueDate: rows.filter(r => hasNoDueDate(r) && !decided(session.working.writes, ticketedTargetKey(r))).map(r => r.id),
+      noDueDate: rows.filter(r => hasNoDueDate(r) && !rowWritten(session.derived.data, session.working.writes, r)).map(r => r.id),
       notice: stateOf(session.working).notice ?? null,
       counts: { changed, unchanged, all: rows.length },
       actionLabels: LABELS,

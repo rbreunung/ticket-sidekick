@@ -290,6 +290,17 @@ describe('creating tickets for New rows', () => {
     expect(after.working.writes.created).toEqual([{ dedupKeys: ['102', '103'], key: 'PROJ-100' }]);
   });
 
+  it('a Refresh after the merged create does not report the merge as dropped', async () => {
+    let session = await openVeracode(flaws('101', '102'));
+    session = act(session, { type: 'new-merge', ids: [rowId(session, '101'), rowId(session, '102')] });
+    session = (await apply(session, plan(session, { type: 'new-create' }))).session;
+
+    const fresh = await importKind.read(session.recipe, deps);
+    const refreshed = importKind.reconcile(session, fresh, 'refresh');
+    expect(refreshed.working.dropped).toEqual([]);
+    expect(refreshed.working.choices.merges).toEqual([]);
+  });
+
   it('puts the rows of an unmerged merge back as their own tickets', async () => {
     let session = await openVeracode(flaws('101', '102'));
     session = act(session, { type: 'new-merge', ids: [rowId(session, '101'), rowId(session, '102')] });

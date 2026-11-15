@@ -486,6 +486,37 @@ describe('an Apply in progress', () => {
     await expect(m.apply('demo', state.id, second.planId)).rejects.toMatchObject({ status: 409 });
   });
 
+  it('does not store again a session discarded while its Apply ran', async () => {
+    source.tickets = { 'PROJ-1': 'Open', 'PROJ-2': 'Open' };
+    const m = manager();
+    const state = await selectedAll(m);
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    let discarded = false;
+    source.onProgressSaved = async () => {
+      if (discarded) return;
+      discarded = true;
+      await m.discard(state.id);
+    };
+    await m.apply('demo', state.id, preview.planId);
+    expect(await new SessionStore(dir).load(state.id)).toBeUndefined();
+  });
+
+  it('does not store again a session discarded before its Apply failed', async () => {
+    source.tickets = { 'PROJ-1': 'Open', 'PROJ-2': 'Open', 'PROJ-3': 'Open' };
+    const m = manager();
+    const state = await selectedAll(m);
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    let discarded = false;
+    source.onProgressSaved = async () => {
+      if (discarded) return;
+      discarded = true;
+      await m.discard(state.id);
+    };
+    source.stopAfter = 2;
+    await expect(m.apply('demo', state.id, preview.planId)).rejects.toThrow('The window closed.');
+    expect(await new SessionStore(dir).load(state.id)).toBeUndefined();
+  });
+
   it('saves two progress reports in a row one after the other, and the session stays stored', async () => {
     const m = manager();
     const state = await selectedAll(m);

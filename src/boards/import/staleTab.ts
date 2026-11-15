@@ -9,7 +9,7 @@ import {
 } from '../../imports/types';
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import type { HandlerPayload, ImportHandler, ImportSession } from './handlers';
-import type { ImportWorking } from './kind';
+import { decided, type ImportWorking } from './kind';
 import type { ImportData, ImportDeps, ImportRow } from './read';
 
 // The import board's handler for the Stale tab: marking stale tickets and closing them by issue type.
@@ -75,7 +75,7 @@ function staleOf(data: ImportData): ReviewSessionStale | undefined {
 
 /** Whether the board may still mark this ticket: eligible, not moved by the board or an earlier close. */
 function isOpen(stale: ReviewSessionStale, working: ImportWorking, key: string): boolean {
-  return !working.writes.tickets[key] && !(stale.closedKeys ?? []).includes(key);
+  return !decided(working.writes, key) && !(stale.closedKeys ?? []).includes(key);
 }
 
 function selectableKeys(data: ImportData, working: ImportWorking): string[] {

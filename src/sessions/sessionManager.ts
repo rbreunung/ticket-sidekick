@@ -429,7 +429,7 @@ export class SessionManager {
         await saved.catch(() => undefined);
         entry.applying = undefined;
         // What was saved meanwhile is a change: a preview of the session before it is no longer valid.
-        if (progressed && entry.session) {
+        if (progressed && entry.session && this.entries.get(entry.id) === entry) {
           entry.session = { ...entry.session, revision: session.revision + 1 };
           await this.persist(entry);
         }
@@ -447,7 +447,8 @@ export class SessionManager {
         conflicts: [...session.conflicts, ...(applied.conflicts ?? [])],
         revision: session.revision + 1, lastUsedAt: this.deps.now(),
       };
-      await this.persist(entry);
+      // A session discarded while the Apply ran stays discarded: the results still go back to the page.
+      if (this.entries.get(entry.id) === entry) await this.persist(entry);
       this.changed(entry);
       return { results: applied.results, state: this.toState(entry) };
     });

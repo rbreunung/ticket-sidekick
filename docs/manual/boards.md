@@ -76,7 +76,7 @@ The import board turns a Veracode Detailed Report (`.xml`) or a Waltz OSS Report
 - **Project.** The project is `ticketSidekick.jira.defaultProject`. When it is empty, or Jira does not know it, the start screen says so and offers **Open Setting**. It never writes this setting for you.
 - **Jira not set up.** The start screen shows how to set up Jira instead of **Open**.
 - **From Copilot.** In Agent mode, ask for the import with the report's path, or drag the file into the chat ("import this Veracode report"), or type `/ts-jira import veracode reports/scan.xml`. The board opens with the report loaded when the file reads and the template and project settings are complete. Otherwise the start screen opens with the kind and the file filled in. Copilot learns only whether the board opened.
-- **The same file again.** The same report file in the same project opens the stored import, with the template it was started with. The start screen then offers **Open stored import** and **Start over**. Start over discards the stored import and starts again with the template now in the setting.
+- **The same file again.** The same report file in the same project opens the stored import, with the template it was started with. The start screen then offers **Open stored import** and **Start over**. Start over discards the stored import and starts again with the template now in the setting. When a new scan was saved over that file, the stored import reads it and asks again for a decision on every row, also on tickets it wrote for the earlier scan.
 
 ### The tabs
 
@@ -97,7 +97,7 @@ The line at the top names the report kind, the file, the project, the template a
 - When a finding has more than one open ticket, the Ticket cell names the others under "also open:" (up to three, then a count). A changed date shows the ticket's recorded date next to the report's, for example `Planned date none → 2026-12-15`; a Veracode ticket without a Due Date shows `Due Date missing → <date>`.
 - **Set all shown to** changes the action of the rows the filter shows, and no other row. **Preview changes…** writes the action of every row, shown or not.
 - A rewrite rebuilds the whole ticket, so the rows of one ticket are all on **rewrite** or none of them; the preview refuses a mix and names the rows.
-- A ticket that changed in Jira since the board read it is not written to. Its result says so, and the board lists it with its stored and current state until you drop it.
+- A ticket that changed in Jira since the board read it is not written to. Its result says so, and the board lists it with its stored and current state until you drop it. When the board could not read the tickets' update times, it says so above the tabs, and Already ticketed writes nothing until a **Refresh** reads them.
 - Pick rows with their checkboxes for a ticket merge (below). Waltz only: **Preview accept components of picked…**.
 
 **Stale**: open tickets whose finding is no longer in the report.
