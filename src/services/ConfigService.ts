@@ -78,6 +78,12 @@ export class ConfigService {
     await vscode.workspace.getConfiguration('ticketSidekick').update(`${kind}.template`, name, target);
   }
 
+  /** Saves the project picked on the import start screen: for the workspace when a folder is open, else for the user. */
+  async setDefaultProject(key: string): Promise<void> {
+    const target = vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+    await vscode.workspace.getConfiguration('ticketSidekick').update('jira.defaultProject', key, target);
+  }
+
   async storeBitbucketToken(token: string): Promise<void> {
     await this.context.secrets.store(ConfigService.BITBUCKET_TOKEN_KEY, token);
   }

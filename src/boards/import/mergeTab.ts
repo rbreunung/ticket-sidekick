@@ -1,7 +1,6 @@
 import type { Applied, ApplyProgress, Planned, Reduced } from '../../sessions/boardKind';
 import type { ApplyLineResult, PlanLine, WritePlan } from '../../sessions/sessionTypes';
 import type { TicketService } from '../../services/TicketService';
-import type { ReportImportDescriptor } from '../../imports/descriptor';
 import {
   pickMergeResolution, pickMergeTarget, prepareMergePrompt, resumeMerge, startMergeRun, stopMerge,
   type MergeContext, type MergeProgress, type MergePrompt,
@@ -10,7 +9,7 @@ import { buildStaleTargetOptions } from '../../imports/staleClose';
 import {
   staleTargetState, type MergeRun, type MergeStep, type MergeStepKind, type ReviewSession, type StaleTargetOption,
 } from '../../imports/types';
-import type { HandlerPayload, ImportHandler, ImportSession } from './handlers';
+import { descriptorOf, type HandlerPayload, type ImportHandler, type ImportSession } from './handlers';
 import { importKind, type ImportWorking } from './kind';
 import { readImport, type ImportData, type ImportDeps, type ImportRow } from './read';
 
@@ -133,12 +132,6 @@ const unfinishedRun = (session: ImportSession) => {
   const ext = extOf(session.working);
   return ext !== undefined && !ext.finished;
 };
-
-type AnyDescriptor = ReportImportDescriptor<unknown, ImportRow>;
-
-function descriptorOf(session: ImportSession, deps: ImportDeps): AnyDescriptor {
-  return deps.descriptors()[session.recipe.kind] as unknown as AnyDescriptor;
-}
 
 /** The engine's review session over the board's reading, with the stored run on it. */
 function engineSession(session: ImportSession, run?: MergeRun): ReviewSession<ImportRow> {

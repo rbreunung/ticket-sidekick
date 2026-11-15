@@ -130,7 +130,7 @@ classDiagram
 ```
 
 - **`id`** is derived from the kind and the normalised source, so there is one session per source (R54): the same report file, query, PR or project always maps to the same session.
-- **`revision`** increases with every change. The page sends the revision it last saw; an action based on an older revision is refused and the page reloads the state.
+- **`revision`** increases with every change. A check (background or Refresh) whose reading, fingerprints and working state equal the stored ones only moves `readAt` and keeps the revision, so a preview made before it stays valid. The page sends the revision it last saw; an action based on an older revision is refused and the page reloads the state.
 - **`fingerprints`** identify what the derived data came from: a report file's size, modification time and content hash; a PR's head commit; for Jira reads, the time.
 
 ---

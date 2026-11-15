@@ -386,6 +386,18 @@ describe('adding New rows to an existing ticket', () => {
     expect(row.written).toBe(false);
   });
 
+  it('a comment add to a ticket the board already rewrote keeps that ticket settled', async () => {
+    let session = await openVeracode(flaws('101', '104', '108'));
+    // The board rewrote SEC-12 before.
+    session = { ...session, working: { ...session.working, writes: { ...session.working.writes, tickets: { 'SEC-12': { updated: jira.tickets['SEC-12'].updated } } } } };
+
+    const { session: after } = await apply(session, plan(session, { type: 'new-add', ids: [rowId(session, '104')], key: 'SEC-12', mode: 'comment' }));
+
+    expect(after.working.writes.tickets['SEC-12'].commentOnly).toBeUndefined();
+    const row = importKind.view({ ...after, working: { ...after.working, tab: 'ticketed', ticketedShow: 'all' } }).ticketed!.rows.find(r => r.ticket === 'SEC-12')!;
+    expect(row.written).toBe(true);
+  });
+
   it('as a rewrite: rebuilds the ticket from its findings and the added row, with the SLA Due Date', async () => {
     const session = await openVeracode(flaws('101', '104', '108'));
     const p = plan(session, { type: 'new-add', ids: [rowId(session, '104')], key: 'SEC-12', mode: 'rewrite' });

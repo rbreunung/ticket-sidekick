@@ -1,6 +1,7 @@
+import type { ReportImportDescriptor } from '../../imports/descriptor';
 import type { Applied, ApplyProgress, ExportedFile, Planned, Reduced } from '../../sessions/boardKind';
 import type { Session, WritePlan } from '../../sessions/sessionTypes';
-import type { ImportData, ImportDeps, ImportTab } from './read';
+import type { ImportData, ImportDeps, ImportRow, ImportTab } from './read';
 import type { ImportRecipe } from './recipe';
 import type { ImportWorking } from './kind';
 
@@ -42,4 +43,12 @@ export interface ImportHandler {
 export function handlerOf(plan: WritePlan): string | undefined {
   const payload = plan.payload as Partial<HandlerPayload> | null | undefined;
   return payload && typeof payload.handler === 'string' ? payload.handler : undefined;
+}
+
+/** The engine's descriptor of a session's report kind, typed for the board's rows. */
+export type ImportDescriptor = ReportImportDescriptor<unknown, ImportRow>;
+
+/** The descriptor of the session's report kind. The one place the per-kind descriptor is widened to the board's row type. */
+export function descriptorOf(session: Pick<ImportSession, 'recipe'>, deps: Pick<ImportDeps, 'descriptors'>): ImportDescriptor {
+  return deps.descriptors()[session.recipe.kind] as unknown as ImportDescriptor;
 }

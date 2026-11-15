@@ -1,14 +1,13 @@
 import { isFinalStatus } from '../../utils/finalStatus';
 import type { Applied, ApplyProgress, Planned, Reduced } from '../../sessions/boardKind';
 import type { ApplyLineResult, WritePlan } from '../../sessions/sessionTypes';
-import type { ReportImportDescriptor } from '../../imports/descriptor';
 import { buildStaleTargetOptions, runStaleClose } from '../../imports/staleClose';
 import {
   planStaleTransitions, staleTargetNeedsResolution, staleTargetState,
   type ReviewRowBase, type ReviewSession, type ReviewSessionStale, type StaleTargetOption, type StaleTicketGroup,
 } from '../../imports/types';
 import { BATCH_LIMIT } from '../../utils/reportImport';
-import type { HandlerPayload, ImportHandler, ImportSession } from './handlers';
+import { descriptorOf, type HandlerPayload, type ImportHandler, type ImportSession } from './handlers';
 import { decided, type ImportWorking } from './kind';
 import type { ImportData, ImportDeps, ImportRow } from './read';
 
@@ -223,8 +222,7 @@ async function applyStale(
 ): Promise<Applied<ImportData, ImportWorking>> {
   const payload = plan.payload as StaleClosePayload;
   const { ticketService } = await deps.writeAccess();
-  const descriptors = deps.descriptors();
-  const descriptor = (session.recipe.kind === 'waltz' ? descriptors.waltz : descriptors.veracode) as unknown as ReportImportDescriptor<unknown, ImportRow>;
+  const descriptor = descriptorOf(session, deps);
   const total = payload.groups.reduce((n, g) => n + g.keys.length, 0);
   const results: ApplyLineResult[] = [];
   let working = session.working;

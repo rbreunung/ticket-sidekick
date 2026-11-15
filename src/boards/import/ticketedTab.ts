@@ -1,5 +1,4 @@
 import type { ApplyLineResult, Conflict, WritePlan } from '../../sessions/sessionTypes';
-import type { ReportImportDescriptor } from '../../imports/descriptor';
 import { applyTicketedActionChange, buildReviewPage } from '../../imports/rows';
 import { runTicketedActions, type TicketedEvent } from '../../imports/ticketedActions';
 import {
@@ -7,9 +6,9 @@ import {
   type ReviewSession, type TicketedAction,
 } from '../../imports/types';
 import { BATCH_LIMIT } from '../../utils/reportImport';
-import type { HandlerPayload, ImportHandler, ImportSession } from './handlers';
-import { rowKeyOf, ticketedRows, type ImportData, type ImportDeps, type ImportRow } from './read';
-import { rowWritten, type ImportWorking } from './kind';
+import { descriptorOf, type HandlerPayload, type ImportHandler, type ImportSession } from './handlers';
+import { rowKeyOf, ticketedRows, type ImportData, type ImportRow } from './read';
+import { rowRef, rowWritten, type ImportWorking } from './kind';
 
 // The import board's handler for the Already ticketed tab: filters, per-row actions and their writes. vscode-free.
 //
@@ -53,14 +52,6 @@ function withState(working: ImportWorking, state: TicketedState): ImportWorking 
 
 function isAction(value: unknown): value is TicketedAction {
   return typeof value === 'string' && (ACTIONS as readonly string[]).includes(value);
-}
-
-function descriptorOf(session: ImportSession, descriptors: ReturnType<ImportDeps['descriptors']>): ReportImportDescriptor<unknown, ImportRow> {
-  return descriptors[session.recipe.kind] as unknown as ReportImportDescriptor<unknown, ImportRow>;
-}
-
-function rowRef(row: ImportRow): string {
-  return 'issueIds' in row ? `Flaw ${row.issueIds.join(', ')}` : row.nameVersion;
 }
 
 /** The word the import shows for an action: both report kinds' descriptors call a follow-up "new ticket". */
@@ -265,7 +256,7 @@ export const ticketedTabHandler: ImportHandler = {
   apply: async (session, plan, deps, progress) => {
     const { units } = plan.payload as TicketedPayload;
     const { data } = session.derived;
-    const descriptor = descriptorOf(session, deps.descriptors());
+    const descriptor = descriptorOf(session, deps);
     const { ticketService } = await deps.writeAccess();
     const baseUrl = await deps.baseUrl();
     const rows = boardRows(session);

@@ -3,7 +3,7 @@ import type { DiagLogger } from '../utils/diagTypes';
 import type { ApplyProgressReport, CheckMode, ExportedFile, RegisteredKind } from './boardKind';
 import { sessionIdFor } from './sessionId';
 import type { SessionStore } from './sessionStore';
-import { SessionError, type ApplyLineResult, type Conflict, type PlanLine, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
+import { SessionError, type ApplyLineResult, type Conflict, type DerivedPart, type PlanLine, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
 
 // Owns every session of this window: opens or restores it, runs its actions one after another,
 // checks it against the sources, and guards its writes. A write needs a plan id that only a
@@ -88,6 +88,13 @@ interface PendingPlan {
   revision: number;
   plan: WritePlan;
   expires: number;
+}
+
+/** Whether a check found what the session already shows: the same data, fingerprints and working state. */
+function unchanged(session: Session<unknown, unknown, unknown>, merged: { derived: DerivedPart<unknown>; working: unknown }): boolean {
+  return JSON.stringify(merged.derived.data) === JSON.stringify(session.derived.data)
+    && JSON.stringify(merged.derived.fingerprints) === JSON.stringify(session.derived.fingerprints)
+    && JSON.stringify(merged.working) === JSON.stringify(session.working);
 }
 
 function messageOf(err: unknown): string {
@@ -231,13 +238,18 @@ export class SessionManager {
       const { kind } = entry.reg;
       const fresh = await kind.read(session.recipe, await entry.reg.deps());
       const merged = kind.reconcile(session, fresh, mode);
-      // A conflict stays until the developer resolves or drops it; a later check must not erase it.
-      const fresher = new Set(merged.conflicts.map(c => c.id));
-      entry.session = {
-        ...session, derived: merged.derived, working: merged.working,
-        conflicts: [...session.conflicts.filter(c => !fresher.has(c.id)), ...merged.conflicts],
-        revision: session.revision + 1, lastUsedAt: this.deps.now(),
-      };
+      if (merged.conflicts.length === 0 && unchanged(session, merged)) {
+        // Nothing changed: only the read time moves, and the revision stays, so an open preview stays valid.
+        entry.session = { ...session, derived: { ...session.derived, readAt: merged.derived.readAt }, lastUsedAt: this.deps.now() };
+      } else {
+        // A conflict stays until the developer resolves or drops it; a later check must not erase it.
+        const fresher = new Set(merged.conflicts.map(c => c.id));
+        entry.session = {
+          ...session, derived: merged.derived, working: merged.working,
+          conflicts: [...session.conflicts.filter(c => !fresher.has(c.id)), ...merged.conflicts],
+          revision: session.revision + 1, lastUsedAt: this.deps.now(),
+        };
+      }
       await this.persist(entry);
     } catch (err) {
       // The stored state stays on show; the board says the check failed.

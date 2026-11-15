@@ -3,7 +3,7 @@ import { api, h } from '../shared/board.js';
 // The import start screen: the report kind and file, and the template, issue type and project the
 // import takes from the settings, for checking before Open. The page holds no state of its own and
 // names no file path, setting or session: the extension opens the file dialog, saves a picked
-// template to its setting and opens the import board.
+// template or project to its setting and opens the import board.
 
 const root = document.getElementById('root');
 let view;
@@ -77,7 +77,15 @@ function issueTypeCell() {
 
 function projectCell() {
   const { project } = view;
-  if (!project.problem) return h('span', {}, project.key ?? '');
+  if (project.options) {
+    return [
+      h('p', {}, project.askReason),
+      h('select', { id: 'project', 'aria-label': 'Project', disabled: busy, onChange: e => { if (e.target.value) void run('project', { key: e.target.value }); } },
+        h('option', { value: '', selected: true }, 'Choose a project…'),
+        project.options.map(p => h('option', { value: p.key }, `${p.key} — ${p.name}`))),
+    ];
+  }
+  if (!project.problem) return [h('span', {}, project.key ?? ''), project.key ? h('span', { class: 'muted' }, ' (from ticketSidekick.jira.defaultProject)') : null];
   return [
     h('p', { class: 'banner', role: 'alert' }, project.problem),
     h('vscode-button', { id: 'open-project-setting', secondary: true, disabled: busy, onClick: () => run('open-setting', { setting: 'project' }) }, 'Open Setting'),

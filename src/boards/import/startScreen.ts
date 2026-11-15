@@ -18,8 +18,9 @@ import {
 // the report file; the template comes from `ticketSidekick.<kind>.template`, the issue type from
 // that template and the project from `ticketSidekick.jira.defaultProject`. The template is asked
 // for only when its setting is empty or names a template that is gone, and the choice is saved to
-// the setting. The default project is never written: a missing or wrong one shows the notice with
-// Open Setting. Open hands the full recipe to the import board. vscode-free: the native file
+// the setting. The default project is picked the same way: when it is empty, not a project key or a
+// project Jira does not have, the page lists Jira's projects and saves the pick to the setting; when
+// the list cannot be read, it shows the notice with Open Setting. Open hands the full recipe to the import board. vscode-free: the native file
 // dialog, the setting writes and the board opening are supplied by the host.
 
 export const IMPORT_START_BOARD = 'import-start';
@@ -61,6 +62,8 @@ export interface ImportStartDeps {
   templateSetting(kind: ReportKind): string;
   /** Saves the picked template to `ticketSidekick.<kind>.template`. */
   writeTemplateSetting(kind: ReportKind, name: string): Promise<void>;
+  /** Saves the picked project to `ticketSidekick.jira.defaultProject`. */
+  writeDefaultProject(key: string): Promise<void>;
   /** The templates of `.jira-templates.json`; throws when the file cannot be read. */
   templates(): JiraTemplate[];
   reportReader(kind: ReportKind): ReportReader;
@@ -79,8 +82,12 @@ export interface StartScreenView {
   kind: ReportKind;
   kinds: Array<{ id: ReportKind; label: string }>;
   report: { path?: string; fileName?: string; items?: number; problem?: string };
-  /** The default project; `problem` is the notice the page shows with Open Setting. */
-  project: { key?: string; problem?: string };
+  /**
+   * The default project. `options` and `askReason` are present while one must be picked (the
+   * setting is empty, not a key, or names a project Jira does not have); `problem` is the notice
+   * the page shows with Open Setting when no list can be offered.
+   */
+  project: { key?: string; problem?: string; options?: Array<{ key: string; name: string }>; askReason?: string };
   template: {
     /** The setting as it is now. */
     setting: string;
@@ -133,6 +140,8 @@ export class ImportStartScreen {
   private reports = new Map<string, ReportResult>();
   /** Issue types of the projects read so far; only successful reads are kept. */
   private projects = new Map<string, string[]>();
+  /** Jira's project list, once read; a failed read is tried again on the next view. */
+  private projectList?: Array<{ key: string; name: string }>;
 
   constructor(private readonly deps: ImportStartDeps) {}
 
@@ -183,6 +192,16 @@ export class ImportStartScreen {
         if (!names.includes(name)) throw new SessionError(400, `There is no template "${name}" in .jira-templates.json.`);
         await this.deps.writeTemplateSetting(this.state.kind, name);
         this.deps.onDiag?.('info', 'Import template setting saved', { setting: templateSettingKey(this.state.kind) });
+        return this.view();
+      }
+      case 'project': {
+        const key = normalizeProjectKey(stringOf(body.key, 'project'));
+        const access = await this.deps.jira();
+        if (!key || !access.configured) throw new SessionError(400, 'Invalid project.');
+        const list = await this.readProjectList(access);
+        if (!list.options?.some(p => p.key === key)) throw new SessionError(400, `Jira has no project "${key}" for you.`);
+        await this.deps.writeDefaultProject(key);
+        this.deps.onDiag?.('info', 'Default project setting saved', { setting: DEFAULT_PROJECT_SETTING });
         return this.view();
       }
       case 'issue-type': {
@@ -243,14 +262,35 @@ export class ImportStartScreen {
     return result;
   }
 
-  /** The project and its issue types: read from Jira when it is configured and the key is well formed. */
-  private async readProject(access: JiraAccess): Promise<{ key?: string; problem?: string; issueTypes?: string[]; issueTypeError?: string }> {
-    const value = this.deps.defaultProject().trim();
-    if (!value) {
-      return { problem: `No default project is set. Set ${DEFAULT_PROJECT_SETTING} to the Jira project the tickets go to.` };
+  /** Jira's projects by key, for the pick; `error` when they cannot be read. */
+  private async readProjectList(access: JiraAccess & { configured: true }): Promise<{ options?: Array<{ key: string; name: string }>; error?: string }> {
+    if (this.projectList) return { options: this.projectList };
+    try {
+      const listed = await access.client.listProjects();
+      this.projectList = listed.map(p => ({ key: p.key, name: p.name })).sort((a, b) => a.key.localeCompare(b.key));
+      return { options: this.projectList };
+    } catch (err) {
+      this.deps.onDiag?.('warn', 'Could not list the Jira projects on the import start screen', { error: errorText(err) });
+      return { error: errorText(err) };
     }
+  }
+
+  /** A project to pick: Jira's list with the reason, or the notice alone when the list cannot be offered. */
+  private async askProject(access: JiraAccess, reason: string): Promise<{ problem?: string; options?: Array<{ key: string; name: string }>; askReason?: string }> {
+    if (!access.configured) return { problem: reason };
+    const list = await this.readProjectList(access);
+    if (list.options && list.options.length > 0) {
+      return { options: list.options, askReason: `${reason} Pick the project the tickets go to; it is saved to ${DEFAULT_PROJECT_SETTING}.` };
+    }
+    return { problem: list.error ? `${reason} The list of Jira projects could not be read: ${list.error}` : `${reason} Jira lists no project for you.` };
+  }
+
+  /** The project and its issue types: read from Jira when it is configured and the key is well formed. */
+  private async readProject(access: JiraAccess): Promise<{ key?: string; problem?: string; options?: Array<{ key: string; name: string }>; askReason?: string; issueTypes?: string[]; issueTypeError?: string }> {
+    const value = this.deps.defaultProject().trim();
+    if (!value) return this.askProject(access, `No default project is set in ${DEFAULT_PROJECT_SETTING}.`);
     const key = normalizeProjectKey(value);
-    if (!key) return { problem: defaultProjectWarning({ kind: 'malformed', value }) };
+    if (!key) return this.askProject(access, defaultProjectWarning({ kind: 'malformed', value }) ?? '');
     if (!access.configured) return { key };
     const known = this.projects.get(key);
     if (known) return { key, issueTypes: known };
@@ -260,7 +300,7 @@ export class ImportStartScreen {
       this.projects.set(key, issueTypes);
       return { key, issueTypes };
     } catch (err) {
-      if (err instanceof JiraApiError && err.isNotFound) return { key, problem: defaultProjectWarning({ kind: 'not-found', project: key }) };
+      if (err instanceof JiraApiError && err.isNotFound) return this.askProject(access, defaultProjectWarning({ kind: 'not-found', project: key }) ?? '');
       this.deps.onDiag?.('warn', `Could not fetch issue types — ${key}, you'll be asked to type it`, { projectKey: key, error: errorText(err) });
       return { key, issueTypeError: errorText(err) };
     }
@@ -320,6 +360,7 @@ export class ImportStartScreen {
 
     const blocker = jiraHint
       ?? project.problem
+      ?? (project.options ? 'Pick a project.' : undefined)
       ?? template.problem
       ?? (!reportPath ? 'Choose the report file.' : undefined)
       ?? report.problem
@@ -328,7 +369,11 @@ export class ImportStartScreen {
     return {
       kind,
       kinds: REPORT_KINDS.map(id => ({ id, label: REPORT_KIND_LABELS[id] })),
-      report, project: { ...(project.key ? { key: project.key } : {}), ...(project.problem ? { problem: project.problem } : {}) },
+      report,
+      project: {
+        ...(project.key ? { key: project.key } : {}), ...(project.problem ? { problem: project.problem } : {}),
+        ...(project.options ? { options: project.options, askReason: project.askReason } : {}),
+      },
       template, issueType,
       ...(jiraHint ? { jiraHint } : {}),
       stored,

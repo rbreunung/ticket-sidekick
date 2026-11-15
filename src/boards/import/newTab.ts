@@ -1,12 +1,11 @@
 import type { Applied, ApplyProgress, Planned, Reduced } from '../../sessions/boardKind';
 import type { ApplyLineResult, WritePlan } from '../../sessions/sessionTypes';
-import type { ReportImportDescriptor } from '../../imports/descriptor';
 import { createTicketForRow, droppedFieldsNote } from '../../imports/create';
 import { addRowsToTicket, checkAddTarget, type AddTargetCheck } from '../../imports/rewrite';
 import { mergeNewRows } from '../../imports/rows';
-import type { AddMode, ReviewRowBase, ReviewSession } from '../../imports/types';
+import type { AddMode, ReviewSession } from '../../imports/types';
 import { BATCH_LIMIT, templateLabelsOf } from '../../utils/reportImport';
-import type { HandlerPayload, ImportHandler, ImportSession } from './handlers';
+import { descriptorOf, type HandlerPayload, type ImportDescriptor, type ImportHandler, type ImportSession } from './handlers';
 import type { ImportWorking } from './kind';
 import { ISSUE_KEY_PATTERN, newRows, rowKeyOf, ticketedRows, type ImportData, type ImportDeps, type ImportRow } from './read';
 
@@ -224,15 +223,9 @@ function planNew(session: ImportSession, action: { type: string } & Record<strin
   return { ok: true, plan };
 }
 
-type AnyDescriptor = ReportImportDescriptor<unknown, ImportRow & ReviewRowBase>;
-
-function descriptorOf(session: ImportSession, deps: ImportDeps): AnyDescriptor {
-  const descriptors = deps.descriptors();
-  return (session.recipe.kind === 'waltz' ? descriptors.waltz : descriptors.veracode) as unknown as AnyDescriptor;
-}
 
 /** The row the engine writes for a group: the row itself, or the merged row the chat builds from its members. */
-function engineRow(group: Group, review: ReviewSession<ImportRow>, descriptor: AnyDescriptor): ImportRow {
+function engineRow(group: Group, review: ReviewSession<ImportRow>, descriptor: ImportDescriptor): ImportRow {
   if (group.rows.length === 1) return group.rows[0];
   const fold = descriptor.fold!;
   const templateLabels = templateLabelsOf(review.additionalFields);
@@ -253,7 +246,7 @@ function dedupKeysOf(group: Group): string[] {
 }
 
 /** The engine's review with the rows an add writes: the ticketed rows and the add's own new rows, merged ones built as the chat builds them. */
-function addSession(session: ImportSession, groups: Group[], descriptor: AnyDescriptor): { engineSession: ReviewSession<ImportRow>; rows: ImportRow[] } {
+function addSession(session: ImportSession, groups: Group[], descriptor: ImportDescriptor): { engineSession: ReviewSession<ImportRow>; rows: ImportRow[] } {
   const review = session.derived.data.review;
   const rows = groups.map(g => engineRow(g, review, descriptor));
   return { engineSession: { ...review, rows: [...ticketedRows(session.derived.data), ...rows] }, rows };
@@ -329,7 +322,9 @@ async function applyNew(
     } catch {
       // Without it a later check sees the ticket as changed by someone else.
     }
-    const commentOnly = payload.mode === 'comment' ? { commentOnly: true } : {};
+    // A comment leaves the ticket's decision open, unless an earlier write of the board already settled it.
+    const settled = working.writes.tickets[ticket] !== undefined && !working.writes.tickets[ticket].commentOnly;
+    const commentOnly = payload.mode === 'comment' && !settled ? { commentOnly: true } : {};
     record(live.flatMap(dedupKeysOf), ticket, { ...working.writes.tickets, [ticket]: { ...(updated !== undefined ? { updated } : {}), ...commentOnly } });
     const ext = extOf(working);
     working = { ...working, ext: { ...working.ext, [NAME]: { added: [...new Set([...ext.added, ticket])] } satisfies NewExt } };

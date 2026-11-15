@@ -1,13 +1,12 @@
 import type { ExportedFile } from '../../sessions/boardKind';
-import type { ReportImportDescriptor } from '../../imports/descriptor';
 import { findTicketsBySummary } from '../../imports/rows';
 import { buildOverview, localDate, type Overview, type ReportOnlyItem } from '../../utils/securityOverview';
 import { renderOverviewCsv, resolveCsvDelimiter } from '../../utils/securityOverviewCsv';
 import { renderOverviewXlsx } from '../../utils/securityOverviewXlsx';
 import type { TicketFinding } from '../../utils/veracodeFindingsTable';
 import type { TicketComponent } from '../../utils/waltzComponentsTable';
-import type { ImportHandler, ImportSession } from './handlers';
-import type { ImportDeps, ImportRow } from './read';
+import { descriptorOf, type ImportHandler, type ImportSession } from './handlers';
+import type { ImportDeps } from './read';
 
 // The import board's handler for search over the matched tickets, the overview export and the finished state. vscode-free.
 
@@ -86,7 +85,7 @@ function mergeDetail(into: { findings?: TicketFinding[]; components?: TicketComp
 function overviewOf(session: ImportSession, deps: ImportDeps): Overview {
   const { recipe, working } = session;
   const { data } = session.derived;
-  const descriptor = deps.descriptors()[recipe.kind] as unknown as ReportImportDescriptor<unknown, ImportRow>;
+  const descriptor = descriptorOf(session, deps);
   const exporter = descriptor.overviewExport;
   if (!exporter) throw new Error('Export is not available for this import.');
 

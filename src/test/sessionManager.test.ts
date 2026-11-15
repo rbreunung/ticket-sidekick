@@ -27,9 +27,12 @@ interface Deps {
   reportWithoutWaiting?: boolean;
   /** Projects a stored recipe no longer resolves to. */
   gone?: string[];
+  /** What the kind's `prepare` reads before a close's preview: a ticket's owner, or an error. */
+  owner?: string | Error;
+  prepares?: number;
 }
 
-function makeKind(formatVersion = 1, options: { revalidate?: boolean } = {}): BoardKind<Recipe, Derived, Working, Action, { tickets: Record<string, string>; selected: string[] }, Deps> {
+function makeKind(formatVersion = 1, options: { revalidate?: boolean; prepare?: boolean } = {}): BoardKind<Recipe, Derived, Working, Action, { tickets: Record<string, string>; selected: string[] }, Deps> {
   return {
     ...(options.revalidate ? {
       revalidate: async (recipe: unknown, deps: Deps) => {
@@ -37,6 +40,14 @@ function makeKind(formatVersion = 1, options: { revalidate?: boolean } = {}): Bo
         return typeof project === 'string' && !(deps.gone ?? []).includes(project)
           ? { ok: true as const, recipe: { project } }
           : { ok: false as const, reason: 'The project is gone.' };
+      },
+    } : {}),
+    ...(options.prepare ? {
+      prepare: async (_session: unknown, action: Action, deps: Deps) => {
+        if (action.type !== 'close') return undefined;
+        deps.prepares = (deps.prepares ?? 0) + 1;
+        if (deps.owner instanceof Error) throw deps.owner;
+        return deps.owner;
       },
     } : {}),
     kind: 'demo',
@@ -71,11 +82,11 @@ function makeKind(formatVersion = 1, options: { revalidate?: boolean } = {}): Bo
       if (!(action.key in session.derived.data.tickets)) return { ok: false, reason: `${action.key} is not on the board.` };
       return { ok: true, working: { selected: [...session.working.selected, action.key] } };
     },
-    plan: (session, action) => {
+    plan: (session, action, prepared) => {
       if (action.type !== 'close') return { ok: false, reason: 'Unknown action.' };
       const keys = session.working.selected;
       if (keys.length === 0) return { ok: false, reason: 'Nothing is selected.' };
-      return { ok: true, plan: { title: `Close ${keys.length} ticket(s)`, lines: keys.map(k => ({ target: k, change: 'Closed' })), risky: true, payload: keys } };
+      return { ok: true, plan: { title: `Close ${keys.length} ticket(s)${prepared ? ` owned by ${String(prepared)}` : ''}`, lines: keys.map(k => ({ target: k, change: 'Closed' })), risky: true, payload: keys } };
     },
     apply: async (session, plan, deps, progress) => {
       const tickets = { ...session.derived.data.tickets };
@@ -113,7 +124,7 @@ let confirmations: string[];
 let confirmAnswer: boolean;
 let clock: number;
 
-function manager(formatVersion = 1, options: { revalidate?: boolean } = {}): SessionManager {
+function manager(formatVersion = 1, options: { revalidate?: boolean; prepare?: boolean } = {}): SessionManager {
   return new SessionManager({
     store: new SessionStore(dir),
     kinds: [registerKind(makeKind(formatVersion, options), () => source)],
@@ -422,6 +433,53 @@ describe('writing from a board', () => {
     const { results } = await m.apply('demo', state.id, preview.planId);
     expect(results).toEqual([{ target: 'PROJ-1', outcome: 'done' }, { target: 'PROJ-2', outcome: 'refused', reason: 'Changed in Jira.' }]);
     expect(source.tickets['PROJ-2']).toBe('In Review');
+  });
+});
+
+describe('a check that finds nothing new', () => {
+  it('keeps the revision, so a preview made before it can still be applied', async () => {
+    confirmAnswer = true;
+    const m = manager();
+    let state = await openReady(m);
+    state = await m.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    const refreshed = await m.refresh('demo', state.id);
+    expect(refreshed.revision).toBe(state.revision);
+    const { results } = await m.apply('demo', state.id, preview.planId);
+    expect(results).toEqual([{ target: 'PROJ-1', outcome: 'done' }]);
+  });
+
+  it('raises the revision when the check found a change, so the older preview is refused', async () => {
+    const m = manager();
+    let state = await openReady(m);
+    state = await m.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    source.tickets = { ...source.tickets, 'PROJ-9': 'Open' };
+    expect((await m.refresh('demo', state.id)).revision).toBe(state.revision + 1);
+    await expect(m.apply('demo', state.id, preview.planId)).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('a read before the preview', () => {
+  it('reads what the preview must show before the plan is built, and the plan shows it', async () => {
+    source.owner = 'Alice';
+    const m = manager(1, { prepare: true });
+    let state = await openReady(m);
+    state = await m.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    expect(preview.title).toBe('Close 1 ticket(s) owned by Alice');
+    expect(source.prepares).toBe(1);
+  });
+
+  it('refuses the preview when that read fails, and builds no plan', async () => {
+    source.owner = new Error('Jira answered 404');
+    const m = manager(1, { prepare: true });
+    let state = await openReady(m);
+    state = await m.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
+    await expect(m.preview('demo', state.id, state.revision, { type: 'close' })).rejects.toThrow('Jira answered 404');
+    // The board stays usable: once the read works, the preview does too.
+    source.owner = 'Bob';
+    expect((await m.preview('demo', state.id, state.revision, { type: 'close' })).title).toBe('Close 1 ticket(s) owned by Bob');
   });
 });
 

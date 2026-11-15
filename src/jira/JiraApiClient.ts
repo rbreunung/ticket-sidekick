@@ -9,6 +9,7 @@ import type {
   JiraIssueLinkType,
   JiraMyFiltersResult,
   JiraProject,
+  JiraProjectSummary,
   JiraProjectStatus,
   JiraRemoteLink,
   JiraSearchResult,
@@ -308,6 +309,13 @@ export class JiraApiClient implements IJiraClient {
 
   async getProject(projectKey: string): Promise<JiraProject> {
     return this.request<JiraProject>(`/project/${projectKey}`);
+  }
+
+  async listProjects(): Promise<JiraProjectSummary[]> {
+    const data = await this.request<Array<Partial<JiraProjectSummary>>>('/project');
+    return (Array.isArray(data) ? data : [])
+      .filter((p): p is JiraProjectSummary => typeof p.key === 'string' && typeof p.name === 'string')
+      .map(p => ({ id: String(p.id ?? ''), key: p.key, name: p.name }));
   }
 
   async getProjectStatuses(projectKey: string, issueType: string): Promise<string[]> {

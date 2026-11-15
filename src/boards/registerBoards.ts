@@ -155,6 +155,7 @@ export function registerBoards(
     defaultProject: () => securityReportDeps.defaultProject(),
     templateSetting: kind => configService.getImportTemplate(kind),
     writeTemplateSetting: (kind, name) => configService.setImportTemplate(kind, name),
+    writeDefaultProject: key => configService.setDefaultProject(key),
     templates: () => {
       const folder = workspaceFolder();
       return folder ? new TemplateService(folder).loadTemplates().templates : [];

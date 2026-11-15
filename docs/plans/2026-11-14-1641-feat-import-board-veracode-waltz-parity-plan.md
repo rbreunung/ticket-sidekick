@@ -607,3 +607,5 @@ Entries here are review items left for the author; they do not block implementat
 - **Start screen with an empty or wrong default project** — U3, Template settings and start screen (P2, design-lens, confidence 75)
 
   A developer whose `ticketSidekick.jira.defaultProject` is empty or names a project Jira does not know reaches the start screen with no way to continue, or the board opens and every dedup search and write fails. The template rule (ask once and save) cannot simply be copied, because the extension's existing rule for this setting is to show Open Setting and never write it (`src/participant/jira/defaultProjectNotice.ts`). Decide whether the start screen asks for a project key and saves it, asks for this import only, or refuses with Open Setting.
+
+  **Decided (2026-11-15, user):** pick once and save, like the template. The start screen lists Jira's projects (`IJiraClient.listProjects`, `GET /project`) and saves the pick to `ticketSidekick.jira.defaultProject`; when the list cannot be read or Jira is not set up, it keeps the notice with Open Setting. The start-of-VS-Code check (`defaultProjectNotice.ts`) still never writes the setting.

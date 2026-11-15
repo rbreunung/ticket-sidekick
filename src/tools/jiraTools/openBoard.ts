@@ -42,10 +42,33 @@ const openBoardShape = {
 /** The board name of the import start screen (`IMPORT_START_BOARD` in src/boards/import/startScreen.ts). */
 const IMPORT_START_BOARD = 'import-start';
 
+/** The title of the import start screen (`IMPORT_START_TITLE` in src/boards/import/startScreen.ts). */
+const IMPORT_START_TITLE = 'Open import';
+
+/**
+ * Whether a path names a file on another machine: a UNC path (`\\server\share`, `//server/share`)
+ * or a file URI with a host. The start screen reads the report as soon as it opens, so a network
+ * path from a prompt would make VS Code connect to that machine (and on Windows send the user's
+ * credentials) before the user did anything. Such a report is picked in the file dialog instead.
+ */
+export function isNetworkPath(value: string): boolean {
+  const p = value.trim();
+  if (/^[\\/]{2}/.test(p)) return true;
+  if (/^file:/i.test(p)) {
+    try {
+      const host = new URL(p).hostname;
+      return host !== '' && host.toLowerCase() !== 'localhost';
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 /** An absolute path for a report path, workspace-relative path or file URI; undefined when a relative path has no workspace to resolve against. */
 function reportPathOf(value: string, workspaceFolder: string | undefined): string | undefined {
   let p = value.trim();
-  if (p.startsWith('file:')) {
+  if (/^file:/i.test(p)) {
     try {
       p = fileURLToPath(p);
     } catch {
@@ -78,10 +101,18 @@ export const openBoardTool = defineTool<JiraToolDeps, typeof openBoardShape>({
     if (args.board === 'security-report') return open({ project: args.project });
     if (args.board === 'sessions') return open({});
     if (args.board === 'import') {
+      if (args.path && isNetworkPath(args.path)) {
+        return 'Not opened: the report is on another machine (a network path). Ask the user to copy it into the workspace or to choose it in the import board\'s file dialog.';
+      }
       // The start screen, opened as the import board when the file reads and the template and project settings are complete.
       const reportPath = args.kind && args.path ? reportPathOf(args.path, deps.workspaceFolders()[0]) : undefined;
       const opened = await deps.openBoard(IMPORT_START_BOARD, { kind: args.kind, ...(reportPath ? { reportPath } : {}), openWhenReady: true });
-      return opened.ok ? `Opened in an editor tab: ${opened.title}.` : `Not opened: ${opened.reason}`;
+      if (!opened.ok) return `Not opened: ${opened.reason}`;
+      // Only whether the tab opened, plus whether the report was loaded, so the agent does not claim more than happened.
+      if (opened.title === IMPORT_START_TITLE) {
+        return `Opened in an editor tab: ${opened.title}. The report was not loaded: the user finishes the choices on the start screen.`;
+      }
+      return `Opened in an editor tab: ${opened.title}.`;
     }
 
     const narrowing = { fixVersion: args.fixVersion, sprint: args.sprint, assignee: args.assignee, myTeam: args.myTeam };

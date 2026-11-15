@@ -11,6 +11,7 @@ import type {
   JiraIssueLinkType,
   JiraMyFiltersResult,
   JiraProject,
+  JiraProjectSummary,
   JiraProjectStatus,
   JiraRemoteLink,
   JiraSearchResult,
@@ -102,6 +103,10 @@ export class MockJiraClient implements IJiraClient {
 
   async getProject(_projectKey: string): Promise<JiraProject> {
     return loadFixture<JiraProject>('project-PROJ.json');
+  }
+
+  async listProjects(): Promise<JiraProjectSummary[]> {
+    return loadFixture<JiraProjectSummary[]>('projects.json');
   }
 
   async getProjectStatuses(_projectKey: string, issueType: string): Promise<string[]> {

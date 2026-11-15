@@ -55,7 +55,8 @@ Preparation: a test project; a `.jira-templates.json` with two templates (one wi
 - [ ] `Ticket Sidekick: Open import board` opens the start screen. With `ticketSidekick.waltz.template` empty, picking Waltz OSS asks for a template; after the pick, the setting holds the name, and the next Waltz import does not ask.
 - [ ] A template setting that names a template no longer in `.jira-templates.json` asks again, saying the template is not there.
 - [ ] A template without an issue type lets you pick one of the project's issue types.
-- [ ] `ticketSidekick.jira.defaultProject` empty: the start screen says so and **Open Setting** opens the setting; it never writes the setting. A key Jira does not know shows the same notice.
+- [ ] `ticketSidekick.jira.defaultProject` empty: the start screen lists the Jira projects; picking one saves it to the setting, and the next import does not ask. A key Jira does not know and a value that is not a key ask the same way.
+- [ ] With Jira's project list unreadable (for example a network block on `/rest/api/2/project`), the start screen shows the notice and **Open Setting** opens the setting.
 - [ ] The oversize report, the file that is not a report and the report with nothing matching each show their reason, and **Open** stays disabled.
 - [ ] With Jira not set up (base URL removed), the start screen shows the setup hint instead of **Open**.
 - [ ] Opening the same file again in the same project offers **Open stored import** (with the template it was started with) and **Start over**; Start over discards it and uses the template now in the setting.

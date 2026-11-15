@@ -116,6 +116,13 @@ export interface JiraProject {
   versions?: JiraProjectVersion[];
 }
 
+/** A project as `GET /project` lists it. */
+export interface JiraProjectSummary {
+  id: string;
+  key: string;
+  name: string;
+}
+
 export interface JiraCreatedIssue {
   id: string;
   key: string;
@@ -180,6 +187,8 @@ export interface IJiraClient {
   executeTransition(issueKey: string, transitionId: string, fields?: Record<string, unknown>): Promise<void>;
   getResolutions(): Promise<Array<{ name: string }>>;
   getProject(projectKey: string): Promise<JiraProject>;
+  /** The projects the user can see (`GET /project`), without their issue types. */
+  listProjects(): Promise<JiraProjectSummary[]>;
   getProjectStatuses(projectKey: string, issueType: string): Promise<string[]>;
   /** The statuses of a project's issue type that Jira puts in the Done category. */
   getDoneStatuses(projectKey: string, issueType: string): Promise<string[]>;

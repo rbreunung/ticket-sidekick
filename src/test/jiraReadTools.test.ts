@@ -58,6 +58,8 @@ interface CallOptions {
   outcomes?: ToolCallOutcome[];
   /** Records what a board was opened with. */
   opened?: Array<{ kind: string; input: unknown }>;
+  /** The title of the tab a board opens as; "Board" when not given. */
+  openedTitle?: string;
 }
 
 async function callTool(name: string, args: Record<string, unknown> = {}, options: CallOptions = {}): Promise<string> {
@@ -70,7 +72,7 @@ async function callTool(name: string, args: Record<string, unknown> = {}, option
     jiraDownloadTimeoutMs: options.downloadTimeoutMs,
     recentWrites: new RecentCallGuard(),
     onDiag: (level, message, details) => options.logs?.push({ level, message, details }),
-    ...(options.opened ? { openBoard: async (kind: string, input: unknown) => { options.opened!.push({ kind, input }); return { ok: true as const, title: 'Board' }; } } : {}),
+    ...(options.opened ? { openBoard: async (kind: string, input: unknown) => { options.opened!.push({ kind, input }); return { ok: true as const, title: options.openedTitle ?? 'Board' }; } } : {}),
   };
   const tool = JIRA_TOOLS.find(t => t.name === name);
   if (!tool) throw new Error(`no tool named ${name}`);
@@ -995,6 +997,24 @@ describe('opening the import board', () => {
     await callTool(OPEN_BOARD_TOOL, { board: 'import', kind: 'waltz', path: file }, { opened });
     await callTool(OPEN_BOARD_TOOL, { board: 'import', kind: 'waltz', path: pathToFileURL(file).href }, { opened });
     expect(opened.map(o => (o.input as { reportPath?: string }).reportPath)).toEqual([file, file]);
+  });
+
+  it('refuses a report on another machine and opens nothing, so no network connection is made', async () => {
+    const opened: Array<{ kind: string; input: unknown }> = [];
+    for (const p of ['\\\\fileserver\\share\\oss.xlsx', '//fileserver/share/oss.xlsx', 'file://fileserver/share/oss.xlsx']) {
+      const text = await callTool(OPEN_BOARD_TOOL, { board: 'import', kind: 'waltz', path: p }, { opened });
+      expect(text).toContain('Not opened: the report is on another machine');
+    }
+    expect(opened).toEqual([]);
+    // A local file URI is still taken.
+    await callTool(OPEN_BOARD_TOOL, { board: 'import', kind: 'waltz', path: 'file:///tmp/oss.xlsx' }, { opened });
+    expect(opened).toHaveLength(1);
+  });
+
+  it('tells the agent when only the start screen opened, so it does not claim the report is ready', async () => {
+    const opened: Array<{ kind: string; input: unknown }> = [];
+    const text = await callTool(OPEN_BOARD_TOOL, { board: 'import', kind: 'waltz', path: 'oss.xlsx' }, { opened, openedTitle: 'Open import' });
+    expect(text).toBe('Opened in an editor tab: Open import. The report was not loaded: the user finishes the choices on the start screen.');
   });
 
   it('opens the start screen without a file when the path cannot be placed or no kind is given', async () => {
