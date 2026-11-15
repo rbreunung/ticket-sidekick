@@ -167,7 +167,7 @@ export function registerBoards(
     discardSession: id => manager.discard(id),
     openImport: async recipe => {
       const opened = await panels.open(IMPORT_KIND, recipe);
-      return opened.ok ? { ok: true } : opened;
+      return opened.ok ? { ok: true, title: opened.title } : opened;
     },
     onDiag: (level, message, details) => logDiag('boards.importStart', level, message, details),
   });

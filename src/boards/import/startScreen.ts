@@ -70,8 +70,8 @@ export interface ImportStartDeps {
   openSetting(key: string): Promise<void>;
   hasSession(id: string): Promise<boolean>;
   discardSession(id: string): Promise<void>;
-  /** Opens the import board with the full recipe. */
-  openImport(recipe: ImportRecipe): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /** Opens the import board with the full recipe; `title` is the opened board's tab title. */
+  openImport(recipe: ImportRecipe): Promise<{ ok: true; title?: string } | { ok: false; reason: string }>;
   onDiag?: DiagLogger;
 }
 
@@ -142,6 +142,22 @@ export class ImportStartScreen {
     if (!isReportKind(v.kind)) return;
     if (v.kind !== this.state.kind) this.state = { kind: v.kind };
     if (typeof v.reportPath === 'string' && path.isAbsolute(v.reportPath)) this.setReport(v.reportPath);
+  }
+
+  /**
+   * Opens the import board for the kind and file it was prefilled with, when nothing is missing: the file reads, the
+   * template and issue type are known and the project is set. Opens nothing otherwise, so the caller shows the start
+   * screen with what is filled in. A stored import of the same file and project opens as it is.
+   */
+  async openIfReady(): Promise<{ opened: true; title?: string } | { opened: false }> {
+    const view = await this.view();
+    if (!view.canOpen) return { opened: false };
+    const opened = await this.deps.openImport(this.recipeOf(view));
+    if (!opened.ok) {
+      this.deps.onDiag?.('warn', 'The import board did not open; showing the start screen', { kind: view.kind, reason: opened.reason });
+      return { opened: false };
+    }
+    return { opened: true, ...(opened.title ? { title: opened.title } : {}) };
   }
 
   /** Answers one request of the start screen's page. */
@@ -321,16 +337,21 @@ export class ImportStartScreen {
     };
   }
 
-  private async open(startOver: boolean): Promise<StartScreenView> {
-    const view = await this.view();
-    if (!view.canOpen) throw new SessionError(409, view.blocker ?? 'The import cannot be opened yet.');
-    const recipe: ImportRecipe = {
+  /** The recipe of a view that can open. */
+  private recipeOf(view: StartScreenView): ImportRecipe {
+    return {
       kind: view.kind,
       projectKey: view.project.key as string,
       reportPath: view.report.path as string,
       templateName: view.template.name as string,
       issueType: view.issueType.name as string,
     };
+  }
+
+  private async open(startOver: boolean): Promise<StartScreenView> {
+    const view = await this.view();
+    if (!view.canOpen) throw new SessionError(409, view.blocker ?? 'The import cannot be opened yet.');
+    const recipe = this.recipeOf(view);
     if (startOver) {
       await this.deps.discardSession(importSessionId(recipe));
       this.deps.onDiag?.('info', 'Import session discarded to start over', { kind: recipe.kind });

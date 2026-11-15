@@ -12,7 +12,7 @@ const engineFiles = readdirSync(engineDir).filter(name => name.endsWith('.ts')).
 describe('shared import engine', () => {
   it('has its modules in src/imports', () => {
     expect(engineFiles).toEqual(expect.arrayContaining([
-      'accept.ts', 'cleanup.ts', 'create.ts', 'descriptor.ts', 'merge.ts', 'review.ts', 'rewrite.ts',
+      'cleanup.ts', 'create.ts', 'descriptor.ts', 'merge.ts', 'review.ts', 'rewrite.ts',
       'rows.ts', 'staleClose.ts', 'ticketedActions.ts', 'types.ts', 'veracode.ts', 'waltz.ts',
     ]));
   });

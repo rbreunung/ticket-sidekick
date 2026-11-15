@@ -21,7 +21,9 @@ describe('the @jira help catalog covers everything the participant offers', () =
     const source = sourceOf('src/participant/jira/llmHelpers.ts');
     const block = source.slice(source.indexOf('export type Operation ='), source.indexOf('export interface ParsedIntent'));
     const operations = [...block.matchAll(/'(\w+)'/g)].map(m => m[1]);
-    expect(operations).toContain('importVeracode');
+    expect(operations).toContain('createFromEmail');
+    // Veracode and Waltz reports are imported on the import board, so @jira has no operation for them.
+    expect(operations.filter(o => /veracode|waltz/i.test(o))).toEqual([]);
     // `other` is everything @jira no longer runs; it gets the imports-only notice, not a help entry.
     expect(operations.filter(o => o !== 'other' && !covered.has(o)), 'add these operations to JIRA_COMMAND_ENTRIES').toEqual([]);
   });

@@ -30,9 +30,7 @@ vi.mock('../services/WorkflowService', async (importOriginal) => ({
 
 import * as vscode from 'vscode';
 import { buildImportTemplateSession, streamImportTemplateSelection, handleImportTemplateSelection, continueAfterImportIssueType, handleImportReviewReply } from '../participant/jira/reportImportHandler';
-import { handleVeracodeAwaitIssueType } from '../participant/jira/veracodeHandler';
-import { handleWaltzAwaitIssueType } from '../participant/jira/waltzHandler';
-import { type ReviewSession, type VeracodeTemplateSelectionSession, type WaltzTemplateSelectionSession, type AwaitIssueTypeResume } from '../participant/sessionState';
+import { type ReviewSession } from '../participant/sessionState';
 import { AWAIT_ISSUE_TYPE_SESSION_KEY } from '../participant/jira/ticketContext';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
@@ -246,102 +244,5 @@ describe('create tickets ends an import with nothing left to act on (auto-finish
     expect(ws.store[descriptor.sessionKeys.review]).toBeDefined();
     const text = stream.markdown.mock.calls.map((c: unknown[]) => markdownText(c[0])).join('');
     expect(text).not.toContain('Import finished');
-  });
-});
-
-describe('handleVeracodeAwaitIssueType (R6/KTD4 resume, supersession guard)', () => {
-  let client: MockJiraClient;
-  let ticketService: TicketService;
-
-  beforeEach(() => {
-    client = new MockJiraClient();
-    ticketService = new TicketService(client);
-  });
-
-  function makeVeracodeSession(overrides: Partial<VeracodeTemplateSelectionSession> = {}): VeracodeTemplateSelectionSession {
-    return {
-      reportFileName: 'report.xml', projectKey: 'PROJ', items: [], availableTemplates: [],
-      availableIssueTypes: [''], schemaVersion: 1, ...overrides,
-    };
-  }
-
-  function makeResume(session: VeracodeTemplateSelectionSession): Extract<AwaitIssueTypeResume, { kind: 'reportImport' }> {
-    return { kind: 'reportImport', descriptorKind: 'veracode', pickedTemplateName: null, session };
-  }
-
-  it('aborts instead of creating a batch when a newer import session was written while the ask was open', async () => {
-    const ws = makeMockWs();
-    // Simulate a second, independent import starting and claiming the session key while this
-    // flow's chat-based ask was still open (across the turn boundary the detour introduces).
-    ws.store['jira.session.veracodeTemplateSelection'] = makeVeracodeSession({ reportFileName: 'other-report.xml' });
-    const searchSpy = vi.spyOn(client, 'searchJql');
-    const stream = mockStream();
-
-    await handleVeracodeAwaitIssueType(makeResume(makeVeracodeSession()), 'Spike', client, ticketService, stream as never, ws as never);
-
-    expect(searchSpy).not.toHaveBeenCalled();
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('newer import was started'))).toBe(true);
-    // The second flow's session must survive untouched — this abort must not clear it.
-    expect(ws.store['jira.session.veracodeTemplateSelection']).toBeDefined();
-  });
-
-  it('resumes normally into the review flow when not superseded', async () => {
-    const ws = makeMockWs();
-    const stream = mockStream();
-
-    await handleVeracodeAwaitIssueType(makeResume(makeVeracodeSession()), 'Spike', client, ticketService, stream as never, ws as never);
-
-    const reviewSession = ws.store['jira.session.veracodeReview'] as ReviewSession<TestRow>;
-    expect(reviewSession.issueType).toBe('Spike');
-  });
-});
-
-describe('handleWaltzAwaitIssueType (R6/KTD4 resume, same mechanism as Veracode)', () => {
-  let client: MockJiraClient;
-  let ticketService: TicketService;
-
-  beforeEach(() => {
-    client = new MockJiraClient();
-    ticketService = new TicketService(client);
-  });
-
-  function makeWaltzSession(overrides: Partial<WaltzTemplateSelectionSession> = {}): WaltzTemplateSelectionSession {
-    return {
-      reportFileName: 'report.xlsx', projectKey: 'PROJ', items: [], availableTemplates: [],
-      availableIssueTypes: [''], schemaVersion: 1, ...overrides,
-    };
-  }
-
-  it('resumes normally into the review flow when not superseded', async () => {
-    const ws = makeMockWs();
-    const resume: Extract<AwaitIssueTypeResume, { kind: 'reportImport' }> = {
-      kind: 'reportImport', descriptorKind: 'waltz', pickedTemplateName: null, session: makeWaltzSession(),
-    };
-
-    await handleWaltzAwaitIssueType(resume, 'Task', client, ticketService, mockStream() as never, ws as never);
-
-    const reviewSession = ws.store['jira.session.waltzReview'] as ReviewSession<TestRow>;
-    expect(reviewSession.issueType).toBe('Task');
-  });
-
-  it('aborts instead of creating a batch when a newer import session was written while the ask was open', async () => {
-    const ws = makeMockWs();
-    // Simulate a second, independent import starting and claiming the session key while this
-    // flow's chat-based ask was still open (across the turn boundary the detour introduces).
-    ws.store['jira.session.waltzTemplateSelection'] = makeWaltzSession({ reportFileName: 'other-report.xlsx' });
-    const searchSpy = vi.spyOn(client, 'searchJql');
-    const resume: Extract<AwaitIssueTypeResume, { kind: 'reportImport' }> = {
-      kind: 'reportImport', descriptorKind: 'waltz', pickedTemplateName: null, session: makeWaltzSession(),
-    };
-    const stream = mockStream();
-
-    await handleWaltzAwaitIssueType(resume, 'Task', client, ticketService, stream as never, ws as never);
-
-    expect(searchSpy).not.toHaveBeenCalled();
-    const calls = (stream.markdown as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
-    expect(calls.some(c => c.includes('newer import was started'))).toBe(true);
-    // The second flow's session must survive untouched — this abort must not clear it.
-    expect(ws.store['jira.session.waltzTemplateSelection']).toBeDefined();
   });
 });

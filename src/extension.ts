@@ -1,169 +1,18 @@
 import * as vscode from 'vscode';
 import * as os from 'os';
 import * as path from 'path';
-import * as fs from 'fs';
 import { ConfigService } from './services/ConfigService';
 import { createJiraParticipant } from './participant/JiraParticipant';
 import { createBitbucketParticipant } from './participant/BitbucketParticipant';
 import { endBitbucketSessions } from './participant/reviewSessionState';
-import { JiraApiClient } from './jira/JiraApiClient';
-import { parseVeracodeReport, filterFlaws } from './utils/veracodeReport';
-import { buildVeracodeTemplateSession, getVeracodeMaxReportBytes } from './participant/jira/veracodeHandler';
-import { parseWaltzReport, filterComponents } from './utils/waltzReport';
-import { buildWaltzTemplateSession, getWaltzMaxReportBytes } from './participant/jira/waltzHandler';
 import {
   checkEmailBatchCaps, parseEmlFiles, describeEmailFileSelection, EMAIL_TEMPLATE_SESSION_KEY, EMAIL_CLEANUP_SESSION_KEY,
 } from './participant/jira/emailHandler';
 import { buildPendingEmailCleanupSession } from './participant/sessionState';
-import { readAndFilterReport } from './participant/jira/reportImportHandler';
-import { logDiag } from './utils/diagLog';
-import type { IJiraClient } from './jira/IJiraClient';
 import { registerBitbucketTools } from './tools/bitbucketTools';
 import { registerJiraTools } from './tools/registerJiraTools';
 import type { BoardStats } from './boards/boardPanels';
 import { registerDefaultProjectCheck } from './participant/jira/defaultProjectNotice';
-
-// Shared shape for the two nearly-identical report-import commands (Veracode .xml, Waltz OSS .xlsx):
-// pick a file -> check credentials -> stat+size-cap+read+parse+filter -> empty-result message ->
-// resolve project key -> build a JiraApiClient -> build the importer's template-selection session ->
-// stash it in workspaceState and open chat. Everything the two commands do differently (file filter,
-// which parser/filter to call, message text, which template-session builder to call) is supplied here.
-interface ReportImportCommandDescriptor<TRaw, TItem> {
-  reportKind: string; // 'Veracode' | 'OSS' — used in log scope details and the "Could not parse …" message
-  fileFilterLabel: string;
-  fileExtensions: string[];
-  filePickerTitle: string;
-  readContent: (filePath: string) => Promise<TRaw>;
-  // Takes the resolved byte limit so the importer's own defense-in-depth re-check (inside
-  // parseVeracodeReport/parseWaltzReport) agrees with the outer stat check below instead of
-  // silently staying on the 20 MB default.
-  parse: (raw: TRaw, maxBytes: number) => TItem[] | Promise<TItem[]>;
-  filter: (items: TItem[]) => TItem[];
-  noMatchMessage: string;
-  // U6: `rawItems` (the parsed, pre-`filter` items) is optional so a caller with no stale-check
-  // concept can ignore it — passed through when present so buildVeracodeTemplateSession/
-  // buildWaltzTemplateSession can build the stale-check's "is this finding still active" predicate
-  // from the *unfiltered* report instead of degrading to the already-filtered set.
-  buildTemplateSession: (items: TItem[], fileName: string, projectKey: string, jiraClient: IJiraClient, rawItems?: TItem[], reportFilePath?: string) => Promise<unknown>;
-  sessionKey: string;
-  chatQuery: string;
-  // Resolved fresh per invocation (not at registration time) so a setting the user just changed
-  // takes effect on the next import.
-  getMaxReportBytes: () => number;
-}
-
-function registerReportImportCommand<TRaw, TItem>(
-  context: vscode.ExtensionContext,
-  configService: ConfigService,
-  commandId: string,
-  descriptor: ReportImportCommandDescriptor<TRaw, TItem>,
-): vscode.Disposable {
-  return vscode.commands.registerCommand(commandId, async () => {
-    const uris = await vscode.window.showOpenDialog({
-      canSelectMany: false,
-      filters: { [descriptor.fileFilterLabel]: descriptor.fileExtensions },
-      defaultUri: vscode.Uri.file(path.join(os.homedir(), 'Downloads')),
-      title: descriptor.filePickerTitle,
-    });
-    if (!uris || uris.length === 0) return;
-    const reportPath = uris[0].fsPath;
-
-    // Check credentials before paying for the file read/parse — no point loading up to 20 MB and
-    // parsing it if Jira isn't even configured yet. This ordering was a deliberate fix earlier in
-    // this refactor — keep credentials checked before any read/parse work happens.
-    const config = await configService.getConfig();
-    if (!config.baseUrl || !config.token) {
-      vscode.window.showErrorMessage('Ticket Sidekick: Configure Jira credentials first.');
-      return;
-    }
-
-    // readAndFilterReport() (reportImportHandler.ts) owns the stat+size-cap+read+parse+filter
-    // sequence. Its own size-cap check happens before readContent is ever invoked, so if neither of
-    // the two wrapped steps below reports itself as the failure point, the cap is the only thing left
-    // that could have thrown — that's what lets the outer catch tell the two apart without string-
-    // matching the thrown error. Preserves the three distinct pre-refactor messages (read failure /
-    // parse failure / size-cap) exactly.
-    const maxReportBytes = descriptor.getMaxReportBytes();
-    let readOrParseFailed = false;
-    let items: TItem[];
-    // U6: the raw, unfiltered parse() output — captured here (before descriptor.filter runs) so it
-    // can be passed to buildTemplateSession for the stale-check predicate, mirroring what
-    // readAndFilterVeracodeFile/readAndFilterWaltzFile now capture for the chat-only entry point.
-    let rawParsedItems: TItem[] = [];
-    try {
-      // readAndFilterReport now returns { items, rawItems } directly, but its `rawItems` here would
-      // just be the already-filtered value (the wrapped parse step below applies descriptor.filter
-      // itself, so the outer `filter` param is identity — see its own comment) — this function keeps
-      // its own `rawParsedItems` closure capture above, taken before descriptor.filter runs, since
-      // that's the genuinely pre-filter set the stale-check predicate needs.
-      ({ items } = await readAndFilterReport<TRaw, TItem>(
-        reportPath,
-        async filePath => {
-          try {
-            return await descriptor.readContent(filePath);
-          } catch (err) {
-            readOrParseFailed = true;
-            const message = err instanceof Error ? err.message : String(err);
-            logDiag('extension', 'error', `Could not read ${descriptor.reportKind} report — ${filePath}`, { reportPath: filePath, error: message });
-            vscode.window.showErrorMessage(`Ticket Sidekick: Could not read file: ${message}`);
-            throw err;
-          }
-        },
-        async raw => {
-          try {
-            const parsed = await descriptor.parse(raw, maxReportBytes);
-            rawParsedItems = parsed;
-            return descriptor.filter(parsed);
-          } catch (err) {
-            readOrParseFailed = true;
-            const message = err instanceof Error ? err.message : String(err);
-            logDiag('extension', 'error', `Could not parse ${descriptor.reportKind} report — ${reportPath}`, { reportPath, error: message });
-            vscode.window.showErrorMessage(`Ticket Sidekick: Could not parse ${descriptor.reportKind} report: ${message}`);
-            throw err;
-          }
-        },
-        // filter already applied above (inside the wrapped parse step, so parse+filter failures share
-        // the same "Could not parse …" message exactly as before the refactor) — identity here.
-        parsedItems => parsedItems,
-        maxReportBytes,
-      ));
-    } catch {
-      if (!readOrParseFailed) {
-        vscode.window.showErrorMessage(`Ticket Sidekick: Report exceeds the ${maxReportBytes / (1024 * 1024)} MB size limit.`);
-      }
-      return;
-    }
-
-    if (items.length === 0) {
-      vscode.window.showInformationMessage(descriptor.noMatchMessage);
-      return;
-    }
-
-    const cfg = vscode.workspace.getConfiguration('ticketSidekick');
-    let projectKey = cfg.get<string>('jira.defaultProject') ?? '';
-    if (!projectKey) {
-      const entered = await vscode.window.showInputBox({
-        prompt: 'Enter the Jira project key for the new tickets (e.g. PROJ)',
-        placeHolder: 'PROJECT',
-        ignoreFocusOut: true,
-      });
-      if (!entered) return;
-      projectKey = entered;
-    }
-
-    const jiraClient = new JiraApiClient({
-      baseUrl: config.baseUrl,
-      authType: config.authType,
-      token: config.token,
-      onDiag: (level, message, details) => logDiag('jira.apiClient', level, message, details),
-    });
-
-    const session = await descriptor.buildTemplateSession(items, path.basename(reportPath), projectKey, jiraClient, rawParsedItems, reportPath);
-
-    await context.workspaceState.update(descriptor.sessionKey, session);
-    await vscode.commands.executeCommand('workbench.action.chat.open', { query: descriptor.chatQuery });
-  });
-}
 
 /** What `activate` returns: read only by the tests that drive a real VS Code. */
 export interface TicketSidekickApi {
@@ -304,56 +153,6 @@ export function activate(context: vscode.ExtensionContext): TicketSidekickApi {
       await context.workspaceState.update(EMAIL_TEMPLATE_SESSION_KEY, undefined);
       await context.workspaceState.update(EMAIL_CLEANUP_SESSION_KEY, session);
       await vscode.commands.executeCommand('workbench.action.chat.open', { query: '@jira create from email' });
-    }),
-  );
-
-  context.subscriptions.push(
-    registerReportImportCommand(context, configService, 'ticket-sidekick.importVeracodeReport', {
-      reportKind: 'Veracode',
-      fileFilterLabel: 'Veracode report',
-      fileExtensions: ['xml'],
-      filePickerTitle: 'Select Veracode Detailed Report (.xml)',
-      readContent: reportPath => fs.promises.readFile(reportPath, 'utf-8'),
-      parse: (raw, maxBytes) => parseVeracodeReport(raw, maxBytes),
-      filter: allFlaws => {
-        const veracodeCfg = vscode.workspace.getConfiguration('ticketSidekick');
-        return filterFlaws(allFlaws, {
-          minSeverity: veracodeCfg.get<number>('veracode.minSeverity') ?? 4,
-          includeStatuses: veracodeCfg.get<string[]>('veracode.includeRemediationStatuses') ?? ['New', 'Open', 'Reopened'],
-        });
-      },
-      noMatchMessage:
-        'Ticket Sidekick: No flaws in this report matched your current severity/status filters ' +
-        '(ticketSidekick.veracode.minSeverity / ticketSidekick.veracode.includeRemediationStatuses).',
-      buildTemplateSession: buildVeracodeTemplateSession,
-      sessionKey: 'jira.session.veracodeTemplateSelection',
-      chatQuery: '@jira import veracode report',
-      getMaxReportBytes: getVeracodeMaxReportBytes,
-    }),
-  );
-
-  context.subscriptions.push(
-    registerReportImportCommand(context, configService, 'ticket-sidekick.importWaltzReport', {
-      reportKind: 'OSS',
-      fileFilterLabel: 'OSS report',
-      fileExtensions: ['xlsx'],
-      filePickerTitle: 'Select OSS Report (.xlsx)',
-      readContent: reportPath => fs.promises.readFile(reportPath),
-      parse: (raw, maxBytes) => parseWaltzReport(raw, maxBytes, (level, message, details) => logDiag('jira.waltz', level, message, details)),
-      filter: allComponents => {
-        const waltzCfg = vscode.workspace.getConfiguration('ticketSidekick');
-        return filterComponents(allComponents, {
-          minVulnRating: waltzCfg.get<string>('waltz.minVulnRating') ?? 'High',
-          includeRemediationActions: waltzCfg.get<string[]>('waltz.includeRemediationActions') ?? ['', 'Remediate'],
-        });
-      },
-      noMatchMessage:
-        'Ticket Sidekick: No components in this report matched your current rating/remediation filters ' +
-        '(ticketSidekick.waltz.minVulnRating / ticketSidekick.waltz.includeRemediationActions).',
-      getMaxReportBytes: getWaltzMaxReportBytes,
-      buildTemplateSession: buildWaltzTemplateSession,
-      sessionKey: 'jira.session.waltzTemplateSelection',
-      chatQuery: '@jira import oss report',
     }),
   );
 

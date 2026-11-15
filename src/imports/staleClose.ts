@@ -5,7 +5,7 @@ import type { TicketService } from '../services/TicketService';
 import { transitionTickets } from './cleanup';
 import type { ReportImportDescriptor } from './descriptor';
 import {
-  emptyImportOutcomes, planStaleTransitions, selectedOpenStaleTickets,
+  emptyImportOutcomes, planStaleTransitions,
   type ImportHooks, type ReviewRowBase, type ReviewSession, type ReviewSessionStale, type StaleRuleOption, type StaleTargetOption,
 } from './types';
 
@@ -42,14 +42,6 @@ export function applyStaleTicketToggle(stale: ReviewSessionStale, keys: string[]
       tickets: g.tickets.map(t => (toggleSet.has(t.key.toUpperCase()) ? { ...t, included: !t.included } : t)),
     })),
   };
-}
-
-/** The close-time target options for one issue type's selected, not-yet-transitioned stale tickets; empty when none can move anywhere. */
-export function staleCloseTargetOptions<TRow extends ReviewRowBase>(session: ReviewSession<TRow>, issueType: string): StaleTargetOption[] {
-  const stale = session.staleTickets!;
-  const group = stale.groups.find(g => g.issueType === issueType)!;
-  const selectedStatuses = selectedOpenStaleTickets(group, stale.closedKeys).map(t => t.currentStatus);
-  return buildStaleTargetOptions(group.rules, group.graph, selectedStatuses);
 }
 
 /** Announced before the transitions of a stale close run: how many tickets move, and where. */

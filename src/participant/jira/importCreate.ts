@@ -21,12 +21,6 @@ export function droppedFieldsWarning(link: string, droppedFields: string[]): str
   return `_Warning: Jira refused the ${names} on ${link} (the field is probably not on the project's screen), so it was written without. The dates are in the description._\n\n`;
 }
 
-/** The result-line note that a rewrite set the Due Date: the importer's own wording, else just the date. */
-export function dueDateSetNote(dueDate: string | null, descriptor: { dueDateNote?: (dueDate: string) => string }): string {
-  if (!dueDate) return '';
-  return descriptor.dueDateNote ? ` — ${descriptor.dueDateNote(dueDate)}` : ` — Due Date set to ${dueDate}`;
-}
-
 /** Streams one creation step: a ✓/✗ progress line, and the warnings that go with it. */
 export function streamCreateEvent(stream: vscode.ChatResponseStream, baseUrl?: string): (event: CreateEvent) => void {
   return event => {

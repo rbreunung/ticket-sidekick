@@ -28,15 +28,13 @@
         "id": "ticket-sidekick.jira",
         "name": "jira",
         "fullName": "Ticket Sidekick",
-        "description": "Deprecated: imports emails, Veracode and Waltz reports into Jira. Use /ts-jira or Agent mode for everything else",
+        "description": "Deprecated: imports emails into Jira. Use /ts-jira or Agent mode for everything else",
         "isSticky": true,
         "disambiguation": [
           {
             "category": "jira_report_import",
-            "description": "The user wants to import an email (.eml), a Veracode Detailed Report or a Waltz OSS report into Jira tickets, or add an email to a Jira ticket as a comment.",
+            "description": "The user wants to import an email (.eml) into a Jira ticket, or add an email to a Jira ticket as a comment.",
             "examples": [
-              "Import this Veracode report into PROJ",
-              "Create Jira tickets from the Waltz OSS report",
               "Create a ticket from this email",
               "Add this email to PROJ-42 as a comment"
             ]
@@ -101,14 +99,6 @@
       {
         "command": "ticket-sidekick.importEml",
         "title": "Ticket Sidekick: Create Jira ticket from email (.eml)"
-      },
-      {
-        "command": "ticket-sidekick.importVeracodeReport",
-        "title": "Ticket Sidekick: Create Jira tickets from Veracode report (.xml)"
-      },
-      {
-        "command": "ticket-sidekick.importWaltzReport",
-        "title": "Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)"
       },
       {
         "command": "ticket-sidekick.sessions.clear",
@@ -728,7 +718,7 @@
       {
         "name": "jira_open_board",
         "displayName": "Open a Ticket Sidekick board",
-        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, or the stored sessions. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. For a cleanup by a rule from .jira-templates.json, pass the rule's name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
+        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, the stored sessions, or the import board for a Veracode or Waltz report. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. For a cleanup by a rule from .jira-templates.json, pass the rule's name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. For a report import, pass board import with kind and path; the user reviews and creates the tickets on the board. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
         "userDescription": "Opens a board in its own editor tab.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraOpenBoard",
@@ -744,9 +734,22 @@
               "enum": [
                 "security-report",
                 "ticket-list",
-                "sessions"
+                "sessions",
+                "import"
               ],
-              "description": "security-report: a project's open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, where the user selects tickets and moves them or sets a field, or a cleanup rule's tickets. sessions: the stored board sessions of this workspace."
+              "description": "security-report: a project's open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, where the user selects tickets and moves them or sets a field, or a cleanup rule's tickets. sessions: the stored board sessions of this workspace. import: imports a Veracode Detailed Report or a Waltz OSS Report into Jira tickets."
+            },
+            "kind": {
+              "description": "import: the report kind, veracode (Detailed Report XML) or waltz (OSS Report .xlsx).",
+              "type": "string",
+              "enum": [
+                "veracode",
+                "waltz"
+              ]
+            },
+            "path": {
+              "description": "import: the report file, a path in the workspace or an absolute path or file URI, e.g. a file dragged into the chat.",
+              "type": "string"
             },
             "project": {
               "description": "security-report: the Jira project key, e.g. PROJ. Leave out to use the default project.",

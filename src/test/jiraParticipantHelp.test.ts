@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Drives the real `@jira` chat handler: the help turn, a request for a removed flow and an import request. `vscode` is
+// Drives the real `@jira` chat handler: the help turn, a request for a removed flow, a Veracode or Waltz import (now on
+// the import board) and an email import. `vscode` is
 // mocked per the repo's per-test-file convention with just the surface JiraParticipant.ts touches; the Jira client is a
 // stub that fails the test when it is called, and the model answers the intent parse with a fixed operation.
 const h = vi.hoisted(() => ({
@@ -44,13 +45,16 @@ vi.mock('../jira/JiraApiClient', () => ({
   }),
 }));
 
-const imports = vi.hoisted(() => ({ veracode: [] as unknown[] }));
-vi.mock('../participant/jira/veracodeHandler', () => ({
-  handleImportVeracodeReport: async (...args: unknown[]) => { imports.veracode.push(args[6]); },
-  handleVeracodeTemplateSelection: async () => undefined,
-  handleVeracodeReviewReply: async () => undefined,
-  handleVeracodeAwaitIssueType: async () => undefined,
-  handleVeracodeStaleClose: async () => undefined,
+const imports = vi.hoisted(() => ({ email: [] as string[] }));
+vi.mock('../participant/jira/emailHandler', () => ({
+  handleCreateFromEmail: async (request: { prompt: string }) => { imports.email.push(request.prompt); },
+  handleAddEmailFromChat: async (request: { prompt: string }) => { imports.email.push(request.prompt); },
+  handleEmailContentSession: async () => undefined,
+  handleEmailTemplateSelection: async () => undefined,
+  handleEmailReviewReply: async () => undefined,
+  handleEmailCleanupReply: async () => undefined,
+  handleEmailAwaitIssueType: async () => undefined,
+  EMAIL_CLEANUP_SESSION_KEY: 'jira.session.emailCleanup',
 }));
 
 import { createJiraParticipant } from '../participant/JiraParticipant';
@@ -75,11 +79,15 @@ function modelAnswering(intent: Record<string, unknown>) {
   return { sendRequest: async () => ({ text: (async function* () { yield JSON.stringify(intent); })() }) };
 }
 
-async function turn(prompt: string, extension: unknown = { packageJSON: { version: '9.9.9' } }, model: unknown = undefined): Promise<{ text: string; result: unknown }> {
-  createJiraParticipant(createContext(extension) as never, configService as never);
+async function turn(
+  prompt: string, extension: unknown = { packageJSON: { version: '9.9.9' } }, model: unknown = undefined, history: unknown[] = [], stored: Record<string, unknown> = {},
+): Promise<{ text: string; result: unknown }> {
+  const context = createContext(extension);
+  for (const [key, value] of Object.entries(stored)) await context.workspaceState.update(key, value);
+  createJiraParticipant(context as never, configService as never);
   const parts: string[] = [];
   const stream = { markdown: (m: unknown) => { parts.push(typeof m === 'string' ? m : (m as { value: string }).value); }, progress: () => undefined };
-  const result = await h.handler!({ prompt, command: undefined, model }, { history: [] }, stream, { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) });
+  const result = await h.handler!({ prompt, command: undefined, model }, { history }, stream, { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) });
   return { text: parts.join(''), result };
 }
 
@@ -90,8 +98,11 @@ describe('@jira help screen', () => {
     const { text } = await turn(prompt);
 
     expect(text).toContain('**Ticket Sidekick `@jira` · v9.9.9 — Help**');
-    expect(text).toContain('`import veracode report`');
-    expect(text).toContain('`@jira` now only imports reports');
+    expect(text).toContain('`create from email`');
+    expect(text).not.toContain('import veracode report');
+    expect(text).not.toContain('import oss report');
+    expect(text).toContain('`@jira` now only imports emails');
+    expect(text).toContain('import board');
     expect(text).toContain('`/ts-jira help`');
     expect(text).not.toContain('/security-report');
     expect(text).not.toContain('`/create`');
@@ -105,25 +116,47 @@ describe('@jira help screen', () => {
 });
 
 describe('@jira and the flows it no longer runs', () => {
-  beforeEach(() => { h.handler = undefined; imports.veracode = []; });
+  beforeEach(() => { h.handler = undefined; imports.email = []; });
 
   it('answers a request for a removed flow with the notice and changes nothing in Jira', async () => {
     const { text } = await turn('move PROJ-1 to Done', undefined, modelAnswering({ operation: 'other', ticketKey: 'PROJ-1', projectKey: null }));
 
-    expect(text).toContain('`@jira` now only imports reports');
+    expect(text).toContain('`@jira` now only imports emails');
     expect(text).toContain('Agent mode');
   });
 
   it('treats an operation it does not know as a removed flow', async () => {
     const { text } = await turn('transition these tickets', undefined, modelAnswering({ operation: 'bulkTransition' }));
 
-    expect(text).toContain('`@jira` now only imports reports');
+    expect(text).toContain('`@jira` now only imports emails');
   });
 
-  it('still starts a report import', async () => {
-    const { text } = await turn('import veracode report for PROJ', undefined, modelAnswering({ operation: 'importVeracode', ticketKey: null, projectKey: 'PROJ' }));
+  it.each([
+    ['import veracode report for PROJ', 'other'],
+    ['import waltz report', 'other'],
+    // A model that still answers with the operations @jira had before.
+    ['import veracode report', 'importVeracode'],
+    ['import oss report', 'importWaltzReport'],
+  ])('answers %j with the notice pointing to the import board, without a Jira call', async (prompt, operation) => {
+    const { text } = await turn(prompt, undefined, modelAnswering({ operation, projectKey: null }));
 
-    expect(imports.veracode).toEqual(['PROJ']);
-    expect(text).not.toContain('now only imports reports');
+    expect(text).toContain('`Ticket Sidekick: Open import board`');
+    expect(text).toContain('open the import board');
+    expect(imports.email).toEqual([]);
+  });
+
+  it('ignores a Veracode review stored before the import board and answers with the notice', async () => {
+    const history = [new (await import('vscode')).ChatResponseTurn([], { metadata: { jiraSession: { kinds: ['veracode-review'] } } })];
+    const stored = { 'jira.session.veracodeReview': { createdAt: Date.now(), rows: [] } };
+    const { text } = await turn('create tickets', undefined, modelAnswering({ operation: 'other' }), history, stored);
+
+    expect(text).toContain('`Ticket Sidekick: Open import board`');
+  });
+
+  it('still starts an email import', async () => {
+    const { text } = await turn('create from email', undefined, modelAnswering({ operation: 'createFromEmail', projectKey: null }));
+
+    expect(imports.email).toEqual(['create from email']);
+    expect(text).not.toContain('now only imports emails');
   });
 });

@@ -11,11 +11,6 @@ import { trustedChatMarkdown } from '../../utils/chatMarkdown';
 // response tag — see JiraSessionContinuity in sessionState.ts.
 export const AWAIT_ISSUE_TYPE_SESSION_KEY = 'jira.session.awaitIssueType';
 
-// workspaceState key for report import's stepped stale-ticket close (`StaleCloseSession` in
-// sessionState.ts) — a sibling to the key above, not a reuse of it, since each step is a numbered
-// pick rather than a free-text prompt. The key keeps its original name so routing is unchanged.
-export const STALE_RESOLUTION_SESSION_KEY = 'jira.session.staleResolution';
-
 // R1/R3: replaces the former `getLastAssistantText(...).includes('<!-- jira:TAG -->')` for sessions that
 // have migrated off the visible-tag mechanism (see JiraSessionContinuity in sessionState.ts).
 // Reads the metadata a session-producing response returned via `{ metadata: { jiraSession } }`

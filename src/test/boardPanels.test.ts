@@ -50,7 +50,7 @@ vi.mock('vscode', () => ({
 }));
 
 import { BoardPanels } from '../boards/boardPanels';
-import { ImportStartScreen } from '../boards/import/startScreen';
+import { ImportStartScreen, type ImportStartDeps } from '../boards/import/startScreen';
 import { securityReportKind, type SecurityReportDeps } from '../boards/securityReport/kind';
 import { registerKind } from '../sessions/boardKind';
 import { SessionManager } from '../sessions/sessionManager';
@@ -75,7 +75,7 @@ let dir: string;
 let panels: BoardPanels;
 let manager: SessionManager;
 
-function startScreen(): ImportStartScreen {
+function startScreen(over: Partial<ImportStartDeps> = {}): ImportStartScreen {
   return new ImportStartScreen({
     jira: async () => ({ configured: false, config: { baseUrl: undefined, token: undefined, authType: 'datacenter' } as never }),
     defaultProject: () => 'PROJ',
@@ -88,6 +88,7 @@ function startScreen(): ImportStartScreen {
     hasSession: async () => false,
     discardSession: async () => undefined,
     openImport: async () => ({ ok: true }),
+    ...over,
   });
 }
 let errors: string[];
@@ -201,6 +202,25 @@ describe('the import start screen', () => {
     await panels.open('import-start', {});
     expect(created).toHaveLength(1);
     expect(created[0].revealed).toBe(1);
+  });
+
+  it('asked to open loaded, opens the import board when nothing is missing and the start screen otherwise', async () => {
+    const recipes: unknown[] = [];
+    const ready = startScreen({
+      jira: async () => ({ configured: true, client: { getProject: async () => ({ issueTypes: [] }) }, config: {} }) as never,
+      templateSetting: () => 'OSS finding',
+      templates: () => [{ name: 'OSS finding', issueType: 'Vulnerability' }] as never,
+      openImport: async recipe => { recipes.push(recipe); return { ok: true, title: 'Import: report.xlsx' }; },
+    });
+    const file = path.join(dir, 'report.xlsx');
+    panels = new BoardPanels(manager, ['security-report'], { fsPath: '/ext/out/board-pages' } as never, message => errors.push(message), ready);
+    expect(await panels.open('import-start', { kind: 'waltz', reportPath: file, openWhenReady: true })).toEqual({ ok: true, title: 'Import: report.xlsx' });
+    expect(recipes).toHaveLength(1);
+    expect(created).toHaveLength(0);
+
+    panels = new BoardPanels(manager, ['security-report'], { fsPath: '/ext/out/board-pages' } as never, message => errors.push(message), startScreen());
+    expect(await panels.open('import-start', { kind: 'waltz', reportPath: file, openWhenReady: true })).toEqual({ ok: true, title: 'Open import' });
+    expect(created[0].webview.html).toContain('data-kind="import-start"');
   });
 
   it('is no board where the extension has no start screen', async () => {

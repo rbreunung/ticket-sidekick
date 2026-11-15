@@ -303,6 +303,29 @@ describe('what is missing around the import', () => {
     expect(view.canOpen).toBe(false);
   });
 
+  it('opens the import board at once for a kind and file it was opened with, when the settings are complete', async () => {
+    settings.waltz = 'OSS finding';
+    const screen = new ImportStartScreen(deps());
+    const file = report();
+    screen.prefill({ kind: 'waltz', reportPath: file });
+    expect(await screen.openIfReady()).toEqual({ opened: true });
+    expect(opened).toEqual([{ kind: 'waltz', projectKey: 'PROJ', reportPath: file, templateName: 'OSS finding', issueType: 'Vulnerability' }]);
+  });
+
+  it('opens nothing for a kind and file when the template setting is empty or the file does not read, so the start screen shows them', async () => {
+    const screen = new ImportStartScreen(deps());
+    const file = report();
+    screen.prefill({ kind: 'waltz', reportPath: file });
+    expect(await screen.openIfReady()).toEqual({ opened: false });
+    expect((await screen.view()).report.path).toBe(file);
+
+    settings.waltz = 'OSS finding';
+    readers.waltz = { ...fakeReader(), read: async () => { throw new Error('not an OSS report'); } };
+    screen.prefill({ kind: 'waltz', reportPath: report('other.xlsx') });
+    expect(await screen.openIfReady()).toEqual({ opened: false });
+    expect(opened).toEqual([]);
+  });
+
   it('starts with a kind and a file it was opened with', async () => {
     const screen = new ImportStartScreen(deps());
     const file = report();

@@ -55,9 +55,9 @@ describe('parseIntent', () => {
 
   it('parses when the model appends trailing prose containing braces', async () => {
     // Previously the greedy /\{[\s\S]*\}/ swallowed the trailing brace and threw.
-    const model = makeModel('{"operation":"importVeracode","projectKey":"PROJ"}\n\nNote: replace {value} as needed.');
-    const intent = await parseIntent('import veracode report for PROJ', model as never, {} as never);
-    expect(intent.operation).toBe('importVeracode');
+    const model = makeModel('{"operation":"createFromEmail","projectKey":"PROJ"}\n\nNote: replace {value} as needed.');
+    const intent = await parseIntent('create from email for PROJ', model as never, {} as never);
+    expect(intent.operation).toBe('createFromEmail');
     expect(intent.projectKey).toBe('PROJ');
   });
 
@@ -65,10 +65,10 @@ describe('parseIntent', () => {
     const sendRequest = vi
       .fn()
       .mockResolvedValueOnce({ text: (async function* () { yield 'sorry, I cannot help with that'; })() })
-      .mockResolvedValueOnce({ text: (async function* () { yield '{"operation":"importWaltzReport"}'; })() });
+      .mockResolvedValueOnce({ text: (async function* () { yield '{"operation":"addEmailComment"}'; })() });
     const model = { sendRequest };
-    const intent = await parseIntent('import oss report', model as never, {} as never);
-    expect(intent.operation).toBe('importWaltzReport');
+    const intent = await parseIntent('add email to PROJ-42', model as never, {} as never);
+    expect(intent.operation).toBe('addEmailComment');
     expect(sendRequest).toHaveBeenCalledTimes(2);
   });
 

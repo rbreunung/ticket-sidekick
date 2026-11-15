@@ -18,24 +18,18 @@ export interface JiraCommandEntry {
   covers: readonly string[];
 }
 
-/** What `@jira` answers to anything that is not a report import. */
+/** What `@jira` answers to anything that is not an email import. */
 export const JIRA_ONLY_IMPORTS_NOTICE =
-  '`@jira` now only imports reports: emails, Veracode Detailed Reports and Waltz OSS Reports. '
+  '`@jira` now only imports emails. '
+  + 'Veracode Detailed Reports and Waltz OSS Reports are imported on the import board: run `Ticket Sidekick: Open import board` '
+  + 'from the Command Palette, or ask Copilot in Agent mode to open the import board for your report. '
   + 'For everything else, ask Copilot in Agent mode, or type `/ts-jira help` to see the commands: '
   + 'viewing, creating, commenting, moving and searching tickets, cleanup rules and the security report all work there.';
 
 export const JIRA_COMMAND_ENTRIES: readonly JiraCommandEntry[] = [
   {
     id: 'email', group: 'Import', covers: ['createFromEmail', 'addEmailComment'],
-    help: '`create from email` imports `.eml` files as tickets, and `add email to PROJ-42` adds one as a comment; a preview first lets you strip signatures and boilerplate or keep the email unchanged.',
-  },
-  {
-    id: 'veracode', group: 'Import', covers: ['importVeracode'],
-    help: '`import veracode report` creates tickets from a Veracode Detailed Report XML. Inside an import, `help` lists the commands of the screen you are on.',
-  },
-  {
-    id: 'waltz', group: 'Import', covers: ['importWaltzReport'],
-    help: '`import oss report` creates tickets from a Waltz OSS Report `.xlsx`. In a Veracode or Waltz import, `export` saves the overview of the project\'s security tickets.',
+    help: '`create from email` imports `.eml` files as tickets, and `add email to PROJ-42` adds one as a comment; a preview first lets you strip signatures and boilerplate or keep the email unchanged. Inside an import, `help` lists the commands of the screen you are on.',
   },
 ];
 

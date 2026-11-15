@@ -11,13 +11,6 @@ import {
   type ImportHooks, type ReviewRowBase, type ReviewSession, type TicketedAction, type TicketedRowResult,
 } from './types';
 
-/** KTD5/KTD7: which row actions each Already-ticketed run reply runs, and the word to repeat for the rest. */
-export const TICKETED_RUNS: Record<'apply' | 'update' | 'recreate', { actions: ReadonlySet<TicketedAction>; command: string }> = {
-  apply: { actions: new Set<TicketedAction>(['update', 'follow-up', 'rewrite', 're-create']), command: 'apply' },
-  update: { actions: new Set<TicketedAction>(['update']), command: 'update tickets' },
-  recreate: { actions: new Set<TicketedAction>(['re-create']), command: 're-create tickets' },
-};
-
 // Bounded concurrency for `update` rows (label write + comment per row) — a report with a few
 // hundred already-ticketed rows would otherwise turn one reply into that many sequential round trips.
 const UPDATE_CONCURRENCY = 8;

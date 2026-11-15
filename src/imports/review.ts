@@ -15,7 +15,7 @@ import {
 } from '../utils/reportImport';
 import { buildStaleTicketGroups } from './cleanup';
 import type { ReportImportDescriptor } from './descriptor';
-import { buildReviewPage, clampStalePage, clampTicketedPage, initImportViewState } from './rows';
+import { buildReviewPage } from './rows';
 import {
   CURRENT_SESSION_SCHEMA_VERSION, toAcceptedHidden,
   type ImportHooks, type ImportTemplateSelectionSession, type ReviewRowBase, type ReviewSession,
@@ -425,74 +425,5 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
   }
 
   return { session: reviewSession, degraded, dedupFailed };
-}
-
-/**
- * The descriptions read for a review stay valid across a rebuild until this session rewrites, adds to or merges a
- * ticket (the writes that change a description), whether or not that write succeeded in full.
- */
-export function canReuseDescriptions<TRow extends ReviewRowBase>(session: ReviewSession<TRow>): boolean {
-  const o = session.outcomes;
-  return !o || o.rewritten + o.rewriteFailed + o.added + o.addFailed + o.merged + o.mergeFailed === 0;
-}
-
-/**
- * What a refresh did: the rebuilt review, or why the review was left as it was — the report file is gone or no longer
- * parses (`error`), or a Jira search failed (`degraded`).
- */
-export type RefreshResult<TRow extends ReviewRowBase> =
-  | { ok: true; session: ReviewSession<TRow> }
-  | { ok: false; missing: boolean; error: string }
-  | { ok: false; degraded: true };
-
-/**
- * Waltz ticket merge (KTD9): rebuilds the review from its report file. Keeps what the user did that still
- * means something (issue type, template, fields, outcomes) and recomputes what depends on the rows — the
- * groups, whether there is an overview, the page positions. The previous view stays only when its group
- * still exists. A file that is gone or no longer parses leaves the review as it was.
- */
-export async function refreshReview<TItem, TRow extends ReviewRowBase>(
-  session: ReviewSession<TRow>,
-  filePath: string,
-  ticketService: TicketService,
-  descriptor: ReportImportDescriptor<TItem, TRow>,
-  ctx: ReviewBuildContext,
-): Promise<RefreshResult<TRow>> {
-  let parsed: { items: TItem[]; rawItems: unknown[] };
-  try {
-    parsed = await descriptor.parseAndFilter!(filePath);
-  } catch (err) {
-    const missing = (err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
-    const detail = err instanceof Error ? err.message : String(err);
-    ctx.onDiag?.('warn', `Could not re-read the report — ${filePath}`, { path: filePath, missing, error: detail });
-    return { ok: false, missing, error: detail };
-  }
-  const { session: built, degraded } = await buildImportReview<TItem, TRow>({
-    projectKey: session.projectKey, items: parsed.items, rawItems: parsed.rawItems, reportFilePath: filePath,
-    issueType: session.issueType, templateName: session.templateName, additionalFields: session.additionalFields,
-    ...(canReuseDescriptions(session) ? { descriptionCache: session.ticketDescriptions } : {}),
-  }, { getResolutions: () => ticketService.getResolutions() }, ticketService, descriptor, ctx);
-  if (degraded) {
-    ctx.onDiag?.('warn', 'Refresh left the review as it was: a Jira search failed, so a rebuild would show items as New that already have tickets', { path: filePath });
-    return { ok: false, degraded: true };
-  }
-  const fresh = initImportViewState(built);
-  // The view stays only while the review keeps its shape: still with an overview (or still without one) and the
-  // screen's group still there. A review that gained or lost its overview starts from the fresh view instead.
-  const keepsView = session.view !== undefined && session.singleGroup === fresh.singleGroup
-    && (session.view === 'overview' ? !fresh.singleGroup : fresh.groups!.includes(session.view));
-  const page = buildReviewPage(fresh.allRows, session.page);
-  return {
-    ok: true,
-    session: {
-      ...fresh,
-      view: keepsView ? session.view! : fresh.view,
-      outcomes: session.outcomes ?? fresh.outcomes,
-      rows: page.rows,
-      page: page.page,
-      ticketedPage: clampTicketedPage(session.ticketedPage ?? 0, fresh.allRows),
-      stalePage: clampStalePage(session.stalePage ?? 0, fresh.staleTickets),
-    },
-  };
 }
 
