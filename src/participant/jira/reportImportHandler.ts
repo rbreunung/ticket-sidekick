@@ -338,8 +338,6 @@ export async function handleImportReviewReply<TItem, TRow extends ReviewRowBase>
       if (isNewGroupDrained(session, screenOptions(descriptor, baseUrl))) return finishImport(session, ws, stream, descriptor);
       return rerender();
     default:
-      // The Veracode and Waltz replies (fold, accept, ticket merge, search, export, reload, the Already-ticketed and
-      // Stale actions) are offered only by an importer with those capabilities, which no chat import has any more.
       return rerender();
   }
 }

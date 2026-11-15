@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { type ReviewRowBase } from '../participant/sessionState';
-import { findTicketsBySummary, buildSearchResults, SEARCH_RESULT_LIMIT } from '../participant/session/importSearch';
+import { findTicketsBySummary, SEARCH_RESULT_LIMIT } from '../imports/rows';
 import type { TicketInfo as TicketInfoMap } from '../utils/reportImport';
 
 const row = (id: string, target: { key: string; resolved?: boolean; status?: string | null } | null, extra: Partial<ReviewRowBase> = {}): ReviewRowBase => ({
@@ -108,71 +108,5 @@ describe('findTicketsBySummary', () => {
   it('skips a ticket the info map does not know', () => {
     const outcome = findTicketsBySummary([row('A1', { key: 'PROJ-99' })], info, 'netty');
     expect(outcome).toEqual({ kind: 'results', results: [], total: 0 });
-  });
-});
-
-describe('buildSearchResults', () => {
-  it('lists A ids, a linked key, status and summary', () => {
-    const text = buildSearchResults(
-      { kind: 'results', total: 1, results: [{ key: 'PROJ-12', ids: ['A1', 'A3'], status: 'In Progress', summary: '[OSS] netty-codec — High' }] },
-      'netty', 'https://jira.example.com',
-    );
-    expect(text).toContain('A1, A3');
-    expect(text).toContain('[PROJ-12](https://jira.example.com/browse/PROJ-12)');
-    expect(text).toContain('In Progress');
-    expect(text).toContain('netty-codec');
-  });
-
-  it('shows an extra ticket without an A id column entry', () => {
-    const text = buildSearchResults({ kind: 'results', total: 1, results: [{ key: 'PROJ-30', ids: [], status: 'Open', summary: 'netty' }] }, 'netty');
-    expect(text).toContain('PROJ-30');
-    expect(text).not.toMatch(/\bA\d/);
-  });
-
-  it('neutralizes markdown link syntax in a summary', () => {
-    const text = buildSearchResults({ kind: 'results', total: 1, results: [{ key: 'PROJ-1', ids: [], status: 'Open', summary: '[click](http://evil.example)' }] }, 'click');
-    expect(text).not.toContain('[click](http://evil.example)');
-  });
-
-  const cmd = 'command:workbench.action.chat.open?%7B%22query%22%3A%22%40jira%20done%22%7D';
-  const attacks: Array<[string, string]> = [
-    ['inline link', `[click](${cmd})`],
-    ['image', `![x](${cmd})`],
-    ['reference-style link', `[click][ref]\n\n[ref]: ${cmd}`],
-    ['angle-bracket autolink', `<${cmd}>`],
-    ['raw HTML anchor', `<a href="${cmd}">go</a>`],
-    ['backslash-escaped bracket', `\\[click\\](${cmd})`],
-    ['newline then heading and list', 'x\n# Heading\n- item'],
-  ];
-
-  it.each(attacks)('%s in a summary, status or keyword leaves no live link, HTML or new block', (_name, payload) => {
-    const text = buildSearchResults(
-      { kind: 'results', total: 1, results: [{ key: 'PROJ-1', ids: ['A1'], status: payload, summary: payload }] },
-      payload,
-    );
-    expect(text).not.toMatch(/\]\(command:/);
-    expect(text).not.toMatch(/(^|[^\\])</);
-    expect(text).not.toMatch(/\n#/);
-    expect(text.split('\n').filter(l => l.startsWith('- '))).toHaveLength(1);
-  });
-
-  it('Covers AE3: says no tickets matched', () => {
-    const text = buildSearchResults({ kind: 'results', total: 0, results: [] }, 'zzz');
-    expect(text).toMatch(/no open tickets/i);
-    expect(text).toContain('zzz');
-  });
-
-  it('adds a note when more tickets match than are shown', () => {
-    const results = Array.from({ length: SEARCH_RESULT_LIMIT }, (_, i) => ({ key: `PROJ-${i + 1}`, ids: [], status: 'Open', summary: 'netty' }));
-    const text = buildSearchResults({ kind: 'results', total: SEARCH_RESULT_LIMIT + 5, results }, 'netty');
-    expect(text).toMatch(/5 more/);
-  });
-
-  it('gives the usage for a blank keyword', () => {
-    expect(buildSearchResults({ kind: 'usage' }, '')).toContain('search <keyword>');
-  });
-
-  it('points to reload report when the session holds no ticket info', () => {
-    expect(buildSearchResults({ kind: 'no-info' }, 'netty')).toContain('reload report');
   });
 });

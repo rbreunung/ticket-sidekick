@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, buildStaleGroupScreen, buildAddPrompt, buildMergePrompt, buildCloseMergePrompt,
+  buildImportOverview, buildNewGroupScreen, buildTicketedGroupScreen, buildStaleGroupScreen,
   buildReviewPage, type ReviewSession, type ReviewRowBase, type ReviewTableColumn, type ImportScreenOptions,
 } from '../participant/sessionState';
 
@@ -146,22 +146,5 @@ describe('overview', () => {
     const text = buildImportOverview(session(), waltz);
     expect(text).not.toContain('Commands:');
     expect(text).toMatch(/\[help\]\([^)]*\)$/);
-  });
-});
-
-describe('add and merge prompts', () => {
-  it('end with a help link and keep their confirmation links', () => {
-    const add = buildAddPrompt({ key: 'PROJ-1', summary: 's', status: 'Open', resolved: false, ids: ['1'], rowCount: 1, droppedKeys: [] });
-    expect(add).toMatch(/\[help\]\([^)]*\)$/);
-    expect(add).toContain('[Comment]');
-    expect(add).toContain('[Rewrite]');
-    const merge = buildMergePrompt({ survivor: { key: 'PROJ-1', summary: 's', status: 'Open' }, sources: [{ key: 'PROJ-2', summary: 't', status: 'Open' }], warnings: [], droppedKeys: [] });
-    expect(merge).toMatch(/\[help\]\([^)]*\)$/);
-    expect(merge).toContain('[Merge]');
-    const close = buildCloseMergePrompt({
-      survivor: { key: 'PROJ-1', summary: 's', status: 'Open' }, sources: [{ ticket: { key: 'PROJ-2', summary: 't', status: 'Open' }, movable: [], unlisted: [], elsewhere: [] }],
-      itemNoun: 'flaw', survivorLost: [], survivorElsewhere: [], newItems: [], warnings: [],
-    });
-    expect(close).toMatch(/\[help\]\([^)]*\)$/);
   });
 });

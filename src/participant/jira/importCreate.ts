@@ -15,7 +15,7 @@ export function diagOf(descriptor: { scope: string }): DiagLogger {
   return (level, message, details) => logDiag(descriptor.scope, level, message, details);
 }
 
-/** The warning for optional fields Jira refused on a write that otherwise succeeded (KTD6). */
+/** The warning for optional fields Jira refused on a write that otherwise succeeded. */
 export function droppedFieldsWarning(link: string, droppedFields: string[]): string {
   const names = droppedFieldNames(droppedFields);
   return `_Warning: Jira refused the ${names} on ${link} (the field is probably not on the project's screen), so it was written without. The dates are in the description._\n\n`;

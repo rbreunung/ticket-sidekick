@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseImportReviewReply, buildImportHelp, importCommandCaps, buildImportOverview, buildNewGroupScreen, buildImportScreen,
-  buildAcceptedList, buildTicketedGroupScreen, IMPORT_COMMANDS, UNACCEPT_COMPONENT_WORD, isConfirmation, isCancellation, parseReviewPageNav, parseBulkNewRowReply,
+  buildTicketedGroupScreen, IMPORT_COMMANDS, UNACCEPT_COMPONENT_WORD, isConfirmation, isCancellation, parseReviewPageNav, parseBulkNewRowReply,
   type ImportReplyContext, type ReviewSession, type ReviewRowBase, type ReviewTableColumn,
 } from '../participant/sessionState';
 
@@ -191,42 +191,6 @@ describe('screens', () => {
   });
 });
 
-describe('buildAcceptedList — the entries, numbered, each with a remove link', () => {
-  it('lists component, CVE and reason in file order with a link that resends unaccept <component> <CVE>', () => {
-    const text = buildAcceptedList([
-      { component: 'netty-codec', cve: 'CVE-2024-0001', reason: 'not reachable' },
-      { component: 'libfoo', cve: 'CVE-2024-0002' },
-    ]);
-    expect(text).toContain('1. ');
-    expect(text).toContain('netty-codec');
-    expect(text).toContain('not reachable');
-    expect(text).toContain('2. ');
-    expect(text).toMatch(/unaccept(%20| )netty-codec(%20| )CVE-2024-0001/);
-    expect(text).toMatch(/unaccept(%20| )libfoo(%20| )CVE-2024-0002/);
-  });
-
-  it('keeps a component with parentheses or spaces in the link, so the click sends the whole name', () => {
-    const text = buildAcceptedList([{ component: 'lib) with (parens', cve: 'CVE-2024-0001' }]);
-    const target = text.match(/\(command:[^\s]*?\)(?=$|\s)/m)?.[0] ?? '';
-    // the markdown destination holds no raw parenthesis beyond its own opening and closing one
-    expect(target.slice(1, -1)).not.toMatch(/[()]/);
-    const query = JSON.parse(decodeURIComponent(target.slice(1, -1).split('?')[1])).query as string;
-    expect(query).toBe('@jira unaccept lib) with (parens CVE-2024-0001');
-    expect(parseImportReviewReply('new', query.replace('@jira ', ''), ctx()))
-      .toEqual({ kind: 'unacceptEntry', component: 'lib) with (parens', cve: 'cve-2024-0001' });
-  });
-
-  it('says so when the list is empty', () => {
-    expect(buildAcceptedList([])).toMatch(/empty/i);
-  });
-
-  it('neutralizes link syntax and line breaks in a hand-edited reason', () => {
-    const text = buildAcceptedList([{ component: 'libfoo', cve: 'CVE-2024-0001', reason: '[click](http://evil.example)\n# Heading' }]);
-    expect(text).not.toContain('](http://evil.example)');
-    expect(text.split('\n').filter(l => l.startsWith('#') && l !== '### Accepted')).toEqual([]);
-  });
-});
-
 describe('accept component replies (accepted-components plan, U4)', () => {
   const ticketed = (...ids: string[]) => ids.map(id => ({ id, allowedActions: ['leave' as const] }));
 
@@ -306,30 +270,6 @@ describe('screens with accepted components (accepted-components plan, U4)', () =
     const allRows = [row('1'), row('A1', 'PROJ-1')];
     return { projectKey: 'PROJ', issueType: 'Task', templateName: null, additionalFields: {}, allRows, rows: allRows, page: 0, schemaVersion: 11, ...over };
   };
-
-  it('lists both kinds of entry, each with a Remove link that sends its own reply', () => {
-    const text = buildAcceptedList([
-      { component: 'libfoo', cve: 'CVE-2024-0001' },
-      { component: 'netty-codec', version: '4.1.100', reason: 'no update' },
-    ]);
-    expect(text).toContain('libfoo · CVE-2024-0001');
-    expect(text).toContain('netty-codec:4.1.100 (whole component) — no update');
-    expect(decodeURIComponent(text)).toContain(`${UNACCEPT_COMPONENT_WORD} netty-codec 4.1.100`);
-    expect(decodeURIComponent(text)).toContain('unaccept libfoo CVE-2024-0001');
-  });
-
-  it('gives an entry whose version has whitespace no Remove link, and points to its number instead', () => {
-    const text = buildAcceptedList([{ component: 'lib', version: '1.0 final' }, { component: 'netty-codec', version: '4.1.100' }]);
-    expect(decodeURIComponent(text)).not.toContain(`${UNACCEPT_COMPONENT_WORD} lib`);
-    expect(text).toContain('`unaccept 1`');
-    expect(decodeURIComponent(text)).toContain(`${UNACCEPT_COMPONENT_WORD} netty-codec 4.1.100`);
-  });
-
-  it('neutralizes link syntax in a hand-edited component name, version or reason', () => {
-    const text = buildAcceptedList([{ component: '[x](http://evil.example)', version: '[y](http://evil.example)', reason: '[z](http://evil.example)\n# Heading' }]);
-    expect(text).not.toContain('](http://evil.example)');
-    expect(text.split('\n').filter(l => l.startsWith('#') && l !== '### Accepted')).toEqual([]);
-  });
 
   it('the New screen and the Already ticketed screen tell how to accept a component', () => {
     const s = session({ view: 'new', groups: ['new', 'ticketed'], singleGroup: false });

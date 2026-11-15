@@ -18,12 +18,9 @@ export interface TransitionRunResult {
 
 /**
  * Runs `ticketService.transitionAlongPath` for every INCLUDED ticket (and included subtask) in
- * `tickets`, tolerating individual failures (logged + collected, not thrown). Extracted out of
- * `executeCleanupBatch` (U6/KTD10-15) so `reportImportHandler.ts`'s stale-ticket transition pass —
- * run once per issue-type group, each with its own resolution — can reuse the exact same per-ticket
- * logic instead of re-implementing it. Pure execution only; the caller formats/streams its own
- * summary line from the returned counts (cleanup's own wording and the report-import combined
- * create+transition wording differ, per KTD's "reuse the logic, not necessarily the message").
+ * `tickets`, tolerating individual failures (logged + collected, not thrown). Run once per
+ * issue-type group, each with its own resolution. Pure execution only; the caller words its own
+ * summary from the returned counts.
  */
 export async function transitionTickets(
   tickets: TransitionBatchTicket[],
@@ -36,8 +33,8 @@ export async function transitionTickets(
   let skipped = 0;
   const failures: Array<{ key: string; reason: string }> = [];
 
-  // U6: excludes are each ticket's/subtask's own `included` flag (toggled per-row via the review
-  // table, R8) rather than a skip-set passed in for this one call.
+  // Excludes are each ticket's/subtask's own `included` flag (toggled per-row via the review
+  // table) rather than a skip-set passed in for this one call.
   for (const ticket of tickets) {
     if (!ticket.included) {
       skipped += 1 + ticket.subtasks.length;
@@ -81,10 +78,10 @@ export interface StaleGroupBuildResult {
 
 /**
  * Groups `findStaleTickets()`'s matches by issue type and captures, per group, what the close-time
- * target pick needs (stale-ticket target pick plan, KTD1): every `cleanupRules` entry matching the
+ * target pick needs: every `cleanupRules` entry matching the
  * project + issue type (not only the first), and a snapshot of that project/issue type's cached
  * workflow graph. No target or transition path is chosen here — both happen when the user closes
- * (KTD2), so a group no longer needs a cleanup rule to be closable (R10). `issueDetails` supplies
+ * so a group needs no cleanup rule to be closable. `issueDetails` supplies
  * each candidate's summary/status/issue type from the stale search's own result.
  *
  * A ticket whose issue type is unknown, or whose project/issue type has no discovered workflow, is

@@ -34,7 +34,7 @@ export type TicketedRunResult<TRow extends ReviewRowBase> =
   };
 
 /**
- * Import ticket updates parity (KTD5, R9-R16): runs the already-ticketed rows whose action is in
+ * Import ticket updates parity: runs the already-ticketed rows whose action is in
  * `actions` (every non-`leave` action for `apply`, one action for a shortcut) — at most
  * `BATCH_LIMIT` per reply, the rest stay pending and the result says how many remain. `update` rows
  * run with bounded concurrency; `follow-up` and `re-create` rows are created one at a time through
@@ -50,7 +50,7 @@ export async function runTicketedActions<TItem, TRow extends ReviewRowBase>(
   baseUrl?: string,
   hooks: ImportHooks<TicketedEvent> = {},
 ): Promise<TicketedRunResult<TRow>> {
-  // KTD11: rewrite rebuilds a whole ticket, so it is all-or-none per target. Checked before anything
+  // Rewrite rebuilds a whole ticket, so it is all-or-none per target. Checked before anything
   // is written; a violation stops the whole apply.
   if (actions.has('rewrite')) {
     const partial = findPartialRewrites(session.allRows);
@@ -65,7 +65,7 @@ export async function runTicketedActions<TItem, TRow extends ReviewRowBase>(
   if (candidates.length === 0) return { kind: 'nothing', session };
 
   // At most BATCH_LIMIT rows run per reply, but the rows of one ticket's rewrite run together or not
-  // at all (KTD11); a single group larger than the cap still runs whole.
+  // at all; a single group larger than the cap still runs whole.
   const units = new Map<string, TRow[]>();
   for (const r of candidates) {
     const unit = ticketedRowActions(r).action === 'rewrite' ? `rewrite:${ticketedTargetKey(r)}` : `row:${r.id}`;
@@ -160,7 +160,7 @@ export async function runTicketedActions<TItem, TRow extends ReviewRowBase>(
 }
 
 /**
- * Finding folding (KTD6/KTD7/KTD11): `rewrite` on one target ticket, for every unfinished row that
+ * Finding folding: `rewrite` on one target ticket, for every unfinished row that
  * points to it — the ticket's summary, description and labels are rebuilt from all rows that point
  * to it, then one comment names the findings its tickets did not record yet and any it recorded
  * that the rebuilt description no longer covers. A failed write leaves the ticket as it was; a
@@ -220,7 +220,7 @@ async function rewriteTicketedGroup<TItem, TRow extends ReviewRowBase>(
 }
 
 /**
- * R11-R13: `update` on one row — one read-merge-write of the target ticket's record labels (plus
+ * `update` on one row — one read-merge-write of the target ticket's record labels (plus
  * the rewritten summary on a rating rise), then one comment listing the change. A baseline row only
  * gets its record labels. A comment failure after the labels were written is reported as such (the
  * labels are not undone), and a ticket that already carries everything is left untouched.
@@ -276,9 +276,9 @@ async function updateTicketedRow<TItem, TRow extends ReviewRowBase>(
 }
 
 /**
- * R14/R15: `re-create` creates the row's full ticket as for a New row; `follow-up` creates a ticket
+ * `re-create` creates the row's full ticket as for a New row; `follow-up` creates a ticket
  * with only the new findings and links it "Relates" to the target ticket. A failed link keeps the
- * ticket, warns and logs (AE5).
+ * ticket, warns and logs.
  */
 async function createForTicketedRow<TItem, TRow extends ReviewRowBase>(
   row: TRow,

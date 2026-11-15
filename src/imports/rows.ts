@@ -15,15 +15,15 @@ export interface ReviewPage<TRow extends ReviewRowBase> {
 
 /**
  * Slices a review session's full candidate set (`allRows`) into one displayable page: every
- * "already ticketed" row (R8 — shown in full regardless of page) plus one `BATCH_LIMIT`-sized page
+ * "already ticketed" row (shown in full regardless of page) plus one `BATCH_LIMIT`-sized page
  * of "new" rows, selected by `page` (0-based, clamped into `[0, totalPages - 1]` — an out-of-range
  * request, e.g. `next` from the last page or a `page <n>` beyond the end, lands on the nearest
  * valid page rather than erroring). `totalPages` is always at least 1, even when there are zero
  * "new" rows, so a caller never divides by / indexes a zero-page result.
  *
  * Deliberately re-derives `rows` fresh from `allRows` every time rather than mutating in place —
- * `allRows` itself is never touched here, which is what makes a "new" row's toggle page-local
- * (R7): a toggle applied only to a page's returned `rows` (see `applyReviewSessionToggle()`)
+ * `allRows` itself is never touched here, which is what makes a "new" row's toggle page-local:
+ * a toggle applied only to a page's returned `rows` (see `applyReviewSessionToggle()`)
  * evaporates the next time this function re-slices that page from `allRows`.
  */
 export function buildReviewPage<TRow extends ReviewRowBase>(allRows: TRow[], page: number): ReviewPage<TRow> {
@@ -50,7 +50,7 @@ export function restoreMergedRows<TRow extends ReviewRowBase>(rows: TRow[], merg
 }
 
 /**
- * Finding folding (KTD3): replaces the named visible New rows with one merged row. It keeps the
+ * Finding folding: replaces the named visible New rows with one merged row. It keeps the
  * first member's id and position, lists every original id in `memberIds` (a member that is itself
  * merged contributes all of its originals) and starts included. `buildFields` supplies the
  * importer-specific fields from the members; identity and fold bookkeeping are set here so no
@@ -89,7 +89,7 @@ export function unmergeNewRow<TRow extends ReviewRowBase>(rows: TRow[], allRows:
   return rows.flatMap(r => (r === merged ? originals : [r]));
 }
 
-/** The result groups that have at least one row — the basis for R1 (evaluated once, at build). */
+/** The result groups that have at least one row — the basis of the overview (evaluated once, at build). */
 export function computeImportResultGroups<TRow extends ReviewRowBase>(
   allRows: TRow[],
   stale?: ReviewSessionStale,
@@ -102,9 +102,9 @@ export function computeImportResultGroups<TRow extends ReviewRowBase>(
 }
 
 /**
- * KTD7: fixes the session's groups, single-group flag and initial view once, when the session is
+ * Fixes the session's groups, single-group flag and initial view once, when the session is
  * built. Exactly one group (or none) → that group opens directly with "Done" and there is no
- * overview (R4); two or three → the overview comes first (R1).
+ * overview; two or three → the overview comes first.
  */
 export function initImportViewState<TRow extends ReviewRowBase>(session: ReviewSession<TRow>): ReviewSession<TRow> {
   const groups = computeImportResultGroups(session.allRows, session.staleTickets);
@@ -129,7 +129,7 @@ export function ensureImportViewState<TRow extends ReviewRowBase>(session: Revie
 }
 
 /**
- * U4/R8: sets `action` on one already-ticketed row (`target` = its id) or on every row (`'all'`).
+ * Sets `action` on one already-ticketed row (`target` = its id) or on every row (`'all'`).
  * Only unfinished rows that offer the action change; everything else (new rows, finished rows, rows
  * not offering it) is returned untouched. Pure — the handler applies it to `rows` and `allRows`.
  */
@@ -146,7 +146,7 @@ export function applyTicketedActionChange<TRow extends ReviewRowBase>(
   });
 }
 
-/** Rows shown per page on the chat's Stale and Already-ticketed screens, which only the removed Veracode and Waltz chat imports had. Fixed, not a setting. */
+/** Rows shown per page on the chat's Stale and Already-ticketed screens. Fixed, not a setting. */
 export const GROUP_PAGE_SIZE = 20;
 
 /** Every row the Stale screen lists: eligible tickets, then the ones that cannot be closed. */

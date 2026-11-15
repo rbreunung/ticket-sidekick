@@ -8,12 +8,11 @@ import type { AddMode, ReviewRowBase, ReviewSession } from '../../imports/types'
 import { BATCH_LIMIT, templateLabelsOf } from '../../utils/reportImport';
 import type { HandlerPayload, ImportHandler, ImportSession } from './handlers';
 import type { ImportWorking } from './kind';
-import { newRows, rowKeyOf, ticketedRows, type ImportData, type ImportDeps, type ImportRow } from './read';
+import { ISSUE_KEY_PATTERN, newRows, rowKeyOf, ticketedRows, type ImportData, type ImportDeps, type ImportRow } from './read';
 
 // The import board's handler for the New tab: selecting, merging and unmerging rows, adding rows to an existing ticket, and creating tickets. vscode-free.
 
 const NAME = 'new';
-const ISSUE_KEY = /^[A-Z][A-Z0-9_]*-\d+$/;
 const OUT_OF_DATE = 'The New tab is out of date. Refresh it first.';
 
 /** What this handler keeps for itself: the existing tickets New rows were added to (a created record with such a key is an add, not a create). */
@@ -87,6 +86,26 @@ function groupRef(group: Group): string {
   const first = group.rows[0];
   if ('issueIds' in first) return `Flaw ${group.rows.flatMap(r => ('issueIds' in r ? r.issueIds : [])).join(', ')}`;
   return group.rows.map(r => ('nameVersion' in r ? r.nameVersion : r.id)).join(', ');
+}
+
+/**
+ * The name each New row's ticket goes by in plans and results, by row id: its open group's, or, for a row with a ticket
+ * already, its merge's (or its own).
+ */
+export function newGroupRefs(data: ImportData, working: ImportWorking): Map<string, string> {
+  const refs = new Map<string, string>();
+  for (const group of groupsOf(data, working)) {
+    const ref = groupRef(group);
+    for (const row of group.rows) refs.set(row.id, ref);
+  }
+  const rows = newRows(data);
+  const byKey = new Map(rows.map(r => [rowKeyOf(data, r), r]));
+  for (const row of rows) {
+    if (refs.has(row.id)) continue;
+    const merge = working.choices.merges.find(m => m.includes(rowKeyOf(data, row)));
+    refs.set(row.id, groupRef({ keys: [], rows: merge ? merge.flatMap(k => byKey.get(k) ?? []) : [row] }));
+  }
+  return refs;
 }
 
 /** The groups the named row ids belong to, in report order; null when an id names no open New row. */
@@ -173,7 +192,7 @@ function planNew(session: ImportSession, action: { type: string } & Record<strin
   }
 
   const ticket = typeof action.key === 'string' ? action.key.trim().toUpperCase() : '';
-  if (!ISSUE_KEY.test(ticket)) return { ok: false, reason: 'Name the ticket to add the rows to by its ticket key, for example SEC-12.' };
+  if (!ISSUE_KEY_PATTERN.test(ticket)) return { ok: false, reason: 'Name the ticket to add the rows to by its ticket key, for example SEC-12.' };
   if (action.mode !== 'comment' && action.mode !== 'rewrite') return { ok: false, reason: 'Add the rows as a comment or as a rewrite.' };
   const groups = groupsOfIds(session, action.ids);
   if (!groups) return { ok: false, reason: 'Pick new rows that have no ticket yet.' };
@@ -245,7 +264,7 @@ function prepareNew(session: ImportSession, action: { type: string } & Record<st
   if (action.type !== 'new-add' || session.working.outOfDate.includes('new')) return undefined;
   const ticket = typeof action.key === 'string' ? action.key.trim().toUpperCase() : '';
   const groups = groupsOfIds(session, action.ids);
-  if (!ISSUE_KEY.test(ticket) || !groups) return undefined;
+  if (!ISSUE_KEY_PATTERN.test(ticket) || !groups) return undefined;
   return (async () => {
     const descriptor = descriptorOf(session, deps);
     const { engineSession, rows } = addSession(session, groups, descriptor);

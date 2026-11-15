@@ -1,12 +1,9 @@
 // Pageable New-section slicing, page navigation and bulk include/exclude for report-import reviews.
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
-import type { VeracodeReviewRow } from '../../utils/veracodeReport';
-import type { WaltzReviewRow } from '../../utils/waltzReport';
 import { ReviewRowBase } from './importTypes';
-import { ReviewTableColumn, neutralizeMarkdownLinks, normalizeReply, safeCellText } from './primitives';
+import { normalizeReply } from './primitives';
 
-// The page slice moved to src/imports/rows.ts, which the import board shares.
 export { buildReviewPage, type ReviewPage } from '../../imports/rows';
 
 // ---------------------------------------------------------------------------------------------
@@ -87,18 +84,3 @@ export function parseBulkNewRowReply(reply: string): boolean | null {
 export function applyBulkNewRowSet<TRow extends ReviewRowBase>(rows: TRow[], value: boolean): TRow[] {
   return rows.map(r => (r.existingTicketKey === null ? { ...r, included: value } : r));
 }
-
-// Summary/component name are untrusted, scan-report-derived free text — this table's whole output
-// is trust-gated (KTD5, U6) once it carries the per-row toggle links below, so both go through
-// neutralizeMarkdownLinks() (see its own doc comment). Severity/CWE-id/rating stay unsanitized —
-// enum-shaped/numeric values from the report's own schema, not free text.
-export const VERACODE_REVIEW_COLUMNS: ReviewTableColumn<VeracodeReviewRow>[] = [
-  { header: 'Severity', accessor: (r) => `${r.severityLabelText} (${r.severity})` },
-  { header: 'CWE', accessor: (r) => (r.cweId ? `CWE-${r.cweId}` : '—') },
-  { header: 'Summary', accessor: (r) => neutralizeMarkdownLinks(r.summary) },
-];
-
-export const WALTZ_REVIEW_COLUMNS: ReviewTableColumn<WaltzReviewRow>[] = [
-  { header: 'Component', accessor: (r) => neutralizeMarkdownLinks(r.nameVersion) },
-  { header: 'Rating', accessor: (r) => safeCellText(r.maxVulnRating) },
-];

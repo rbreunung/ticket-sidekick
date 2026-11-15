@@ -2,6 +2,8 @@ import * as path from 'path';
 import type { BoardKind, CheckMode, Validated } from '../../sessions/boardKind';
 import { handlerOf } from './handlers';
 import { IMPORT_HANDLERS } from './registry';
+import { newGroupRefs } from './newTab';
+import { browseUrl } from './searchExport';
 import type { DerivedPart, Session } from '../../sessions/sessionTypes';
 import { normalizeProjectKey } from '../../services/configValidation';
 import { buildReviewPage } from '../../imports/rows';
@@ -103,6 +105,8 @@ export interface NewRowView {
   included: boolean;
   /** The number of the merge this row is part of, counted from 1. */
   merge?: number;
+  /** What the plan lines and results of this row's ticket are named: the row's own reference, or its merge's. */
+  group: string;
   /** The ticket the board created for this row, or added it to. */
   created?: string;
   /** That ticket's page in Jira. */
@@ -468,9 +472,6 @@ function matches(filter: string | undefined, ...fields: Array<string | null | un
   return fields.some(f => (f ?? '').toLowerCase().includes(needle));
 }
 
-function browse(baseUrl: string | undefined, key: string): string | null {
-  return baseUrl ? `${baseUrl.replace(/\/+$/, '')}/browse/${encodeURIComponent(key)}` : null;
-}
 
 export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, ImportAction, ImportView, ImportDeps> = {
   kind: IMPORT_KIND,
@@ -650,14 +651,15 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
 
     if (current === 'new') {
       const mergeOf = new Map(choices.merges.flatMap((m, n) => m.map(key => [key, n + 1] as const)));
+      const groupRefs = newGroupRefs(data, working);
       view.new = {
         rows: newRows(data).filter(r => matches(filter, rowRef(r), r.summary)).map(r => {
           const key = rowKeyOf(data, r);
           const createdKey = isCreated(created, key) ? createdFor(writes, key) : undefined;
           const merge = mergeOf.get(key);
           return {
-            id: r.id, ref: rowRef(r), summary: r.summary, rating: rowRating(r), included: !choices.excluded.includes(key),
-            ...(merge ? { merge } : {}), ...(createdKey ? { created: createdKey, ...(browse(data.baseUrl, createdKey) ? { createdUrl: browse(data.baseUrl, createdKey)! } : {}) } : {}),
+            id: r.id, ref: rowRef(r), group: groupRefs.get(r.id)!, summary: r.summary, rating: rowRating(r), included: !choices.excluded.includes(key),
+            ...(merge ? { merge } : {}), ...(createdKey ? { created: createdKey, ...(browseUrl(data.baseUrl, createdKey) ? { createdUrl: browseUrl(data.baseUrl, createdKey)! } : {}) } : {}),
           };
         }),
       };
@@ -670,10 +672,10 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
           .map(r => {
             const ticket = r.target?.key ?? r.existingTicketKey!;
             const key = rowKeyOf(data, r);
-            const alsoOpen = (r.openTicketKeys ?? []).map(k => ({ key: k, url: browse(data.baseUrl, k) }));
+            const alsoOpen = (r.openTicketKeys ?? []).map(k => ({ key: k, url: browseUrl(data.baseUrl, k) }));
             return {
               id: r.id, ref: rowRef(r), summary: r.summary, ticket, status: r.target?.status ?? null, resolved: r.target?.resolved ?? false,
-              url: browse(data.baseUrl, ticket), ...(alsoOpen.length > 0 ? { alsoOpen } : {}), change: describeChange(r),
+              url: browseUrl(data.baseUrl, ticket), ...(alsoOpen.length > 0 ? { alsoOpen } : {}), change: describeChange(r),
               action: choices.actions[key] ?? r.action ?? 'leave', allowedActions: [...(r.allowedActions ?? ['leave'])],
               needsDecision: needsDecision(r, writes), written: decided(writes, ticket),
             };
@@ -682,7 +684,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
     } else if (current === 'stale') {
       view.stale = {
         rows: data.staleFailed ? [] : staleTickets(data).filter(t => matches(filter, t.key, t.summary)).map(t => ({
-          key: t.key, summary: t.summary, status: t.status, issueType: t.issueType, url: browse(data.baseUrl, t.key),
+          key: t.key, summary: t.summary, status: t.status, issueType: t.issueType, url: browseUrl(data.baseUrl, t.key),
           selected: choices.staleSelected.includes(t.key), written: writes.tickets[t.key] !== undefined,
           ...(t.note ? { note: t.note } : {}),
         })),

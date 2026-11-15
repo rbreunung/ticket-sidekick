@@ -1,45 +1,10 @@
-// Stale-ticket close: target/issue-type options and picks, ticket toggles.
+// Stale-ticket close: target options and ticket toggles.
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
-import { ReviewSessionStale, StaleTargetOption } from './importTypes';
-import { TICKET_KEY_TOKEN, isBackOrCancellation, pickByNumberOrName } from './primitives';
+import { ReviewSessionStale } from './importTypes';
+import { TICKET_KEY_TOKEN } from './primitives';
 
-// The target options and the ticket toggle moved to src/imports/staleClose.ts, which the import board shares.
 export { applyStaleTicketToggle, buildStaleTargetOptions } from '../../imports/staleClose';
-
-export function formatStaleTargetOption(option: StaleTargetOption): string {
-  return option.kind === 'rule' ? `${option.ruleName} → ${option.targetState}` : option.status;
-}
-
-/** Target-pick reply: a number, a plain status name, a rule name or its full label; `back` or a
- * cancellation word goes back to the Stale screen (R5). Offered options are matched first, so a
- * workflow status literally named like a cancel word ("Cancelled", "Stop") stays pickable — see
- * docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md. */
-export function parseStaleTargetPick(reply: string, options: StaleTargetOption[]): StaleTargetOption | 'back' | 'invalid' {
-  const picked = pickByNumberOrName(reply, options, formatStaleTargetOption)
-    ?? options.find(o => o.kind === 'rule' && o.ruleName.toLowerCase() === reply.trim().toLowerCase());
-  if (picked) return picked;
-  return isBackOrCancellation(reply) ? 'back' : 'invalid';
-}
-
-/** R12: which issue type to close now, when the selection spans several. Offered issue types are
- * matched before `back`/cancellation words, as in parseStaleTargetPick. */
-export function parseStaleIssueTypePick(reply: string, issueTypes: string[]): string | 'back' | 'invalid' {
-  const picked = pickByNumberOrName(reply, issueTypes, (t) => t);
-  if (picked) return picked;
-  return isBackOrCancellation(reply) ? 'back' : 'invalid';
-}
-
-/** Result of {@link parseStaleTicketToggle}: the matched stale-ticket keys plus whatever tokens in
- * the reply weren't stale-ticket keys, rejoined as a string — code-review fix: a reply mixing a
- * stale-ticket-key token with New/Already-ticketed row-id tokens (e.g. `PROJ-123 3 7`) used to have
- * the row-id tokens silently discarded once any stale-key token matched, so an excluded row stayed
- * included and got created. The caller now re-parses `remainder` with `parseReviewInput` instead of
- * returning immediately. */
-export interface StaleTicketToggleResult {
-  matched: string[];
-  remainder: string;
-}
 
 /**
  * Recognizes a reply as one or more ticket-key toggles for the Stale section — checked in
@@ -54,7 +19,7 @@ export interface StaleTicketToggleResult {
  * `null` when no token in the reply names an eligible stale ticket at all — the caller then falls
  * through to `parseReviewInput` with the whole original reply.
  */
-export function parseStaleTicketToggle(reply: string, stale: ReviewSessionStale): StaleTicketToggleResult | null {
+export function parseStaleTicketToggle(reply: string, stale: ReviewSessionStale): { matched: string[]; remainder: string } | null {
   const tokens = reply.trim().split(/[\s,]+/).filter(Boolean);
   const knownKeys = new Map<string, string>(); // UPPERCASE -> real key
   const closed = new Set((stale.closedKeys ?? []).map(k => k.toUpperCase()));

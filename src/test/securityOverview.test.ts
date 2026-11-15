@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildOverview, renderOverviewMarkdown, findingFromFlaw, componentFromWaltz, parseOverviewPrompt, localDate, JQL_KEY_CAP, type OverviewInput } from '../utils/securityOverview';
+import { buildOverview, findingFromFlaw, componentFromWaltz, localDate, JQL_KEY_CAP, type OverviewInput } from '../utils/securityOverview';
 import { descriptionsOf, makeComponent, makeFlaw, veracodeTicket, waltzTicket } from './helpers/overviewFixtures';
 
 const TODAY = '2026-10-22';
@@ -175,7 +175,6 @@ describe('import export (report side)', () => {
     expect(none.fixVersion).toBeNull();
     expect(none.rows[0]).toMatchObject({ ticketKey: null, reportMatch: 'in-report-no-ticket', detailSource: 'report', rating: 'Medium' });
     expect(none.noTicket).toBe(1);
-    expect(renderOverviewMarkdown(overview)).toContain('1 item has no ticket yet');
   });
 
   it('marks a stale ticket and reads detail the report holds as report, not from the ticket text', () => {
@@ -187,90 +186,6 @@ describe('import export (report side)', () => {
     expect(table.rows[0]).toMatchObject({ reportMatch: 'stale', detailSource: 'report' });
     expect(table.rows[0].findings[0].file).toBe('a|b.java');
     expect(table.rows[0].findings[0].approximate).toBe(false);
-  });
-});
-
-describe('renderOverviewMarkdown', () => {
-  it('shows the summary table, one table per release and a link with the ticket count', () => {
-    const tickets = [
-      veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'], dueDate: '2026-11-01' }),
-      waltzTicket('SEC-2', [makeComponent('netty-codec:4.1.100')], { fixVersions: ['2026.11'], dueDate: '2026-10-10' }),
-    ];
-
-    const text = renderOverviewMarkdown(buildOverview(input(tickets)), 'https://jira.example.com');
-
-    expect(text).toContain('| Fix Version | Assigned | Overdue | Due before release | No Due Date |');
-    expect(text).toContain('| 2026.11 (releases 2026-11-15) | 2 | 1 | 1 | 0 |');
-    expect(text).toContain('[2 tickets in Jira](https://jira.example.com/issues/?jql=');
-    expect(text).toContain('⚠ overdue');
-    expect(text).toContain('⚠ due before release');
-    expect(text).toContain('[SEC-1](https://jira.example.com/browse/SEC-1) (Open)');
-    expect(text).toContain('| Source | Item | Rating | Ticket | Due | Flag |');
-  });
-
-  it('shows a folded Veracode ticket as one row', () => {
-    const t = veracodeTicket('SEC-1', flawGroup(7), { fixVersions: ['2026.11'] });
-    const rows = renderOverviewMarkdown(buildOverview(input([t]))).split('\n').filter(l => l.includes('SEC-1'));
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toContain('7 findings');
-  });
-
-  it('neutralizes link syntax, pipes and line breaks in Jira text', () => {
-    const t = veracodeTicket('SEC-1', [makeFlaw('1')], { summary: 'Evil [click](http://evil.example) | x\nnext', status: 'Op|en' });
-
-    const text = renderOverviewMarkdown(buildOverview(input([t])));
-
-    expect(text).not.toContain('[click](');
-    expect(text).toContain('Evil ［click］(http://evil.example) / x next');
-    expect(text).toContain('(Op/en)');
-  });
-
-  it('says there is nothing to list for an empty project, and for an empty report', () => {
-    expect(renderOverviewMarkdown(buildOverview(input([])))).toContain('No unresolved Veracode or Waltz tickets');
-    expect(renderOverviewMarkdown(buildOverview(input([], { report: { matchByKey: {}, reportOnly: [] } })))).toContain('report has no items');
-  });
-
-  it('adds the Report match column for an import export and drops the Source column', () => {
-    const t = veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'] });
-    const text = renderOverviewMarkdown(buildOverview(input([t], { report: { matchByKey: { 'SEC-1': 'stale' }, reportOnly: [] } })));
-    expect(text).toContain('| Item | Rating | Ticket | Due | Flag | Report match |');
-    expect(text).toContain('| stale |');
-  });
-
-  it('notes tickets that could not be read in full', () => {
-    const t = veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'] });
-    expect(renderOverviewMarkdown(buildOverview({ ...input([t]), descriptions: {} }))).toContain('could not be read in full');
-  });
-});
-
-describe('parseOverviewPrompt', () => {
-  it('reads an upper-case project key and the csv word in either order', () => {
-    expect(parseOverviewPrompt('SEC')).toEqual({ projectKey: 'SEC', format: null });
-    expect(parseOverviewPrompt('SEC csv')).toEqual({ projectKey: 'SEC', format: 'csv' });
-    expect(parseOverviewPrompt('csv SEC')).toEqual({ projectKey: 'SEC', format: 'csv' });
-    expect(parseOverviewPrompt('for project SEC, CSV please')).toEqual({ projectKey: 'SEC', format: 'csv' });
-  });
-
-  it('reads xlsx or excel as the Excel format', () => {
-    expect(parseOverviewPrompt('SEC xlsx')).toEqual({ projectKey: 'SEC', format: 'xlsx' });
-    expect(parseOverviewPrompt('xlsx SEC')).toEqual({ projectKey: 'SEC', format: 'xlsx' });
-    expect(parseOverviewPrompt('SEC as Excel')).toEqual({ projectKey: 'SEC', format: 'xlsx' });
-  });
-
-  it('takes the first format word when the prompt names both', () => {
-    expect(parseOverviewPrompt('SEC xlsx csv')).toEqual({ projectKey: 'SEC', format: 'xlsx' });
-    expect(parseOverviewPrompt('SEC csv xlsx')).toEqual({ projectKey: 'SEC', format: 'csv' });
-  });
-
-  it('does not read an Object property name such as constructor as a format', () => {
-    expect(parseOverviewPrompt('SEC constructor')).toEqual({ projectKey: 'SEC', format: null });
-    expect(parseOverviewPrompt('toString')).toEqual({ projectKey: 'TOSTRING', format: null });
-  });
-
-  it('accepts a lone lower-case word as the project and finds none in a sentence', () => {
-    expect(parseOverviewPrompt('sec')).toEqual({ projectKey: 'SEC', format: null });
-    expect(parseOverviewPrompt('show me everything')).toEqual({ projectKey: null, format: null });
-    expect(parseOverviewPrompt('')).toEqual({ projectKey: null, format: null });
   });
 });
 
@@ -337,8 +252,9 @@ describe('buildOverview flags for tickets without a Fix Version', () => {
     expect(buildOverview(input([later], { versions })).tables[0].rows[0].flag).toBeNull();
   });
 
-  it('shows the Not assigned due-before-release count in the summary table', () => {
-    const text = renderOverviewMarkdown(buildOverview(input([unplanned('SEC-1', '2027-02-01')], { versions })));
-    expect(text).toMatch(/Not assigned to a release \| 1 item \| 0 \| 1 \| 0 \|/);
+  it('counts the Not assigned due-before-release ticket in that table', () => {
+    const [table] = buildOverview(input([unplanned('SEC-1', '2027-02-01')], { versions })).tables;
+    expect(table.fixVersion).toBeNull();
+    expect(table.counts).toMatchObject({ items: 1, overdue: 0, dueBeforeRelease: 1, noDueDate: 0 });
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { type ReviewRowBase } from '../participant/sessionState';
 
 const helpOf = (view: 'overview' | 'new' | 'ticketed' | 'stale', c: ImportReplyContext): string => buildImportHelp(view, importCommandCaps(c));
-import { buildImportHelp, importCommandCaps, type TicketedAction, emptyImportOutcomes, buildImportDoneSummary, parseNewGroupReply, parseTicketedGroupReply, isConfirmation, isCancellation, mergeNewRows, unmergeNewRow, restoreMergedRows, buildAddPrompt, buildChatCommandLink, findPartialRewrites, formatTicketedRowResult, type ImportReplyContext } from '../participant/sessionState';
+import { buildImportHelp, importCommandCaps, type TicketedAction, emptyImportOutcomes, buildImportDoneSummary, parseNewGroupReply, parseTicketedGroupReply, isConfirmation, isCancellation, mergeNewRows, unmergeNewRow, restoreMergedRows, findPartialRewrites, formatTicketedRowResult, type ImportReplyContext } from '../participant/sessionState';
 
 describe('merge and unmerge replies on the New screen (finding folding, U4)', () => {
   const ctx = (overrides: Partial<ImportReplyContext> = {}): ImportReplyContext => ({
@@ -148,53 +148,6 @@ describe('add replies on the New screen (finding folding, U5)', () => {
   it('the vocabulary hint names add only for an importer that can fold', () => {
     expect(helpOf('new', ctx())).toContain('add 2 4 to PROJ-123');
     expect(helpOf('new', ctx({ canFold: false }))).not.toContain('add 2');
-  });
-});
-
-describe('buildAddPrompt (finding folding, KTD5, KTD13)', () => {
-  const base = { key: 'PROJ-123', summary: 'Hand-made netty upgrade', status: 'Open', resolved: false, ids: ['3', '5'], rowCount: 2, droppedKeys: [] as string[] };
-
-  it('offers Comment and Rewrite as links that resend the command with the mode', () => {
-    const text = buildAddPrompt(base);
-    expect(text).toContain(buildChatCommandLink('Comment', '@jira', 'add 3,5 to PROJ-123 as comment'));
-    expect(text).toContain(buildChatCommandLink('Rewrite', '@jira', 'add 3,5 to PROJ-123 as rewrite'));
-  });
-
-  it('names the ticket and says Rewrite overwrites its description and title', () => {
-    const text = buildAddPrompt(base);
-    expect(text).toContain('PROJ-123');
-    expect(text).toContain('Hand-made netty upgrade');
-    expect(text.toLowerCase()).toContain('overwrite');
-    expect(text).toContain('labels');
-  });
-
-  it('warns when the ticket is resolved', () => {
-    expect(buildAddPrompt({ ...base, status: 'Done', resolved: true })).toContain('resolved');
-    expect(buildAddPrompt(base)).not.toContain('resolved');
-  });
-
-  it('lists the findings a rewrite would drop, and omits the section when none', () => {
-    const withDropped = buildAddPrompt({ ...base, droppedKeys: ['1001', '1002'] });
-    expect(withDropped).toContain('1001');
-    expect(withDropped).toContain('1002');
-    expect(buildAddPrompt(base)).not.toContain('would drop');
-  });
-
-  it('neutralizes a ticket summary that tries to be a chat command link', () => {
-    const text = buildAddPrompt({ ...base, summary: '[click](command:workbench.action.chat.open)' });
-    expect(text).not.toContain('[click](command:');
-  });
-
-  it('defuses angle-bracket command autolinks in the summary, status and dropped keys', () => {
-    const evil = '<command:workbench.action.chat.open?%7B%22query%22%3A%22x%22%7D>';
-    const text = buildAddPrompt({ ...base, summary: evil, status: evil, droppedKeys: [evil] });
-    expect(text).not.toMatch(/(?<!\\)<command:/);
-    expect(text).toContain('\\<command:');
-  });
-
-  it('a backslash in the summary cannot un-escape the defused bracket', () => {
-    const text = buildAddPrompt({ ...base, summary: '\\<command:workbench.action.chat.open>' });
-    expect(text).toContain('\\\\\\<command:');
   });
 });
 

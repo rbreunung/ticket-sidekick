@@ -5,7 +5,7 @@
 The code lives in:
 
 - [`src/participant/JiraParticipant.ts`](../src/participant/JiraParticipant.ts) — the email-only handler: the email import sessions, the help screen, the intent parse (`createFromEmail`, `addEmailComment` or `other`) and the notice.
-- [`src/participant/jira/`](../src/participant/jira/) — the email import (`emailHandler.ts`) over the shared chat flow (`reportImportHandler.ts`, `importReviewScreen.ts`, `importCreate.ts`), `cleanupHandler.ts` (wrappers over `src/imports/cleanup.ts`), `defaultProjectNotice.ts` and `ticketContext.ts`.
+- [`src/participant/jira/`](../src/participant/jira/) — the email import (`emailHandler.ts`) over the shared chat flow (`reportImportHandler.ts`, `importReviewScreen.ts`, `importCreate.ts`), `defaultProjectNotice.ts` and `ticketContext.ts`.
 - [`src/participant/sessionState.ts`](../src/participant/sessionState.ts) — pure session-state types and helpers, including `pickEmailOption()`.
 
 ## Where the removed flows went

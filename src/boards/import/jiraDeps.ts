@@ -4,15 +4,14 @@ import type { JiraAccess } from '../../tools/jiraTools/jiraAccess';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
 import { fetchAllPages } from '../../utils/reportImport';
-import type { ImportDeps, ImportDescriptors } from './read';
+import { ISSUE_KEY_PATTERN, type ImportDeps, type ImportDescriptors } from './read';
 
-// What the import board needs from Jira, built on the services the chat import uses: the same
-// template resolution, the same review build (dedup, descriptions, stale search) and the reads the
-// export needs. Failures are worded as status and short reason; Jira's response body never reaches
+// What the import board needs from Jira, built on the shared services: template resolution, the
+// review build (dedup, descriptions, stale search) and the reads the export needs. Failures are worded as status and short reason; Jira's response body never reaches
 // the page.
 
 const KEY_CHUNK = 50;
-const ISSUE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
+const UPDATED_PARALLEL = 4;
 
 export interface ImportJiraOptions {
   getJira(): Promise<JiraAccess>;
@@ -83,16 +82,22 @@ export function importJiraDeps(options: ImportJiraOptions): ImportDeps {
       const { ticketService } = await jira();
       const valid = [...new Set(keys)].filter(k => ISSUE_KEY_PATTERN.test(k));
       const times: Record<string, string> = {};
+      const readChunk = (chunk: string[]) => fetchAllPages(
+        (startAt, pageToken) => ticketService.searchTicketsRaw(`key in (${chunk.join(', ')}) ORDER BY key ASC`, KEY_CHUNK, ['updated'], startAt, pageToken),
+        KEY_CHUNK, KEY_CHUNK, issue => issue.key,
+      );
       await guarded('Reading the tickets\' update times', async () => {
-        for (let i = 0; i < valid.length; i += KEY_CHUNK) {
-          const chunk = valid.slice(i, i + KEY_CHUNK);
-          const issues = await fetchAllPages(
-            (startAt, pageToken) => ticketService.searchTicketsRaw(`key in (${chunk.join(', ')}) ORDER BY key ASC`, KEY_CHUNK, ['updated'], startAt, pageToken),
-            KEY_CHUNK, KEY_CHUNK, issue => issue.key,
-          );
-          for (const issue of issues) {
-            const updated = (issue.fields as { updated?: unknown }).updated;
-            if (typeof updated === 'string') times[issue.key] = updated;
+        // Up to UPDATED_PARALLEL chunks at once; results merge and a failure surfaces in chunk order, as one at a time would.
+        for (let i = 0; i < valid.length; i += KEY_CHUNK * UPDATED_PARALLEL) {
+          const chunks: string[][] = [];
+          for (let j = i; j < Math.min(valid.length, i + KEY_CHUNK * UPDATED_PARALLEL); j += KEY_CHUNK) chunks.push(valid.slice(j, j + KEY_CHUNK));
+          const settled = await Promise.allSettled(chunks.map(readChunk));
+          for (const outcome of settled) {
+            if (outcome.status === 'rejected') throw outcome.reason;
+            for (const issue of outcome.value) {
+              const updated = (issue.fields as { updated?: unknown }).updated;
+              if (typeof updated === 'string') times[issue.key] = updated;
+            }
           }
         }
       });

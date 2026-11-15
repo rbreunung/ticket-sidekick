@@ -322,8 +322,7 @@ export function buildStaleSearchJql(projectKey: string, markerLabel: string): st
 /**
  * R1/R5: finds open tickets whose finding(s) are gone from the current report or excluded by the
  * importer's own remediation filter. Runs one search (marker-label + `resolution is EMPTY`,
- * capped at `BATCH_LIMIT` — R1's "found N, showing first 50" shape, mirroring
- * `handleRunCleanup`'s analogous query in cleanupHandler.ts) rather than the chunked multi-query
+ * capped at `BATCH_LIMIT` — R1's "found N, showing first 50" shape) rather than the chunked multi-query
  * shape `findAlreadyTicketed` uses for dedup, since this search is a single label/project filter,
  * not a large OR-list of dedup keys.
  *

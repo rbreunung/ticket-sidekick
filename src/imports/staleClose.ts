@@ -10,7 +10,7 @@ import {
 } from './types';
 
 /**
- * R2/KTD3: the close-time target pick — matching cleanup rules first (in `.jira-templates.json`
+ * The close-time target pick — matching cleanup rules first (in `.jira-templates.json`
  * order), then every status reachable in the stored workflow graph from the current status of at
  * least one selected ticket, alphabetically. A status a rule also targets is still listed: picking
  * the plain status transitions without the rule's resolution. Empty when no rule matches and no

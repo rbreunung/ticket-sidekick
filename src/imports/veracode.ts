@@ -37,7 +37,7 @@ function veracodeGroupDue(settings: VeracodeSettings, group: VeracodeFlaw[], tic
 }
 
 // A problem with the setting is logged once per import, when its session is built, never once per row.
-export function logVeracodeSlaProblems(settings: VeracodeSettings, onDiag?: DiagLogger): void {
+function logVeracodeSlaProblems(settings: VeracodeSettings, onDiag?: DiagLogger): void {
   const { unknownKeys, invalidKeys } = resolveSlaDays(settings.slaDays());
   if (unknownKeys.length === 0 && invalidKeys.length === 0) return;
   onDiag?.('warn', 'ticketSidekick.veracode.slaDays has entries that were ignored', {
@@ -45,9 +45,9 @@ export function logVeracodeSlaProblems(settings: VeracodeSettings, onDiag?: Diag
   });
 }
 
-// U2: folds immediately after parse+filter — before dedup ever runs (KTD1) — so every downstream
+// Folds immediately after parse+filter — before dedup ever runs — so every downstream
 // step (dedup search, review-row building, ticket creation) operates on folded groups
-// (VeracodeFlaw[], one or more flaws sharing a source file + line, R9) rather than individual
+// (VeracodeFlaw[], one or more flaws sharing a source file + line) rather than individual
 // flaws. A flaw with no location (missing sourceFile/line) never folds with anything and comes
 // back as its own singleton group — see groupFlawsByLocation()'s own doc comment.
 async function readAndFilterVeracodeFile(filePath: string, settings: VeracodeSettings, onDiag?: DiagLogger): Promise<{ items: VeracodeFlaw[][]; rawItems: VeracodeFlaw[] }> {
@@ -56,7 +56,7 @@ async function readAndFilterVeracodeFile(filePath: string, settings: VeracodeSet
   // same resolved maxReportBytes so they agree with each other and with the user's setting.
   logVeracodeSlaProblems(settings, onDiag);
   const { maxReportBytes, ...filterConfig } = settings.filter();
-  // U6: buildVeracodeActiveFlawPredicate needs the raw, unfiltered flaws (before
+  // BuildVeracodeActiveFlawPredicate needs the raw, unfiltered flaws (before
   // minSeverity/includeRemediationStatuses) — readAndFilterReport returns them directly as
   // `rawItems` alongside the filtered/folded set, no closure capture needed.
   const { items: filtered, rawItems: rawFlaws } = await readAndFilterReport(
@@ -69,30 +69,27 @@ async function readAndFilterVeracodeFile(filePath: string, settings: VeracodeSet
   return { items: groupFlawsByLocation(filtered), rawItems: rawFlaws };
 }
 
-// U5: the `veracode` label every Veracode-imported ticket carries (alongside its
+// The `veracode` label every Veracode-imported ticket carries (alongside its
 // `veracode-issue-<id>` marker label(s)) — reportImport.ts's findStaleTickets() searches on this to
-// find open tickets whose finding(s) have disappeared from the current report. Not yet wired into
-// the chat flow (that's U6); exported here so that later unit can call findStaleTickets() with the
-// right marker label without duplicating it.
-export const VERACODE_STALE_MARKER_LABEL = 'veracode';
+// find open tickets whose finding(s) have disappeared from the current report.
+const VERACODE_STALE_MARKER_LABEL = 'veracode';
 
-// Extracted so the descriptor's own labelToDedupKey (dedup search) and findStaleTickets()'s
-// labelToDedupKey (stale search, U6) parse the identical `veracode-issue-<id>` label shape from one
+// One parser, so the descriptor's own labelToDedupKey (dedup search) and findStaleTickets()'s
+// labelToDedupKey (stale search) parse the identical `veracode-issue-<id>` label shape from one
 // implementation instead of two copies that could drift apart.
-export function veracodeLabelToIssueId(label: string): string | null {
+function veracodeLabelToIssueId(label: string): string | null {
   const match = label.match(/^veracode-issue-(\d+)$/);
   return match ? match[1] : null;
 }
 
 /**
- * Builds the "is this flaw id still active" predicate findStaleTickets() needs (U5's R2/R3). A
+ * Builds the "is this flaw id still active" predicate findStaleTickets() needs. A
  * flaw id is active when it's present in the *raw* parsed report (before the
- * minSeverity/includeRemediationStatuses filter that decides what gets a *new* ticket — R2 says
- * "absent from the raw parsed report") with a remediationStatus that still matches
- * `includeStatuses`. Deliberately ignores minSeverity: R2 only mentions remediation status, so a
+ * minSeverity/includeRemediationStatuses filter that decides what gets a *new* ticket) with a
+ * remediationStatus that still matches `includeStatuses`. Deliberately ignores minSeverity, so a
  * flaw that dropped below the severity floor but is still open does not make its ticket stale.
  */
-export function buildVeracodeActiveFlawPredicate(
+function buildVeracodeActiveFlawPredicate(
   rawFlaws: VeracodeFlaw[],
   includeStatuses: string[],
 ): (issueId: string) => boolean {
@@ -128,7 +125,7 @@ export function createVeracodeDescriptor(settings: VeracodeSettings, host: Impor
       templateSelection: 'jira.session.veracodeTemplateSelection',
       review: 'jira.session.veracodeReview',
     },
-    // U2/R11: one label/key per member flaw in the folded group — a match on any one of them
+    // One label/key per member flaw in the folded group — a match on any one of them
     // (an already-ticketed single flaw from a prior, unfolded run, say) counts the whole group as
     // already-ticketed.
     searchLabelOf: group => group.map(flaw => `veracode-issue-${flaw.issueId}`),
@@ -145,7 +142,7 @@ export function createVeracodeDescriptor(settings: VeracodeSettings, host: Impor
         cweId: first.cweId,
         summary: buildGroupSummary(group),
         labels: buildGroupLabels(group, templateLabels),
-        // U4/R6-R7: no eager buildGroupDescriptionWiki() call here — the group is kept on the row
+        // No eager buildGroupDescriptionWiki() call here — the group is kept on the row
         // instead, and the full description is built just-in-time in buildTicketFields below, only
         // for a row the user actually confirms into creation.
         sourceGroup: group,
@@ -171,19 +168,15 @@ export function createVeracodeDescriptor(settings: VeracodeSettings, host: Impor
       return joining !== null && joining < currentDueDate ? joining : null;
     },
     dueDateNote: dueDate => `Due Date set to ${dueDate} from your SLA table`,
-    // KTD9: this pop-up previously lived only in extension.ts's own (pre-consolidation) duplicate of
-    // this flow; wiring it through the descriptor keeps it alive for both the command-triggered and
-    // chat-only entry points once extension.ts is switched onto this shared session builder.
     onIssueTypeFetchFailed: host.onIssueTypeFetchFailed,
-    // U6: wires reportImportHandler.ts's reverse stale-ticket check up to U5's own marker
-    // label/predicate builder — rawItems here is always what readAndFilterVeracodeFile's rawItems
-    // (or extension.ts's own captured pre-filter parse) produced: individual, unfiltered VeracodeFlaw[].
+    // The reverse stale-ticket check — rawItems here is always what readAndFilterVeracodeFile's
+    // rawItems produced: individual, unfiltered VeracodeFlaw[].
     stale: {
       markerLabel: VERACODE_STALE_MARKER_LABEL,
       labelToDedupKey: veracodeLabelToIssueId,
       buildActivePredicate: rawItems => buildVeracodeActiveFlawPredicate(rawItems as VeracodeFlaw[], settings.filter().includeStatuses),
     },
-    // Finding folding (KTD1/KTD4): a row's item is its group of flaws, so merging is concatenation.
+    // Finding folding: a row's item is its group of flaws, so merging is concatenation.
     fold: {
       itemOf: row => row.sourceGroup,
       combine: groups => groups.flat(),
@@ -191,21 +184,21 @@ export function createVeracodeDescriptor(settings: VeracodeSettings, host: Impor
       buildComment: (group, droppedKeys, details) => buildFoldedCommentWiki(group, droppedKeys, dueContext(details?.ticketCreated)),
       narrowToNew: (group, change) => flawsWithIds(group, change.newIds),
     },
-    // Ticket merge, close mode (KTD1): items move to the kept ticket only when it lacks them; each source is linked,
+    // Ticket merge, close mode: items move to the kept ticket only when it lacks them; each source is linked,
     // commented on and closed without editing its text.
     ticketMerge: {
       mode: 'close',
       itemNoun: 'flaw',
       buildSourceComment: buildMergedSourceComment,
     },
-    // Security overview export (KTD3): the report's own flaws are the exact detail, and the SLA table implies the same Due Date a ticket would get.
+    // Security overview export: the report's own flaws are the exact detail, and the SLA table implies the same Due Date a ticket would get.
     overviewExport: {
       source: 'veracode',
       detailOf: row => ({ findings: row.sourceGroup.map(findingFromFlaw) }),
       summaryOf: row => row.summary,
       dueDateOf: row => groupDue(row.sourceGroup),
     },
-    // Import ticket updates parity (KTD2): a folded group's findings are its flaw ids, recorded as
+    // Import ticket updates parity: a folded group's findings are its flaw ids, recorded as
     // `veracode-issue-<id>` labels. Veracode offers the same three actions as Waltz (`rewrite`, `leave`, `new ticket`), so a
     // changed ticket is always rebuilt with its findings table; there is no `update` and no baseline, rating or summary rewrite.
     changeTracking: {

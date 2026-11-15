@@ -1,13 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('vscode', () => ({
-  workspace: {
-    workspaceFolders: [{ uri: { fsPath: '/workspace' } }],
-  },
-  window: { createOutputChannel: vi.fn(() => ({ appendLine: vi.fn() })) },
-  MarkdownString: class { constructor(public value = '') {} isTrusted?: unknown; },
-}));
-
 vi.mock('../services/WorkflowService', () => ({
   loadWorkflowCache: vi.fn(),
   findPath: vi.fn(),
@@ -19,23 +11,12 @@ vi.mock('../templates/TemplateService', () => ({
   }); }),
 }));
 
-import { streamReviewScreen, executeCleanupBatch, handleRunCleanup, buildStaleTicketGroups, transitionTickets } from '../participant/jira/cleanupHandler';
-import { loadWorkflowCache, findPath } from '../services/WorkflowService';
+import { buildStaleTicketGroups, transitionTickets } from '../imports/cleanup';
+import { loadWorkflowCache } from '../services/WorkflowService';
 import { TemplateService } from '../templates/TemplateService';
-import type { TransitionBatchTicket, TransitionSubtask } from '../participant/sessionState';
-import { buildReviewTable } from '../participant/sessionState';
+import type { TransitionBatchTicket } from '../imports/types';
 import { MockJiraClient } from './mocks/MockJiraClient';
 import { TicketService } from '../services/TicketService';
-
-const mockStream = () => ({ markdown: vi.fn() });
-const mockWs = () => ({ get: vi.fn(), update: vi.fn() });
-
-// streamReviewScreen now streams a trusted vscode.MarkdownString (its footer contains command
-// links, U5) rather than a bare string — this file's mocked MarkdownString stores the raw text on
-// `.value`, so callers reading the streamed output as a plain string go through this helper.
-function markdownText(arg: unknown): string {
-  return typeof arg === 'string' ? arg : (arg as { value: string }).value;
-}
 
 const dummyPath = [{ id: '1', name: 'Go', to: 'Done' }];
 
@@ -50,33 +31,6 @@ function makeTicket(key: string, overrides: Partial<TransitionBatchTicket> = {})
     ...overrides,
   };
 }
-
-function makeSubtask(key: string, overrides: Partial<TransitionSubtask> = {}): TransitionSubtask {
-  return {
-    key,
-    summary: `Subtask ${key}`,
-    currentStatus: 'Open',
-    transitionPath: dummyPath,
-    included: true,
-    ...overrides,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// streamReviewScreen — resolution display
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// executeCleanupBatch — subtask resolution fallback
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// handleRunCleanup — JQL construction and behaviour
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// buildStaleTicketGroups / transitionTickets (U6)
-// ---------------------------------------------------------------------------
 
 describe('buildStaleTicketGroups', () => {
   let client: MockJiraClient;
@@ -99,7 +53,7 @@ describe('buildStaleTicketGroups', () => {
     vi.mocked(loadWorkflowCache).mockReturnValue({ PROJ: { Bug: { discovered: '2024-01-01', graph: bugGraph } } });
   });
 
-  it('AE1: a ticket with no matching cleanup rule is still selectable when its workflow is discovered (R10)', async () => {
+  it('a ticket with no matching cleanup rule is still selectable when its workflow is discovered', async () => {
     withRules([]);
     const details = makeDetails([['PROJ-1', 'Old finding', 'Open', 'Bug']]);
 
@@ -230,11 +184,3 @@ describe('transitionTickets', () => {
     expect(result.failures[0].key).toBe('PROJ-1');
   });
 });
-
-// ---------------------------------------------------------------------------
-// handleRunCleanup — fixVersion JQL variants
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// buildReviewTable — pure table rendering
-// ---------------------------------------------------------------------------

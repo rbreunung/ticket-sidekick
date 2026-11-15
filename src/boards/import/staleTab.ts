@@ -16,7 +16,7 @@ import type { ImportData, ImportDeps, ImportRow } from './read';
 // Each issue type of the marked tickets gets its own target (a matching cleanup rule, or a status
 // reachable in its discovered workflow) and, for a closing status without a rule resolution, a
 // resolution. One Apply moves every issue type that has what it needs, at most 50 tickets, through
-// the same stale close the chat import runs. vscode-free.
+// the shared stale close (src/imports/staleClose.ts). vscode-free.
 
 const NAME = 'stale';
 const NO_RESOLUTION = 'none';
@@ -238,7 +238,7 @@ async function applyStale(
       if (!stale || !group || !group.tickets.some(t => t.key === key) || !isOpen(stale, working, key)) {
         results.push({ target: key, outcome: 'refused', reason: 'It is no longer a stale ticket the board can close.' });
       } else {
-        // One ticket at a time through the chat's stale close, so each finished write is saved before the next.
+        // One ticket at a time through the shared stale close, so each finished write is saved before the next.
         const one: ReviewSession<ImportRow> = {
           ...review,
           staleTickets: { ...stale, groups: stale.groups.map(g => (g !== group ? g : { ...g, tickets: g.tickets.map(t => ({ ...t, included: t.key === key })) })) },

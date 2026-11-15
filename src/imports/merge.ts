@@ -107,8 +107,8 @@ function planCloseMoves<TItem, TRow extends ReviewRowBase>(
 }
 
 /**
- * KTD2: step one of `merge … into …`. Reads every ticket, then works out what would happen with the warnings (R10) and
- * fallbacks (R9) the user should see first. Writes nothing.
+ * Step one of `merge … into …`. Reads every ticket, then works out what would happen with the warnings and
+ * fallbacks the user should see first. Writes nothing.
  */
 export async function prepareMergePrompt<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,

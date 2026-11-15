@@ -51,7 +51,7 @@ export async function createTicketForRow<TItem, TRow extends ReviewRowBase>(
     const createdTicket = await ticketService.createTicket(session.projectKey, ticketSummary, session.issueType, fields, baseUrl, optionalFields);
     if (createdTicket.droppedFields) logDroppedFields(onDiag, createdTicket.key, createdTicket.droppedFields);
     onEvent?.({ kind: 'created', key: createdTicket.key, summary: ticketSummary, ...(createdTicket.droppedFields ? { droppedFields: createdTicket.droppedFields } : {}) });
-    // KTD4 (import consolidation): optional per-row post-creation work (email uses this for
+    // Optional per-row post-creation work (email uses this for
     // attachment upload). A rejection is shown as a warning but never fails the row — the ticket
     // already exists.
     if (descriptor.afterCreate) {
@@ -84,7 +84,7 @@ export interface CreateRowsResult<TRow extends ReviewRowBase> {
 }
 
 /**
- * R7/R13/R15 (KTD3/KTD4): creates the included new rows on the visible page — at most
+ * Creates the included new rows on the visible page — at most
  * `BATCH_LIMIT`, which one page never exceeds. Rows excluded on this page are first written into
  * `allRows` so they stay excluded afterwards; successfully created rows then leave `allRows`, so a
  * repeated "create tickets" can never create them twice. Failed rows stay, still included.
@@ -98,7 +98,7 @@ export async function createNewRowTickets<TItem, TRow extends ReviewRowBase>(
 ): Promise<CreateRowsResult<TRow>> {
   const pageFresh = session.rows.filter(r => r.existingTicketKey === null);
   const toCreate = pageFresh.filter(r => r.included).slice(0, BATCH_LIMIT);
-  // A merged row stands for all of its member rows in `allRows` (KTD3).
+  // A merged row stands for all of its member rows in `allRows`.
   const memberIdsOf = (r: TRow) => r.memberIds ?? [r.id];
   const excludedIds = new Set(pageFresh.filter(r => !r.included).flatMap(memberIdsOf));
   if (toCreate.length === 0) {

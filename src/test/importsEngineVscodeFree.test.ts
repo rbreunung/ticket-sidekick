@@ -2,21 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 
-// The shared import engine runs under the chat import and the import board alike, so it must load without VS Code and
-// without the chat participant code. No `vscode` mock is set up in this file: an engine module that reached `vscode`,
+// The shared import engine must load without VS Code and without the chat participant code. No `vscode` mock is set up in this file: an engine module that reached `vscode`,
 // directly or through another module, would fail to load here.
 
 const engineDir = resolve(__dirname, '..', 'imports');
 const engineFiles = readdirSync(engineDir).filter(name => name.endsWith('.ts')).sort();
 
 describe('shared import engine', () => {
-  it('has its modules in src/imports', () => {
-    expect(engineFiles).toEqual(expect.arrayContaining([
-      'cleanup.ts', 'create.ts', 'descriptor.ts', 'merge.ts', 'review.ts', 'rewrite.ts',
-      'rows.ts', 'staleClose.ts', 'ticketedActions.ts', 'types.ts', 'veracode.ts', 'waltz.ts',
-    ]));
-  });
-
   it.each(engineFiles)('loads %s without VS Code', async name => {
     const loaded: Record<string, unknown> = await import(join(engineDir, name));
     expect(loaded).toBeTypeOf('object');

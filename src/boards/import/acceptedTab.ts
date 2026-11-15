@@ -178,7 +178,7 @@ async function applyListChange(
   }
   deps.onDiag?.('info', 'Import board: the accepted list was changed', { op: payload.op, lines: plan.lines.length });
 
-  const writes = { ...session.working.writes, acceptedFile: acceptedFingerprint(deps.workspaceRoot()) };
+  const writes = { ...session.working.writes, acceptedFile: await acceptedFingerprint(deps.workspaceRoot()) };
   const recorded: ImportSession = { ...session, working: { ...session.working, writes } };
   const results: ApplyLineResult[] = plan.lines.map(l => ({ target: l.target, outcome: 'done' }));
   await progress?.({ working: recorded.working, done: plan.lines.length, total: plan.lines.length });

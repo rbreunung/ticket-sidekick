@@ -34,9 +34,9 @@ export async function streamImportReview<TItem, TRow extends ReviewRowBase>(
   const current = ensureImportViewState(session);
   await ws.update(descriptor.sessionKeys.review, current);
   // Every screen carries command links (row toggles, group links, actions), so the whole response
-  // is trust-gated (KTD5) — every row's own field content is neutralized against markdown-link
-  // injection at its source (VERACODE_REVIEW_COLUMNS, WALTZ_REVIEW_COLUMNS, EMAIL_REVIEW_COLUMNS,
-  // and the stale screen's own summary cells).
+  // is trust-gated — every row's own field content is neutralized against markdown-link
+  // injection at its source (the descriptor's review columns, e.g. EMAIL_REVIEW_COLUMNS, and the
+  // stale screen's own summary cells).
   stream.markdown(trustedChatMarkdown(buildImportScreen(current, descriptor.reviewColumns, screenOptions(descriptor, baseUrl))));
   return { metadata: { jiraSession: { kinds: [IMPORT_SESSION_KINDS[descriptor.descriptorKind].review] } } };
 }

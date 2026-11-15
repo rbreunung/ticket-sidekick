@@ -133,7 +133,6 @@ describe('@jira and the flows it no longer runs', () => {
 
   it.each([
     ['import veracode report for PROJ', 'other'],
-    ['import waltz report', 'other'],
     // A model that still answers with the operations @jira had before.
     ['import veracode report', 'importVeracode'],
     ['import oss report', 'importWaltzReport'],

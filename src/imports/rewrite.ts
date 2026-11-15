@@ -15,7 +15,7 @@ import {
 type AddTargetIssue = Awaited<ReturnType<TicketService['getIssue']>>;
 
 /**
- * KTD6: what writing to ticket `key` involves — the findings its description would be rebuilt from
+ * What writing to ticket `key` involves — the findings its description would be rebuilt from
  * (the added rows plus the Already-ticketed rows whose target it is, the ticket's own rows first)
  * and the findings it records that none of those cover, which a rewrite drops and says so.
  */
@@ -36,7 +36,7 @@ export function planRewrite<TItem, TRow extends ReviewRowBase>(
 }
 
 /**
- * KTD10: the labels a rewrite takes off the ticket — the components it recorded that the report no longer has.
+ * The labels a rewrite takes off the ticket — the components it recorded that the report no longer has.
  * Only for an importer that reads its target tickets (Waltz); a component merely filtered or accepted away is still in
  * the report, so its label stays.
  */
@@ -58,7 +58,7 @@ export interface RewriteTarget<TItem> {
 }
 
 /**
- * KTD7: rebuilds `key` from `regenItem` — the importer's own summary, description and labels (no template labels) — in one write.
+ * Rebuilds `key` from `regenItem` — the importer's own summary, description and labels (no template labels) — in one write.
  * An importer's Due Date rides in the same write; `dueDate` is what was set, `droppedFields` what Jira refused.
  * `target` is what the caller already read from the ticket and which part of `regenItem` is joining it.
  */
@@ -100,7 +100,7 @@ export type AddTargetCheck =
   | { kind: 'read-failed'; error: string }
   | { kind: 'ready'; summary: string; status: string | null; resolved: boolean; rowCount: number; droppedKeys: string[] };
 
-/** Step one of `add … to <KEY>` (KTD5): reads the ticket and works out what a rewrite would drop. Writes nothing. */
+/** Step one of `add … to <KEY>`: reads the ticket and works out what a rewrite would drop. Writes nothing. */
 export async function checkAddTarget<TItem, TRow extends ReviewRowBase>(
   session: ReviewSession<TRow>,
   ids: string[],
@@ -136,7 +136,7 @@ export type AddResult<TRow extends ReviewRowBase> =
   | { kind: 'done'; session: ReviewSession<TRow>; commentFailed: string | null; dueDate: string | null; droppedFields: string[] };
 
 /**
- * Step two of `add … to <KEY>` (KTD5-KTD7): Comment adds the record labels and posts a comment listing
+ * Step two of `add … to <KEY>`: Comment adds the record labels and posts a comment listing
  * the added findings; Rewrite rebuilds summary, description and labels and then posts that comment
  * plus any dropped findings. A failed write keeps the rows in New; a comment that fails after the
  * write is reported and the rows still leave New, because their findings are now recorded.

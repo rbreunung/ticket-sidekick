@@ -1,17 +1,14 @@
 // Report-import per-screen reply parsing, merge/unmerge/add helpers, reply vocabulary and done summary.
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
-import { formatKeyLink } from '../../services/TicketService';
 import { IMPORT_COMMANDS, LEGACY_UPDATE_COMMAND, SEARCH_USAGE, UNACCEPT_COMPONENT_WORD } from './importScreens';
-import { buildHelpLink, offeredTicketedActions, type ImportCommandCaps } from './importCommands';
-import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, MergeRun, ReviewSessionStale, StaleTargetOption, TicketedAction, ActionLabels, actionLabelOf } from './importTypes';
-import { TICKET_KEY_TOKEN, cmdLink, isBackOrCancellation, isCancellation, isConfirmation, neutralizeMarkdownLinks, normalizeReply } from './primitives';
+import { offeredTicketedActions, type ImportCommandCaps } from './importCommands';
+import { AddMode, ImportOutcomes, ImportResultGroup, ImportReviewView, ReviewSessionStale, TicketedAction, ActionLabels, actionLabelOf } from './importTypes';
+import { TICKET_KEY_TOKEN, isCancellation, isConfirmation, normalizeReply } from './primitives';
 import type { OverviewFormat } from '../../utils/securityOverview';
-import { parseResolutionSelection } from './core';
 import { ReviewPageNav, parseBulkNewRowReply, parseReviewPageNav } from './reviewPaging';
-import { parseStaleTargetPick, parseStaleTicketToggle } from './staleTargets';
+import { parseStaleTicketToggle } from './staleTargets';
 
-// The merged-row helpers moved to src/imports/rows.ts, which the import board shares.
 export { mergeNewRows, restoreMergedRows, unmergeNewRow } from '../../imports/rows';
 
 /** What a reply on the current import screen asks for (KTD2). */
@@ -134,34 +131,6 @@ function parseMergeOffScreenReply(n: string, reply: string, ctx: ImportReplyCont
   if (!ctx.canMergeTickets) return null;
   if (/^merge .+ into /.test(n)) return { kind: 'invalid', reason: MERGE_ON_NEW_OR_STALE };
   return ctx.singleGroup ? parseReloadReply(reply) : null;
-}
-
-/** What a waiting merge reads: the user's choice after a failed step, the close's target status, or its resolution (KTD3). */
-export type MergeRunReply =
-  | { kind: 'retry' }
-  | { kind: 'ignore' }
-  | { kind: 'cancel' }
-  | { kind: 'target'; option: StaleTargetOption }
-  | { kind: 'resolution'; resolution: string | null }
-  | { kind: 'invalid' };
-
-/** Read before the screen's own vocabulary while a merge waits; anything it does not understand is `invalid`. */
-export function parseMergeRunReply(reply: string, run: MergeRun): MergeRunReply {
-  const n = normalizeReply(reply);
-  if (run.awaiting === 'target') {
-    const pick = parseStaleTargetPick(reply, run.closeTargetOptions ?? []);
-    if (pick === 'back') return { kind: 'cancel' };
-    return pick === 'invalid' ? { kind: 'invalid' } : { kind: 'target', option: pick };
-  }
-  if (run.awaiting === 'resolution') {
-    // A resolution name (even "Cancelled") is matched before the back and cancel words, as in the stale close.
-    const choice = parseResolutionSelection(reply, run.resolutionOptions ?? []);
-    if (choice !== 'invalid') return { kind: 'resolution', resolution: choice };
-    return isBackOrCancellation(reply) ? { kind: 'cancel' } : { kind: 'invalid' };
-  }
-  if (n === 'retry') return { kind: 'retry' };
-  if (n === 'ignore') return { kind: 'ignore' };
-  return isBackOrCancellation(reply) ? { kind: 'cancel' } : { kind: 'invalid' };
 }
 
 /** `help` prints the current screen's help, on every screen of every importer. */
@@ -415,194 +384,6 @@ function parseAddReply(n: string, ctx: ImportReplyContext): ImportReplyAction {
   if (ids.length === 0) return { kind: 'invalid', reason: ADD_USAGE };
   const key = match[2].toUpperCase();
   return match[3] ? { kind: 'add', ids, key, mode: match[3] as AddMode } : { kind: 'addPrompt', ids, key };
-}
-
-/** Everything the add prompt shows about the target ticket and what a rewrite would drop. */
-export interface AddPromptInput {
-  key: string;
-  summary: string;
-  status: string | null;
-  resolved: boolean;
-  ids: string[];
-  rowCount: number;
-  /** Findings the ticket recorded that a rewrite's description would no longer cover. */
-  droppedKeys: string[];
-  baseUrl?: string;
-}
-
-/**
- * Finding folding (KTD5/KTD13): the first step of `add … to <KEY>` — the target ticket, a resolved
- * warning, the overwrite warning with the findings a rewrite would drop, and two links that resend
- * the command with the mode. Clicking one is the confirmation. The ticket's summary, status and the
- * dropped keys come from Jira, so each is neutralized before it lands in this trusted response.
- */
-export function buildAddPrompt(input: AddPromptInput): string {
-  const safe = safeMarkdownText;
-  const rows = input.ids.join(',');
-  const command = (mode: AddMode) => `add ${rows} to ${input.key} as ${mode}`;
-  const lines: string[] = [
-    `### Add ${input.rowCount} ${input.rowCount === 1 ? 'row' : 'rows'} to ${formatKeyLink(input.key, input.baseUrl)}`,
-    '',
-    `**${input.key}** — ${safe(input.summary)}${input.status ? ` (${safe(input.status)})` : ''}`,
-    '',
-  ];
-  if (input.resolved) {
-    lines.push('⚠ This ticket is resolved. You can still add to it, but nobody may be watching it.');
-    lines.push('');
-  }
-  lines.push(`- ${cmdLink('Comment', command('comment'))} — posts one comment listing the added findings and adds their record labels. The description and title stay as they are.`);
-  lines.push(`- ${cmdLink('Rewrite', command('rewrite'))} — **overwrites the description and title** with the findings of this report, adds the record labels, and posts a comment listing what was added.`);
-  if (input.droppedKeys.length > 0) {
-    lines.push('');
-    lines.push(`Rewrite would drop these findings the ticket currently records, because the report does not cover them here: ${input.droppedKeys.map(safe).join(', ')}.`);
-  }
-  lines.push('');
-  lines.push('Either choice also changes this ticket\'s labels. Nothing is written until you pick one.');
-  lines.push('', buildHelpLink());
-  return lines.join('\n');
-}
-
-/**
- * Jira-sourced text on a trusted screen: besides [text](url) links, angle-bracket autolinks (<command:…>) are defused too,
- * on one line — backslashes first, so the text's own "\<" cannot un-escape ours.
- */
-export function safeMarkdownText(value: string): string {
-  return neutralizeMarkdownLinks(value.replace(/\r?\n/g, ' ')).replace(/\\/g, '\\\\').replace(/</g, '\\<');
-}
-
-export interface MergePromptTicket {
-  key: string;
-  summary: string;
-  status: string | null;
-}
-
-/** Everything the merge confirmation shows (R3): the tickets, what will happen, and every warning and fallback. */
-export interface MergePromptInput {
-  survivor: MergePromptTicket;
-  sources: MergePromptTicket[];
-  /** Sentences built from ticket keys only (R10). */
-  warnings: string[];
-  /** Findings the rewrite would no longer cover, from Jira labels; neutralized here. */
-  droppedKeys: string[];
-  baseUrl?: string;
-}
-
-/**
- * Waltz ticket merge (KTD2): the confirmation for `merge … into …`. Writes nothing itself — the one link at the
- * end resends the command with `confirm`, which is the user's go-ahead. Ticket text comes from Jira, so it is neutralized.
- */
-export function buildMergePrompt(input: MergePromptInput): string {
-  const line = (t: MergePromptTicket) => `**${formatKeyLink(t.key, input.baseUrl)}** — ${safeMarkdownText(t.summary)}${t.status ? ` (${safeMarkdownText(t.status)})` : ''}`;
-  const count = input.sources.length;
-  const lines: string[] = [
-    `### Merge ${count} ${count === 1 ? 'ticket' : 'tickets'} into ${formatKeyLink(input.survivor.key, input.baseUrl)}`,
-    '',
-    `Kept: ${line(input.survivor)}`,
-    '',
-    'Cancelled as duplicates:',
-    ...input.sources.map(t => `- ${line(t)}`),
-    '',
-  ];
-  for (const warning of input.warnings) lines.push(`⚠ ${warning}`);
-  if (input.warnings.length > 0) lines.push('');
-  if (input.droppedKeys.length > 0) {
-    lines.push(`The rewrite would drop these findings the tickets currently record, because the report does not cover them: ${input.droppedKeys.map(safeMarkdownText).join(', ')}.`, '');
-  }
-  lines.push(
-    'In this order:',
-    `1. Rewrite ${input.survivor.key} (title, description, combined labels) from the report rows of all these tickets, and comment on what it took over.`,
-    '2. For each cancelled ticket: link it as a duplicate of the kept one, prefix its title with the merge marker and put a banner above its text (the old text stays).',
-    '3. Close each cancelled ticket as a duplicate. You pick the status to move each issue type to.',
-    '',
-    `${cmdLink('Merge', `merge ${input.sources.map(t => t.key).join(' ')} into ${input.survivor.key} confirm`)} — nothing is written until you click.`,
-    '',
-    buildHelpLink(),
-  );
-  return lines.join('\n');
-}
-
-/** Close mode: one source of the confirmation — the ticket and what is (not) moved from it. */
-export interface CloseMergePromptSource {
-  ticket: MergePromptTicket;
-  /** Items only this ticket records that the kept ticket will carry after its rebuild. */
-  movable: string[];
-  /** Items only this ticket records that the report no longer lists. */
-  unlisted: string[];
-  /** Items only this ticket records that the report still lists, but outside the rows the kept ticket is rebuilt from. */
-  elsewhere: string[];
-}
-
-export interface CloseMergePromptInput {
-  survivor: MergePromptTicket;
-  sources: CloseMergePromptSource[];
-  /** One item in the importer's words, e.g. `flaw`. */
-  itemNoun: string;
-  /** Items the kept ticket records that the report no longer lists, which its rebuilt description stops showing. */
-  survivorLost: string[];
-  /** Items the kept ticket records that the report still lists, but outside the rows it is rebuilt from. */
-  survivorElsewhere: string[];
-  /** Items in the report that no ticket records yet; the kept ticket is rebuilt to include them. */
-  newItems: string[];
-  warnings: string[];
-  baseUrl?: string;
-}
-
-/**
- * Close-mode ticket merge: the confirmation for `merge … into …`. Writes nothing — the one link resends the command with
- * `confirm`. States per source whether items move, so the page cannot promise a plan the run does not execute.
- */
-export function buildCloseMergePrompt(input: CloseMergePromptInput): string {
-  const line = (t: MergePromptTicket) => `**${formatKeyLink(t.key, input.baseUrl)}** — ${safeMarkdownText(t.summary)}${t.status ? ` (${safeMarkdownText(t.status)})` : ''}`;
-  const items = (n: number) => `${input.itemNoun}${n === 1 ? '' : 's'}`;
-  const ids = (list: string[]) => list.map(safeMarkdownText).join(', ');
-  const survivorKey = input.survivor.key;
-  const count = input.sources.length;
-  const rebuilt = input.newItems.length > 0 || input.sources.some(s => s.movable.length > 0);
-  const lines: string[] = [
-    `### Merge ${count} ${count === 1 ? 'ticket' : 'tickets'} into ${formatKeyLink(survivorKey, input.baseUrl)}`,
-    '',
-    `Keep: ${line(input.survivor)}`,
-    '',
-    'Close:',
-    ...input.sources.map(s => `- ${line(s.ticket)}`),
-    '',
-  ];
-  for (const warning of input.warnings) lines.push(`⚠ ${warning}`);
-  if (input.warnings.length > 0) lines.push('');
-  for (const s of input.sources) {
-    const key = s.ticket.key;
-    if (s.movable.length > 0) {
-      lines.push(`${key} also records ${s.movable.length} ${items(s.movable.length)} (${ids(s.movable)}); ${survivorKey} takes them over by rebuilding its title, description and labels from the report (text added by hand is replaced).`);
-    } else if (rebuilt) {
-      lines.push(`${key} has no ${items(2)} ${survivorKey} lacks.`);
-    } else {
-      lines.push(`${key} has no ${items(2)} ${survivorKey} lacks, so ${survivorKey} stays as it is.`);
-    }
-    if (s.unlisted.length > 0) {
-      lines.push(`${ids(s.unlisted)} ${s.unlisted.length === 1 ? 'is' : 'are'} no longer in the report, so ${s.unlisted.length === 1 ? 'it is' : 'they are'} not moved; named in the comment on ${key}.`);
-    }
-    if (s.elsewhere.length > 0) {
-      lines.push(`${ids(s.elsewhere)} ${s.elsewhere.length === 1 ? 'is' : 'are'} still in the report but not part of ${survivorKey}'s rows (filtered by your settings or grouped under another ticket), so ${s.elsewhere.length === 1 ? 'it is' : 'they are'} not moved; named in the comment on ${key}.`);
-    }
-  }
-  if (input.newItems.length > 0) {
-    lines.push(`${ids(input.newItems)} ${input.newItems.length === 1 ? 'is' : 'are'} in the report but on no ticket yet, so ${survivorKey} is rebuilt to include ${input.newItems.length === 1 ? 'it' : 'them'}.`);
-  }
-  if (input.survivorLost.length > 0) {
-    lines.push(`Rebuilding ${survivorKey} will stop showing ${ids(input.survivorLost)}, which it records but the report no longer lists.`);
-  }
-  if (input.survivorElsewhere.length > 0) {
-    lines.push(`Rebuilding ${survivorKey} will stop showing ${ids(input.survivorElsewhere)}, which it records and the report still lists, but outside ${survivorKey}'s rows (filtered by your settings or grouped under another ticket).`);
-  }
-  lines.push(
-    '',
-    'Each closed ticket gets a link and a comment, then you pick its closing status.',
-    '',
-    `${cmdLink('Merge', `merge ${input.sources.map(s => s.ticket.key).join(' ')} into ${survivorKey} confirm`)} — nothing is written until you click.`,
-    '',
-    buildHelpLink(),
-  );
-  return lines.join('\n');
 }
 
 // Accepted spellings of each row action (after normalizeReply lower-casing).

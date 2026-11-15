@@ -1,5 +1,5 @@
 // Report-import review types (template selection, review rows and session, merge run, stale tickets) and the
-// ticketed-row and stale helpers. Shared by the chat import and the import board; vscode-free.
+// ticketed-row and stale helpers. vscode-free.
 
 import type { VeracodeFlaw, VeracodeReviewRow } from '../utils/veracodeReport';
 import { isFinalStatus } from '../utils/finalStatus';
@@ -16,8 +16,8 @@ export interface TransitionSubtask {
   transitionPath: Array<{ id: string; name: string; to: string }>;
   resolution?: string;
   extra?: Record<string, unknown>;
-  // U6/KTD6: mirrors ReviewRowBase's `included` convention — whether this subtask transitions if
-  // the batch runs. Defaults to true at construction (cleanupHandler.ts); toggled per-row (R8) by
+  // Mirrors ReviewRowBase's `included` convention — whether this subtask transitions if
+  // the batch runs. Defaults to true at construction; toggled per-row by
   // buildReviewTable()'s Include? column and parseSkipInput()'s cascading toggle.
   included: boolean;
 }
@@ -29,7 +29,7 @@ export interface TransitionBatchTicket {
   transitionPath: Array<{ id: string; name: string; to: string }>;
   subtasks: TransitionSubtask[];
   extra?: Record<string, unknown>;
-  // U6/KTD6: see TransitionSubtask.included above — same convention, same default/toggle path.
+  // See TransitionSubtask.included above — same convention, same default/toggle path.
   included: boolean;
 }
 
@@ -41,47 +41,22 @@ export interface TransitionBatchTicket {
 // toggle rows on/off in → create tickets for the included rows. Only the parser, per-row
 // label/summary/description building, and config live in each importer's own file
 // (veracodeReport.ts/src/imports/veracode.ts vs waltzReport.ts/src/imports/waltz.ts) — everything about the
-// session shape and the review screen itself is generic and lives here (R1/R10).
+// session shape and the review screen itself is generic and lives here.
 // ---------------------------------------------------------------------------------------------
 
 // Bumped whenever the session shape changes in a way that would make an in-flight (already
 // persisted) session render incorrectly if fed straight to the current code. A session written by
 // a build that predates this field entirely reads as `undefined`, which isSessionExpired() also
-// treats as expired — see AE7.
-// U4: bumped 2 -> 3 for the pageable-review-session shape change (ReviewSession<TRow> gained
-// `allRows`/`page`, dropped `totalNewMatched`) — an in-flight pre-upgrade ReviewSession would
-// otherwise render with `allRows`/`page` both `undefined`, not a graceful "please re-run" message.
-// U6: bumped 3 -> 4 for the stale-ticket review section (ReviewSession<TRow> gained `staleTickets`)
-// — same rationale, an in-flight pre-upgrade session must not render a stale section from
-// `undefined`.
-// U3: bumped 4 -> 5 for the "update existing tickets" bulk action (ReviewRowBase gained the
-// optional `updatedExisting` per-row indicator) — same rationale as U6's bump.
-// Stale-ticket target pick: bumped 6 -> 7 — StaleTicketGroup no longer carries a build-time
-// target/resolution (it carries the matching rules and a workflow-graph snapshot instead), and the
-// stale-resolution ask became the stepped StaleCloseSession. Same rationale as the earlier bumps.
-// Import ticket updates parity (KTD8): bumped 7 -> 8 — already-ticketed rows now carry a per-row
-// `action`/`allowedActions`/`change`/`target`/`result` instead of the re-create toggle and the
-// `updatedExisting`/`hasUnsyncedFindings`/`recreatedKey` flags.
-// Finding folding (KTD12): bumped 8 -> 9 — report-import rows can carry `memberIds` (a merged row) and
-// Waltz rows hold `sourceGroup` (a component array) instead of `sourceComponent`.
-// Accepted-CVE list (KTD5): bumped 9 -> 10 — ReviewSession gained `acceptedHidden`, the counts of what
-// the list hid from the New screen.
-// Accepted components (KTD7): bumped 10 -> 11 — `acceptedHidden` gained `components`, and the review keeps
-// the open tickets the stale search did not flag (`staleCandidates`).
-// Waltz ticket merge (KTD3/KTD9): bumped 11 -> 12 — the review keeps the report file's path (`reportFilePath`),
-// the interrupted merge (`mergeRun`) and the out-of-date mark, and already-ticketed rows record `defaultAction`.
-// Waltz remediation dates (KTD12): bumped 12 -> 13 — a row's `change` can carry `dates` and `droppedMembers`, the review
-// keeps the descriptions it read (`ticketDescriptions`) and the report's component keys (`reportKeys`), and `follow-up`
-// means a full `new ticket` for Waltz.
+// treats as expired.
 export const CURRENT_SESSION_SCHEMA_VERSION = 13;
 
 export interface ImportTemplateSelectionSession<TItem> {
   reportFileName: string;
-  /** Waltz ticket merge (KTD9): where the report was read from, so the review can rebuild itself from it. Absent for email. */
+  /** Waltz ticket merge: where the report was read from, so the review can rebuild itself from it. Absent for email. */
   reportFilePath?: string;
   projectKey: string;
   items: TItem[]; // already filtered by the importer's own config (severity/rating, status/action, etc.)
-  // U6: the *raw, unfiltered* parsed items (before the importer's own minSeverity/status-style
+  // The *raw, unfiltered* parsed items (before the importer's own minSeverity/status-style
   // filter) — needed to build the "is this finding still active" predicate the stale-ticket check
   // requires (reportImportHandler.ts's `continueAfterImportIssueType`). `unknown[]` rather than a
   // second generic parameter: Veracode's raw items (individual pre-fold flaws) are a different
@@ -94,7 +69,7 @@ export interface ImportTemplateSelectionSession<TItem> {
   schemaVersion: number;
 }
 
-// U2: items are folded groups (R9) — one or more flaws sharing a source file + line — not
+// Items are folded groups — one or more flaws sharing a source file + line — not
 // individual flaws; VeracodeFlaw[] is one group, so `items` here is really VeracodeFlaw[][].
 export type VeracodeTemplateSelectionSession = ImportTemplateSelectionSession<VeracodeFlaw[]>;
 
@@ -107,9 +82,9 @@ export interface ReviewRowBase {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   existingTicketKey: string | null;
   // Whether a New row will be created when the user creates the page's tickets. Already-ticketed
-  // rows ignore it — they carry a per-row `action` instead (U4).
+  // rows ignore it — they carry a per-row `action` instead.
   included: boolean;
-  // U3/KTD1/KTD2: set by buildReviewRows only on an already-ticketed row of an importer with change
+  // Set by buildReviewRows only on an already-ticketed row of an importer with change
   // tracking (Veracode, Waltz) — never on email rows or new rows.
   /** Every ticket carrying one of the row's dedup keys. */
   ticketKeys?: string[];
@@ -119,16 +94,16 @@ export interface ReviewRowBase {
   target?: { key: string; status: string | null; resolved: boolean };
   /** What changed since the tickets were made; null = no change. */
   change?: RowChange | null;
-  /** The actions this row offers (R6). */
+  /** The actions this row offers. */
   allowedActions?: TicketedAction[];
-  /** The row's current action — the R7 default until the user changes it. */
+  /** The row's current action — the default until the user changes it. */
   action?: TicketedAction;
-  /** The action the row was built with, so a choice the user made can be told from the default (Waltz ticket merge, KTD10). */
+  /** The action the row was built with, so a choice the user made can be told from the default. */
   defaultAction?: TicketedAction;
-  /** U4/R16: what the last `apply` (or shortcut) did to this row; a `done` row is finished for good. */
+  /** What the last `apply` (or shortcut) did to this row; a `done` row is finished for good. */
   result?: TicketedRowResult;
   /**
-   * Finding folding (KTD3): on a New row the user merged, the ids of every original row folded into
+   * Finding folding: on a New row the user merged, the ids of every original row folded into
    * it, in page order (its own `id` is the first). `allRows` keeps the originals, so unmerging
    * restores them and creating the merged row removes all of them.
    */
@@ -138,7 +113,7 @@ export interface ReviewRowBase {
 /** Finding folding: how `add … to <KEY>` writes to the target ticket. */
 export type AddMode = 'comment' | 'rewrite';
 
-/** U3/R6: the per-row actions on the Already-ticketed screen. */
+/** The per-row actions on the Already-ticketed screen. */
 export type TicketedAction = 'update' | 'follow-up' | 'rewrite' | 're-create' | 'leave';
 
 /** An importer's own words for row actions, by action id (Waltz shows `follow-up` as `new ticket`). */
@@ -150,7 +125,7 @@ export function actionLabelOf(action: TicketedAction, labels?: ActionLabels): st
 }
 
 /**
- * U4/R16: one already-ticketed row's outcome after an action ran. `update` notes: `baseline` — only
+ * One already-ticketed row's outcome after an action ran. `update` notes: `baseline` — only
  * the record labels were written; `up-to-date` — the ticket already carried everything, nothing was
  * written; `comment-failed` — labels were written but the comment could not be posted.
  */
@@ -159,7 +134,7 @@ export type TicketedRowResult =
   | { status: 'done'; action: 'follow-up'; key: string; linkMissing?: boolean }
   | { status: 'done'; action: 'rewrite'; note?: 'comment-failed' }
   | { status: 'done'; action: 're-create'; key: string }
-  // Ticket merge (KTD12): the row's ticket was merged into `into` and closed.
+  // Ticket merge: the row's ticket was merged into `into` and closed.
   | { status: 'done'; action: 'merge'; into: string }
   | { status: 'failed'; action: TicketedAction; error: string };
 
@@ -176,7 +151,7 @@ export function ticketedTargetKey(row: ReviewRowBase): string {
 }
 
 /**
- * Finding folding (KTD11): targets whose unfinished Already-ticketed rows are only partly on
+ * Finding folding: targets whose unfinished Already-ticketed rows are only partly on
  * `rewrite`. A rewrite rebuilds a ticket from every row that points to it, so the rows' individual
  * choices would be overridden — it is accepted for all of them or none. Finished rows are outside
  * the set. Pure.
@@ -200,13 +175,13 @@ export function isTicketedRowFinished(row: ReviewRowBase): boolean {
   return row.result?.status === 'done';
 }
 
-/** Which screen of a report-import review is showing (overview-hub KTD1). */
+/** Which screen of a report-import review is showing. */
 export type ImportReviewView = 'overview' | 'new' | 'ticketed' | 'stale';
 
 /** The three result groups an import can produce; also the per-group screen names. */
 export type ImportResultGroup = 'new' | 'ticketed' | 'stale';
 
-/** Per-group action outcomes accumulated over one import session (R2, R3). */
+/** Per-group action outcomes accumulated over one import session. */
 export interface ImportOutcomes {
   created: number;
   createFailed: number;
@@ -241,60 +216,59 @@ export interface ReviewSession<TRow> {
   issueType: string;
   templateName: string | null;
   additionalFields: Record<string, unknown>; // resolved template fields (labels merged in per-row already)
-  // U4/R6: every candidate row the report matched, in source order, unpaged — both "already
+  // Every candidate row the report matched, in source order, unpaged — both "already
   // ticketed" and "new" rows live here (built eagerly from lightweight per-item fields; an
   // importer whose full ticket description is expensive to build, e.g. Veracode's folded-group
   // description, defers that part to creation time instead of pre-building it into this array —
   // see src/imports/veracode.ts's descriptor). The paging source of truth: buildReviewPage() re-derives
   // `rows` from this on every page change, which is what makes a "new" row's toggle page-local
-  // (R7) — see applyReviewSessionToggle()'s own doc comment.
+  // — see applyReviewSessionToggle()'s own doc comment.
   allRows: TRow[];
-  // Remediation dates (KTD1): the target tickets' descriptions read for the date comparison, by ticket key (null = read but
+  // Remediation dates: the target tickets' descriptions read for the date comparison, by ticket key (null = read but
   // empty), so a rebuild after `accept component` or `reload report` does not read them all again.
   ticketDescriptions?: Record<string, string | null>;
   // Ticket search: summary and build-time status of every ticket the dedup search matched, by key, for the `search` reply.
   // Absent on a session saved before the field existed (and for email).
   ticketInfo?: TicketInfo;
-  // Remediation dates (KTD10): the dedup keys of every component in the unfiltered report, so a rewrite takes a label
+  // Remediation dates: the dedup keys of every component in the unfiltered report, so a rewrite takes a label
   // off a ticket only for a component that really left the report, not one filtered or accepted away.
   reportKeys?: string[];
-  // The currently DISPLAYED page: every "already ticketed" row (always shown in full, R8 — never
+  // The currently DISPLAYED page: every "already ticketed" row (always shown in full — never
   // paged) plus the current page's slice of "new" rows (BATCH_LIMIT per page, defaulted to
-  // included). createNewRows reads this page's included new rows directly
-  // and is otherwise untouched by paging (R7's "confirming from whichever page is currently
-  // visible creates that page's included rows").
+  // included). createNewRows reads this page's included new rows directly, so confirming
+  // creates the included rows of whichever page is visible.
   rows: TRow[];
   // 0-based index into the "new" rows only — see buildReviewPage().
   page: number;
-  // U6: open tickets whose finding(s) have disappeared from this report/reverse search — a third
-  // review section, transitioned on confirm via cleanupHandler.ts's shared transition logic
-  // (`transitionTickets`). Absent for importers with no stale-check concept (email, which has no
+  // Open tickets whose finding(s) have disappeared from this report/reverse search — a third
+  // review section, transitioned on confirm via the shared transition logic
+  // (`transitionTickets` in cleanup.ts). Absent for importers with no stale-check concept (email, which has no
   // dedup/marker-label concept either — see ReportImportDescriptor's optional `stale` field).
   staleTickets?: ReviewSessionStale;
-  // Accepted components (KTD5): open tickets the stale search left alone, kept so an accept can flag them.
+  // Accepted components: open tickets the stale search left alone, kept so an accept can flag them.
   staleCandidates?: StaleCandidate[];
   // Which page (0-based) of the Stale screen is showing, 20 tickets per page; absent means the first.
   stalePage?: number;
   // Which page (0-based) of the Already-ticketed screen is showing, 20 rows per page; absent means the first.
   ticketedPage?: number;
-  // Overview-hub KTD1/KTD7: the screen currently shown, the result groups that had rows when the
-  // session was built (fixed for the session's life — R1's listing basis), whether exactly one
-  // group had rows (then there is no overview, R4), and the accumulated action outcomes (R2).
+  // The screen currently shown, the result groups that had rows when the session was built (fixed
+  // for the session's life), whether exactly one group had rows (then there is no overview), and
+  // the accumulated action outcomes.
   // Optional only so a caller-built session (tests, older call sites) can be normalized by
   // ensureImportViewState(); every session the handler persists carries all four.
   view?: ImportReviewView;
   groups?: ImportResultGroup[];
   singleGroup?: boolean;
   outcomes?: ImportOutcomes;
-  // Accepted-CVE list (KTD5): what the accepted list kept off the New screen — CVEs hidden because
+  // Accepted-CVE list: what the accepted list kept off the New screen — CVEs hidden because
   // they are accepted, and components hidden because their recomputed rating fell below the floor.
   // Stored, not recomputed per render; absent when nothing was hidden or the importer has no list.
   acceptedHidden?: AcceptedHidden;
-  // Waltz ticket merge (KTD9): the report file the review was built from, kept so a refresh or reload can rebuild it.
+  // Waltz ticket merge: the report file the review was built from, kept so a refresh or reload can rebuild it.
   reportFilePath?: string;
-  // Waltz ticket merge (KTD3): a merge that is waiting for the user (retry or ignore, a target status, a resolution).
+  // Waltz ticket merge: a merge that is waiting for the user (retry or ignore, a target status, a resolution).
   mergeRun?: MergeRun;
-  // Waltz ticket merge (KTD10): the screens no longer match Jira or the ignore list, and the overview offers a reload.
+  // Waltz ticket merge: the screens no longer match Jira or the ignore list, and the overview offers a reload.
   outOfDate?: boolean;
   schemaVersion: number;
 }
@@ -326,7 +300,7 @@ export interface SourceMove {
 }
 
 /**
- * A merge in progress on the review session (KTD3). Present from the confirmation until the final report; the
+ * A merge in progress on the review session. Present from the confirmation until the final report; the
  * replies it waits for (`retry`/`ignore`, a target status, a resolution) are read before the screen's own vocabulary.
  */
 export interface MergeRun {
@@ -343,7 +317,7 @@ export interface MergeRun {
   resolutionOptions?: string[];
   /** The project's Duplicate resolution (its exact name) when it offers one; the close then sets it without asking. */
   duplicateResolution?: string;
-  /** The link type the link steps use: `Duplicate`, or `Relates` when the project has no Duplicate link type (R9). */
+  /** The link type the link steps use: `Duplicate`, or `Relates` when the project has no Duplicate link type. */
   linkType?: string;
   /** Findings the rewritten survivor no longer covers, kept from the rewrite step for its comment. */
   droppedKeys?: string[];
@@ -373,18 +347,16 @@ export type WaltzReviewSession = ReviewSession<WaltzReviewRow>;
 export type EmailReviewSession = ReviewSession<EmailReviewRow>;
 
 // ---------------------------------------------------------------------------------------------
-// U6: stale-ticket review section — open tickets whose finding(s) are gone from the current
+// Stale-ticket review section — open tickets whose finding(s) are gone from the current
 // report/reverse search (`reportImport.ts`'s `findStaleTickets`), grouped by issue type so each
-// group can share one resolution ask before the merged review screen renders (KTD10-15's "chain
-// the ask once per group, not once per ticket" rule). `cleanupHandler.ts`'s `buildStaleTicketGroups`
-// builds these; `reportImportHandler.ts` chains the ask and renders the result via
-// `buildStaleGroupScreen` below.
+// group shares one resolution ask rather than one per ticket. `buildStaleTicketGroups` in
+// cleanup.ts builds these.
 // ---------------------------------------------------------------------------------------------
 
 /** One issue-type group of stale tickets. The target is not fixed here: it is picked when the
- * user closes the group's selected tickets (stale-ticket target pick plan, R1/R2/KTD1), from the
+ * user closes the group's selected tickets, from the
  * group's matching cleanup rules and the snapshot of its project/issue type's workflow graph, which
- * is also what the transition paths are computed from at close time (KTD2). Every ticket defaults
+ * is also what the transition paths are computed from at close time. Every ticket defaults
  * `included: false` and carries an empty `transitionPath` until then. */
 export interface StaleTicketGroup {
   issueType: string;
@@ -403,7 +375,7 @@ export interface IneligibleStaleTicket {
 }
 
 /**
- * An open, marker-labeled ticket the stale search did not flag (accepted components plan, KTD5): kept with
+ * An open, marker-labeled ticket the stale search did not flag: kept with
  * what the search captured and the dedup ids still active for it, so accepting components mid-review can
  * move it to Stale without a second search or the raw report.
  */
@@ -422,7 +394,7 @@ export interface ReviewSessionStale {
   // never transitioned again. (Named for the original closing-only flow; the target may now be a
   // non-final status.)
   closedKeys?: string[];
-  // The Jira instance's resolution names, fetched once when the stale section is built (KTD1) so
+  // The Jira instance's resolution names, fetched once when the stale section is built so
   // the close-time resolution question needs no Jira call. Empty when none exist or the fetch
   // failed — the close then never asks.
   resolutionOptions: string[];
@@ -434,7 +406,7 @@ export function selectedOpenStaleTickets(group: StaleTicketGroup, closedKeys: st
   return group.tickets.filter(t => t.included && !done.has(t.key));
 }
 
-/** R12: the issue types that have at least one selected, not-yet-transitioned stale ticket, in
+/** The issue types that have at least one selected, not-yet-transitioned stale ticket, in
  * group order. */
 export function selectedStaleIssueTypes(stale: ReviewSessionStale): string[] {
   return stale.groups.filter(g => selectedOpenStaleTickets(g, stale.closedKeys).length > 0).map(g => g.issueType);
@@ -444,7 +416,7 @@ export function staleTargetState(option: StaleTargetOption): string {
   return option.kind === 'rule' ? option.targetState : option.status;
 }
 
-/** R3/R4/KTD5: a rule with a resolution never asks; a rule without one, or a plain status, asks
+/** A rule with a resolution never asks; a rule without one, or a plain status, asks
  * only when its target is closed-like — and never when the instance has no resolutions at all. */
 export function staleTargetNeedsResolution(option: StaleTargetOption, resolutionOptions: string[]): boolean {
   if (resolutionOptions.length === 0) return false;
@@ -453,7 +425,7 @@ export function staleTargetNeedsResolution(option: StaleTargetOption, resolution
 }
 
 /**
- * KTD2/R11: turns one group's selected, not-yet-transitioned tickets into runnable transitions
+ * Turns one group's selected, not-yet-transitioned tickets into runnable transitions
  * toward `targetState`, using paths from the group's stored workflow graph. A ticket already in
  * the target status, or with no path to it, is skipped with a reason instead.
  */
@@ -483,7 +455,7 @@ export function planStaleTransitions(
  * A stored session written before `schemaVersion` existed (reads back as `undefined`) — or by an
  * older build than this one understands — may be missing fields the current renderer/handler
  * expects. Treating it as expired here (rather than rendering `undefined` cells or running a batch
- * against incomplete data) is what AE7 requires. "No session at all" is a different, already-handled
+ * against incomplete data) keeps such a session from rendering. "No session at all" is a different, already-handled
  * case and is deliberately NOT reported as expired by this guard.
  */
 export function isSessionExpired(session: { schemaVersion?: number } | null | undefined): boolean {
@@ -493,7 +465,7 @@ export function isSessionExpired(session: { schemaVersion?: number } | null | un
 
 
 /** A cleanup rule matching a stale group's project + issue type, as offered in the close-time
- * target pick (stale-ticket target pick plan, R2/R3). */
+ * target pick. */
 export interface StaleRuleOption {
   name: string;
   targetState: string;
@@ -501,7 +473,7 @@ export interface StaleRuleOption {
 }
 
 /** One entry of the close-time target pick: a matching cleanup rule (its target and resolution
- * apply, R3) or a plain workflow status (R4). */
+ * apply) or a plain workflow status. */
 export type StaleTargetOption =
   | { kind: 'rule'; ruleName: string; targetState: string; resolution?: string }
   | { kind: 'status'; status: string };

@@ -68,7 +68,7 @@ const LABELS: Record<TicketedAction, string> = { update: 'update', 'follow-up': 
 
 /**
  * The review's rows with the board's choices laid over them: a chosen action replaces the default,
- * and a row whose ticket the board already wrote counts as finished, as in the chat import.
+ * and a row whose ticket the board already wrote counts as finished.
  */
 function boardRows(session: ImportSession): ImportRow[] {
   const { data } = session.derived;

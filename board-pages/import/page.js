@@ -9,6 +9,13 @@ import { announce, h, startBoard, tablist, tabpanel } from '../shared/board.js';
 const MERGE = 'merge';
 const RESULT_TEXT = { failed: 'Failed', refused: 'Not written' };
 const STEP_TEXT = { done: 'Done', failed: 'Failed', pending: 'Waiting', skipped: 'Skipped', ignored: 'Ignored', running: 'Running' };
+/** How a merge in each state is described on its tab and in the tab's label; any other state is running. */
+const MERGE_STATES = new Map([
+  ['finished', { heading: 'The ticket merge has ended.', tab: 'ended' }],
+  ['failed', { heading: 'A step failed. Retry it, ignore it, or stop the merge.', tab: 'a step failed' }],
+  ['awaiting-close', { heading: 'Pick the target status and resolution for every issue type, then preview the close.', tab: 'waiting for answers' }],
+]);
+const MERGE_RUNNING = { heading: 'The merge is running.', tab: 'running' };
 
 // Transient drafts, kept across repaints.
 const drafts = { addKey: '', addMode: 'comment', reason: '', keepKey: '', keepRow: '', search: undefined, filter: {} };
@@ -51,25 +58,29 @@ function failedText(result) {
   return `${RESULT_TEXT[result.outcome] ?? result.outcome}${result.reason ? `: ${result.reason}` : ''}`;
 }
 
+/** A row's Result cell text and outcome: waiting in a running Apply, this Apply's result, written earlier, or `idle`. */
+function rowOutcome(waiting, result, written, doneWord, idle = '') {
+  if (waiting) return ['Waiting to be written', 'pending'];
+  if (result) return result.outcome === 'done' ? [`${doneWord}${result.reason ? `. ${result.reason}` : ''}`, 'done'] : [failedText(result), result.outcome];
+  return written ? [doneWord, 'done'] : [idle, undefined];
+}
+
+function headRow(...labels) {
+  return h('thead', {}, h('tr', {}, labels.map(label => h('th', { scope: 'col' }, label))));
+}
+
+/** A select with a "Choose…" first option, which `lockPlaceholder` keeps from being picked again. */
+function choiceSelect(id, off, current, options, onChange, lockPlaceholder = true) {
+  return h('select', { id, disabled: off, onChange },
+    h('option', { value: '', selected: current === null, disabled: lockPlaceholder }, 'Choose…'),
+    options.map(o => h('option', { value: o.id, selected: o.id === current }, o.label)));
+}
+
 function link(text, url) {
   return url ? h('a', { href: url, target: '_blank', rel: 'noreferrer' }, text) : text;
 }
 
 // ---- New ------------------------------------------------------------------------------------
-
-/** How the kind names a merged group in its plan and results: the members' flaw ids, or their components. */
-function groupRefs(rows) {
-  const byMerge = new Map();
-  for (const row of rows) if (row.merge) byMerge.set(row.merge, [...(byMerge.get(row.merge) ?? []), row]);
-  const refs = new Map();
-  for (const row of rows) {
-    const members = row.merge ? byMerge.get(row.merge) : [row];
-    refs.set(row.id, members.every(m => m.ref.startsWith('Flaw '))
-      ? `Flaw ${members.map(m => m.ref.slice(5)).join(', ')}`
-      : members.map(m => m.ref).join(', '));
-  }
-  return refs;
-}
 
 function newRowState(row, ref, ctx, addedTo) {
   const into = addedTo[row.id];
@@ -80,26 +91,19 @@ function newRowState(row, ref, ctx, addedTo) {
     const url = row.created === key ? row.createdUrl : undefined;
     return h('td', { class: 'result' }, h('span', { class: 'result-done' }, into ? 'Added to ' : 'Created ', link(key, url), note));
   }
-  if (ctx.pending.has(ref)) return resultCell('Waiting to be written', 'pending');
-  if (result && result.outcome !== 'done') return resultCell(failedText(result), result.outcome);
-  return resultCell('');
+  return resultCell(...rowOutcome(ctx.pending.has(ref), result?.outcome === 'done' ? undefined : result, false, ''));
 }
 
 function newTab(view, board, ctx) {
   const rows = view.new?.rows ?? [];
   const ext = view.ext.new ?? { toCreate: 0, perApply: 50, addedTo: {} };
   const addedTo = ext.addedTo ?? {};
-  const refs = groupRefs(rows);
   const open = rows.filter(r => !r.created && !addedTo[r.id]);
   const selected = open.filter(r => r.included).map(r => r.id);
-  const off = ctx.locked || ctx.frozen;
-  const writeOff = off || ctx.writesOff;
-  const waltz = view.tabs.some(t => t.id === 'accepted');
+  const { off, writeOff, waltz } = ctx;
 
   const table = h('div', { class: 'table-wrap' }, h('table', { 'aria-label': 'New rows' },
-    h('thead', {}, h('tr', {},
-      h('th', { scope: 'col' }, 'Create'), h('th', { scope: 'col' }, 'Finding'), h('th', { scope: 'col' }, 'Title'),
-      h('th', { scope: 'col' }, waltz ? 'Rating' : 'Severity'), h('th', { scope: 'col' }, 'Merge'), h('th', { scope: 'col' }, 'Result'))),
+    headRow('Create', 'Finding', 'Title', waltz ? 'Rating' : 'Severity', 'Merge', 'Result'),
     h('tbody', {}, rows.map(row => {
       const isOpen = !row.created && !addedTo[row.id];
       return h('tr', { id: `row-${row.id}` },
@@ -111,7 +115,8 @@ function newTab(view, board, ctx) {
         h('td', {}, row.merge ? [`Merged #${row.merge} `, isOpen ? h('vscode-button', {
           id: `unmerge-${row.id}`, secondary: true, disabled: off, onClick: () => board.act({ type: 'new-unmerge', id: row.id }),
         }, 'Unmerge') : null] : ''),
-        newRowState(row, refs.get(row.id), ctx, addedTo));
+        // A view without the group reference names a row by its own.
+        newRowState(row, row.group ?? row.ref, ctx, addedTo));
     }))));
 
   const addKey = h('input', { id: 'add-key', type: 'text', size: 12, value: drafts.addKey, disabled: off, onInput: e => { drafts.addKey = e.target.value; } });
@@ -156,12 +161,10 @@ function ticketedTab(view, board, ctx) {
   const labels = ext.actionLabels ?? {};
   const noDue = new Set(ext.noDueDate ?? []);
   for (const id of [...picked]) if (!all.some(r => r.id === id && !r.written)) picked.delete(id);
-  const off = ctx.locked || ctx.frozen;
-  const writeOff = off || ctx.writesOff;
+  const { off, writeOff, waltz } = ctx;
   const actions = [...new Set(all.flatMap(r => r.allowedActions))];
   const pickedRows = all.filter(r => picked.has(r.id));
   if (!pickedRows.some(r => r.id === drafts.keepRow)) drafts.keepRow = pickedRows[0]?.id ?? '';
-  const waltz = view.tabs.some(t => t.id === 'accepted');
 
   const filterBar = h('div', { class: 'bar', role: 'group', 'aria-label': 'Show' },
     FILTERS.map(([id, text]) => h('vscode-button', {
@@ -173,14 +176,10 @@ function ticketedTab(view, board, ctx) {
     actions.map(a => h('option', { value: a }, labels[a] ?? a)));
 
   const table = h('div', { class: 'table-wrap' }, h('table', { 'aria-label': 'Already ticketed rows' },
-    h('thead', {}, h('tr', {},
-      h('th', { scope: 'col' }, 'Pick'), h('th', { scope: 'col' }, 'Ticket'), h('th', { scope: 'col' }, 'Finding'),
-      h('th', { scope: 'col' }, 'Change'), h('th', { scope: 'col' }, 'Action'), h('th', { scope: 'col' }, 'Result'))),
+    headRow('Pick', 'Ticket', 'Finding', 'Change', 'Action', 'Result'),
     h('tbody', {}, rows.map(row => {
       const result = resultFor(row.ticket, ctx.results);
-      const state = ctx.pending.has(row.ticket) && !row.written ? ['Waiting to be written', 'pending']
-        : result ? (result.outcome === 'done' ? [`Written${result.reason ? `. ${result.reason}` : ''}`, 'done'] : [failedText(result), result.outcome])
-          : row.written ? ['Written', 'done'] : ['', undefined];
+      const state = rowOutcome(ctx.pending.has(row.ticket) && !row.written, result, row.written, 'Written');
       return h('tr', { id: `row-${row.id}` },
         h('td', {}, row.written ? '' : h('input', {
           type: 'checkbox', id: `pick-${row.id}`, checked: picked.has(row.id), disabled: off, 'aria-label': `Pick ${row.ticket} for a merge`,
@@ -234,17 +233,12 @@ function staleTab(view, board, ctx) {
   const rows = view.stale?.rows ?? [];
   const ext = view.ext.stale ?? { groups: [], selectable: [] };
   const selectable = new Set(ext.selectable);
-  const off = ctx.locked || ctx.frozen;
-  const writeOff = off || ctx.writesOff;
+  const { off, writeOff } = ctx;
   const table = h('div', { class: 'table-wrap' }, h('table', { 'aria-label': 'Stale tickets' },
-    h('thead', {}, h('tr', {},
-      h('th', { scope: 'col' }, 'Close'), h('th', { scope: 'col' }, 'Ticket'), h('th', { scope: 'col' }, 'Summary'),
-      h('th', { scope: 'col' }, 'Status'), h('th', { scope: 'col' }, 'Type'), h('th', { scope: 'col' }, 'Result'))),
+    headRow('Close', 'Ticket', 'Summary', 'Status', 'Type', 'Result'),
     h('tbody', {}, rows.map(row => {
       const result = resultFor(row.key, ctx.results);
-      const state = ctx.pending.has(row.key) && !row.written ? ['Waiting to be written', 'pending']
-        : result ? (result.outcome === 'done' ? [`Closed${result.reason ? `. ${result.reason}` : ''}`, 'done'] : [failedText(result), result.outcome])
-          : row.written ? ['Closed', 'done'] : [row.note ? `Cannot be closed here: ${row.note}` : '', undefined];
+      const state = rowOutcome(ctx.pending.has(row.key) && !row.written, result, row.written, 'Closed', row.note ? `Cannot be closed here: ${row.note}` : '');
       return h('tr', { id: `row-${row.key}` },
         h('td', {}, selectable.has(row.key) ? h('input', {
           type: 'checkbox', id: `stale-${row.key}`, checked: row.selected, disabled: off, 'aria-label': `Close ${row.key}`,
@@ -255,14 +249,10 @@ function staleTab(view, board, ctx) {
     }))));
   const groups = ext.groups.filter(g => g.selected > 0).map((g, n) => h('div', { class: 'bar' },
     h('strong', {}, `${g.issueType} (${g.selected})`),
-    h('label', {}, 'Move to', h('select', {
-      id: `stale-target-${n}`, disabled: off,
-      onChange: e => board.act({ type: 'stale-target', issueType: g.issueType, target: e.target.value || null }),
-    }, h('option', { value: '', selected: g.target === null }, 'Choose…'), g.targetOptions.map(o => h('option', { value: o.id, selected: o.id === g.target }, o.label)))),
-    g.resolutionOptions.length ? h('label', {}, 'Resolution', h('select', {
-      id: `stale-resolution-${n}`, disabled: off,
-      onChange: e => board.act({ type: 'stale-resolution', issueType: g.issueType, resolution: e.target.value }),
-    }, h('option', { value: '', selected: g.resolution === null, disabled: true }, 'Choose…'), g.resolutionOptions.map(o => h('option', { value: o.id, selected: o.id === g.resolution }, o.label)))) : null,
+    h('label', {}, 'Move to', choiceSelect(`stale-target-${n}`, off, g.target, g.targetOptions,
+      e => board.act({ type: 'stale-target', issueType: g.issueType, target: e.target.value || null }), false)),
+    g.resolutionOptions.length ? h('label', {}, 'Resolution', choiceSelect(`stale-resolution-${n}`, off, g.resolution, g.resolutionOptions,
+      e => board.act({ type: 'stale-resolution', issueType: g.issueType, resolution: e.target.value }))) : null,
     g.missing ? h('span', { class: 'muted' }, `Not ready: ${g.missing}.`) : null));
   const marked = ext.groups.reduce((sum, g) => sum + g.selected, 0);
   return [
@@ -277,11 +267,11 @@ function staleTab(view, board, ctx) {
 
 function acceptedTab(view, board, ctx) {
   const rows = view.accepted?.rows ?? [];
-  const writeOff = ctx.locked || ctx.frozen || ctx.writesOff;
+  const { writeOff } = ctx;
   return [
     ctx.summary,
     rows.length === 0 ? null : h('div', { class: 'table-wrap' }, h('table', { 'aria-label': 'Accepted' },
-      h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Component'), h('th', { scope: 'col' }, 'Accepted'), h('th', { scope: 'col' }, 'Reason'), h('th', { scope: 'col' }, ''))),
+      headRow('Component', 'Accepted', 'Reason', ''),
       h('tbody', {}, rows.map((row, n) => h('tr', { id: `accepted-${n}` },
         h('td', {}, row.component),
         h('td', {}, row.cve ?? `Whole component, version ${row.version ?? ''}`),
@@ -305,10 +295,7 @@ function mergeTab(merge, board, ctx) {
   const off = ctx.locked;
   const can = action => merge.actions.includes(action);
   const question = merge.question;
-  const heading = merge.state === 'finished' ? 'The ticket merge has ended.'
-    : merge.state === 'failed' ? 'A step failed. Retry it, ignore it, or stop the merge.'
-      : merge.state === 'awaiting-close' ? 'Pick the target status and resolution for every issue type, then preview the close.'
-        : 'The merge is running.';
+  const { heading } = MERGE_STATES.get(merge.state) ?? MERGE_RUNNING;
   return [
     h('p', {}, `Merging ${merge.sources.join(', ')} into ${merge.survivor}. ${heading}`),
     ctx.summary,
@@ -322,14 +309,10 @@ function mergeTab(merge, board, ctx) {
       question.groups.map((g, n) => h('div', { class: 'bar' },
         h('strong', {}, `${g.issueType}: ${g.tickets.join(', ')}`),
         g.note ? h('span', {}, g.note) : [
-          h('label', {}, 'Target status', h('select', {
-            id: `merge-close-target-${n}`, disabled: off,
-            onChange: e => board.act({ type: 'merge-close-target', issueType: g.issueType, option: e.target.value }),
-          }, h('option', { value: '', selected: g.target === null, disabled: true }, 'Choose…'), g.targetOptions.map(o => h('option', { value: o.id, selected: o.id === g.target }, o.label)))),
-          g.needsResolution ? h('label', {}, 'Resolution', h('select', {
-            id: `merge-close-resolution-${n}`, disabled: off,
-            onChange: e => board.act({ type: 'merge-close-resolution', issueType: g.issueType, resolution: e.target.value }),
-          }, h('option', { value: '', selected: g.resolution === null, disabled: true }, 'Choose…'), g.resolutionOptions.map(o => h('option', { value: o.id, selected: o.id === g.resolution }, o.label)))) : null,
+          h('label', {}, 'Target status', choiceSelect(`merge-close-target-${n}`, off, g.target, g.targetOptions,
+            e => board.act({ type: 'merge-close-target', issueType: g.issueType, option: e.target.value }))),
+          g.needsResolution ? h('label', {}, 'Resolution', choiceSelect(`merge-close-resolution-${n}`, off, g.resolution, g.resolutionOptions,
+            e => board.act({ type: 'merge-close-resolution', issueType: g.issueType, resolution: e.target.value }))) : null,
         ])),
       question.unanswered.length ? h('p', {}, `Still to answer: ${question.unanswered.join(', ')}.`) : null,
       h('div', { class: 'bar' },
@@ -371,6 +354,8 @@ function filterBox(view, board, tab, off) {
     })));
 }
 
+const TAB_BODIES = new Map([['new', newTab], ['ticketed', ticketedTab], ['stale', staleTab]]);
+
 function tabLabel(t) {
   return `${t.label} (${t.count}${t.outOfDate ? ', out of date' : ''})`;
 }
@@ -402,13 +387,16 @@ function render(view, board, locked, state) {
   const pending = new Set(plan && previewTab === shown && state.applying ? plan.lines.map(l => l.target) : []);
   const summary = resultsHere ? h('p', { id: 'apply-summary', class: 'banner', role: 'note' }, `${last.title}: ${countResults(last.results)}`) : null;
 
+  const frozen = Boolean(current?.outOfDate);
+  const off = locked || frozen;
   const ctx = {
-    locked, writesOff, results: resultsHere, pending, summary,
-    frozen: Boolean(current?.outOfDate),
+    locked, writesOff, results: resultsHere, pending, summary, frozen, off,
+    writeOff: off || writesOff,
+    waltz: view.tabs.some(t => t.id === 'accepted'),
     preview: action => { previewTab = shown; return board.preview(action); },
   };
 
-  const tabs = [...view.tabs.map(t => ({ id: t.id, label: tabLabel(t) })), ...(merge ? [{ id: MERGE, label: `Ticket merge (${merge.state === 'finished' ? 'ended' : merge.state === 'failed' ? 'a step failed' : merge.state === 'awaiting-close' ? 'waiting for answers' : 'running'})` }] : [])];
+  const tabs = [...view.tabs.map(t => ({ id: t.id, label: tabLabel(t) })), ...(merge ? [{ id: MERGE, label: `Ticket merge (${(MERGE_STATES.get(merge.state) ?? MERGE_RUNNING).tab})` }] : [])];
   const select = id => {
     if (id === MERGE) { localTab = MERGE; board.repaint(); return; }
     if (locked) { localTab = id; board.repaint(); return; }
@@ -422,10 +410,7 @@ function render(view, board, locked, state) {
   else if (locked && localTab && localTab !== view.tab) body = [h('p', { class: 'muted' }, 'This tab shows its rows once the Apply has ended.')];
   else if (current?.unavailable) body = [h('p', {}, current.unavailable)];
   else {
-    const content = shown === 'new' ? newTab(view, board, ctx)
-      : shown === 'ticketed' ? ticketedTab(view, board, ctx)
-        : shown === 'stale' ? staleTab(view, board, ctx)
-          : acceptedTab(view, board, ctx);
+    const content = (TAB_BODIES.get(shown) ?? acceptedTab)(view, board, ctx);
     body = [
       current?.outOfDate ? h('section', { class: 'banner', 'aria-label': 'Out of date' },
         h('p', {}, h('strong', {}, `${current.label} is out of date. `), 'Its rows changed since you made your choices here. Refresh to read it again; Refresh keeps every choice whose rows still exist and names the ones it drops.'),
@@ -433,7 +418,7 @@ function render(view, board, locked, state) {
       mergeRunning ? h('p', { class: 'banner' }, 'A ticket merge is running. Apply on this tab is refused until the merge is finished or stopped; you can still make your choices.') : null,
       current?.warning ? h('p', { class: 'banner' }, current.warning) : null,
       current && current.count === 0 && current.empty ? h('p', {}, current.empty) : null,
-      filterBox(view, board, shown, locked || ctx.frozen),
+      filterBox(view, board, shown, ctx.off),
       content,
     ];
   }

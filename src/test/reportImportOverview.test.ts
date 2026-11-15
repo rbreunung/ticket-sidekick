@@ -20,7 +20,7 @@ vi.mock('../templates/TemplateService', () => ({
   }); }),
 }));
 
-// U6: buildStaleTicketGroups (cleanupHandler.ts, called transitively via continueAfterImportIssueType)
+// buildStaleTicketGroups (src/imports/cleanup.ts, called transitively via continueAfterImportIssueType)
 // reads the cached workflow graph — only the cache read is mocked, so each stale test controls its
 // own graph while path-finding and the reachable-status lookup run for real against it.
 vi.mock('../services/WorkflowService', async (importOriginal) => ({

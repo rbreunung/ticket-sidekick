@@ -46,7 +46,7 @@ export interface ImportDeps {
   projectVersions(projectKey: string): Promise<ProjectVersionInfo[]>;
   /** The descriptions of the named tickets; a ticket that cannot be read is null. */
   descriptions(keys: string[]): Promise<Record<string, string | null>>;
-  /** The Jira services the write actions run through, as the chat import uses them; throws when Jira is not set up. */
+  /** The Jira services the write actions run through; throws when Jira is not set up. */
   writeAccess(): Promise<{ ticketService: TicketService; client: IJiraClient }>;
   /** The folder the accepted list lives in. */
   workspaceRoot(): string | undefined;
@@ -106,6 +106,17 @@ function hash(text: string | Buffer): string {
   return createHash('sha256').update(text).digest('hex').slice(0, 32);
 }
 
+/** The file's {@link hash}, read as a stream so the file is never held in memory whole. */
+function hashFile(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const digest = createHash('sha256');
+    fs.createReadStream(filePath)
+      .on('error', reject)
+      .on('data', chunk => digest.update(chunk))
+      .on('end', () => resolve(digest.digest('hex').slice(0, 32)));
+  });
+}
+
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -113,6 +124,9 @@ function messageOf(err: unknown): string {
 function isMissing(err: unknown): boolean {
   return (err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
 }
+
+/** A Jira issue key, in either case. */
+export const ISSUE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 
 /** The row key of a row: its dedup keys, sorted. Choices and slices are keyed by it, never by row id. */
 export function rowKeyOf(data: ImportData, row: ImportRow): string {
@@ -176,10 +190,10 @@ export function fingerprintsOf(data: ImportData, report: string, accepted: strin
 }
 
 /** The accepted list's fingerprint, so a later check knows whether the file changed and an accept knows its own write. */
-export function acceptedFingerprint(root: string | undefined): string {
+export async function acceptedFingerprint(root: string | undefined): Promise<string> {
   if (!root) return 'none';
   try {
-    return hash(fs.readFileSync(path.join(root, ACCEPTED_FILE_NAME)));
+    return hash(await fs.promises.readFile(path.join(root, ACCEPTED_FILE_NAME)));
   } catch {
     return 'none';
   }
@@ -188,9 +202,9 @@ export function acceptedFingerprint(root: string | undefined): string {
 async function readWith<TItem, TRow extends ReviewRowBase & ImportRow>(
   recipe: ImportRecipe, descriptor: ReportImportDescriptor<TItem, TRow>, deps: ImportDeps,
 ): Promise<DerivedPart<ImportData>> {
-  let bytes: Buffer;
+  let reportHash: string;
   try {
-    bytes = await fs.promises.readFile(recipe.reportPath);
+    reportHash = await hashFile(recipe.reportPath);
   } catch (err) {
     if (isMissing(err)) throw new ReportNotFoundError(recipe.reportPath);
     throw new Error(`The report file ${recipe.reportPath} cannot be read: ${messageOf(err)}`);
@@ -240,32 +254,41 @@ async function readWith<TItem, TRow extends ReviewRowBase & ImportRow>(
   const shown = [...new Set([...ticketedRows(data).map(r => r.target?.key ?? r.existingTicketKey!), ...stale])];
   const source = descriptor.overviewExport?.source ?? (recipe.kind === 'waltz' ? 'waltz' : 'veracode');
   const exportKeys = [...new Set([...tracked, ...stale])];
-  if (exportKeys.length > 0) {
-    try {
-      data.export.tickets = await deps.overviewTickets(exportKeys, source);
-    } catch (err) {
-      data.export.ticketsProblem = messageOf(err);
-    }
-  }
-  try {
-    data.export.versions = await deps.projectVersions(recipe.projectKey);
-  } catch (err) {
-    data.export.versionsFailed = true;
-    deps.onDiag?.('warn', 'Import board: the project versions could not be read', { projectKey: recipe.projectKey, error: messageOf(err) });
-  }
   const staleOnly = stale.filter(key => !tracked.includes(key));
-  if (staleOnly.length > 0) data.export.descriptions = await deps.descriptions(staleOnly);
-  if (shown.length > 0) {
-    try {
-      data.updated = await deps.updatedTimes(shown);
-    } catch (err) {
-      // Without `updated` a later check compares the rows' content only.
-      deps.onDiag?.('warn', 'Import board: the tickets\' update times could not be read', { error: messageOf(err) });
-    }
-  }
+  // The four reads are independent: each one handles its own failure, and only a failed descriptions read throws.
+  await Promise.all([
+    (async () => {
+      if (exportKeys.length === 0) return;
+      try {
+        data.export.tickets = await deps.overviewTickets(exportKeys, source);
+      } catch (err) {
+        data.export.ticketsProblem = messageOf(err);
+      }
+    })(),
+    (async () => {
+      try {
+        data.export.versions = await deps.projectVersions(recipe.projectKey);
+      } catch (err) {
+        data.export.versionsFailed = true;
+        deps.onDiag?.('warn', 'Import board: the project versions could not be read', { projectKey: recipe.projectKey, error: messageOf(err) });
+      }
+    })(),
+    (async () => {
+      if (staleOnly.length > 0) data.export.descriptions = await deps.descriptions(staleOnly);
+    })(),
+    (async () => {
+      if (shown.length === 0) return;
+      try {
+        data.updated = await deps.updatedTimes(shown);
+      } catch (err) {
+        // Without `updated` a later check compares the rows' content only.
+        deps.onDiag?.('warn', 'Import board: the tickets\' update times could not be read', { error: messageOf(err) });
+      }
+    })(),
+  ]);
   data.baseUrl = await deps.baseUrl();
 
-  return { readAt: deps.now(), fingerprints: fingerprintsOf(data, hash(bytes), acceptedFingerprint(deps.workspaceRoot())), data };
+  return { readAt: deps.now(), fingerprints: fingerprintsOf(data, reportHash, await acceptedFingerprint(deps.workspaceRoot())), data };
 }
 
 /** Reads the report and Jira for an import. A missing report file and a failed dedup search throw; a failed stale search does not. */

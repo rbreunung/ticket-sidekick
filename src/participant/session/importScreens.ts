@@ -4,7 +4,6 @@
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import type { RowChange } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
-import { isComponentEntry, type AcceptedEntry } from '../../utils/waltzAccepted';
 import { AcceptedHidden, ActionLabels, actionLabelOf, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
 import { ReviewTableColumn, cmdLink, countedNoun, neutralizeMarkdownLinks, pluralNoun, renderReviewTable, safeCellText } from './primitives';
 import { type ReviewPageNav } from './reviewPaging';
@@ -12,7 +11,6 @@ import {
   buildReviewPage, clampGroupPage, clampStalePage, ensureImportViewState, groupTotalPages, staleTotalPages, GROUP_PAGE_SIZE,
 } from '../../imports/rows';
 
-// The result groups, the view state, the row action change and the page counts moved to src/imports/rows.ts, which the import board shares.
 export {
   applyTicketedActionChange, clampStalePage, clampTicketedPage, computeImportResultGroups, ensureImportViewState, initImportViewState,
   staleTotalPages, ticketedTotalPages, GROUP_PAGE_SIZE,
@@ -154,17 +152,6 @@ function exportLine(): string {
   return cmdLink('Export', IMPORT_COMMANDS.export);
 }
 
-/** The link that re-prints the screen the session is on (the `show` reply). */
-function showLine(): string {
-  return cmdLink('Show', IMPORT_COMMANDS.show);
-}
-
-/** What ends an `export` preview, so the screen the user came from is not printed over it: the way on, as a link. */
-export function buildExportFollowUp(singleGroup: boolean, canShow = false): string {
-  const exit = singleGroup ? cmdLink('Done', IMPORT_COMMANDS.done) : cmdLink('Back to overview', IMPORT_COMMANDS.back);
-  return canShow ? `${showLine()} · ${exit}` : exit;
-}
-
 /** What the command catalog needs from a screen's options and rows. */
 function commandCapsOf<TRow extends ReviewRowBase>(s: ReviewSession<TRow>, opts: ImportScreenOptions): ImportCommandCaps {
   const open = s.allRows.filter(r => r.existingTicketKey !== null && !isTicketedRowFinished(r));
@@ -191,22 +178,6 @@ function buildPageLine(page: number, totalPages: number): string {
   if (page < totalPages - 1) controls.push(cmdLink('next', 'next'));
   if (totalPages >= 3) controls.push('`page <n>`');
   return `_Page ${page + 1} of ${totalPages}._ ${controls.join(' · ')}`;
-}
-
-/**
- * What ends a `search` reply: the replies that act on a found ticket (only the ones this screen and importer accept), then the
- * way back to the screen. An A id in the results resolves to that row's main ticket; any ticket key works with `merge … into`.
- */
-export function buildSearchFollowUp(view: 'new' | 'ticketed', opts: { canFold: boolean; canMergeTickets: boolean }, hasResults: boolean): string {
-  const lines: string[] = [];
-  if (hasResults && view === 'new' && opts.canFold) {
-    lines.push('Add New rows to a ticket from the list with `merge 1 2 into A3` (or `merge 1 2 into PROJ-12`); `add 1 2 to PROJ-12` does the same.');
-  }
-  if (hasResults && view === 'ticketed' && opts.canMergeTickets) {
-    lines.push('Merge tickets from the list with `merge A5 into A3`; the ticket after `into` is kept.');
-  }
-  lines.push(showLine());
-  return lines.join('\n\n');
 }
 
 /** Waltz ticket merge (KTD10): the screens no longer match Jira or the ignore list; the link starts the reload. */
@@ -565,24 +536,4 @@ export function buildImportScreen<TRow extends ReviewRowBase>(
     case 'stale': return withHiddenLine(buildStaleGroupScreen(s, opts));
     default: return buildImportOverview(s, opts);
   }
-}
-
-/** Accepted list (R7, R8): the entries numbered in file order, each with a link that removes it. */
-export function buildAcceptedList(entries: AcceptedEntry[]): string {
-  if (entries.length === 0) return '_The accepted list is empty._';
-  const text = (value: string): string => neutralizeMarkdownLinks(value).replace(/\s+/g, ' ').trim();
-  const flat = (value: string): string => value.replace(/\s+/g, ' ').trim();
-  // The link names the entry, not its position, so a link from an older list still removes what it showed.
-  const lines = entries.map((e, i) => {
-    const reason = e.reason ? ` — ${text(e.reason)}` : '';
-    if (isComponentEntry(e)) {
-      // The Remove reply reads the last word as the version, so a version with whitespace is removed by number instead.
-      const remove = /\s/.test(e.version.trim())
-        ? `remove with \`unaccept ${i + 1}\``
-        : cmdLink('Remove', `${UNACCEPT_COMPONENT_WORD} ${flat(e.component)} ${e.version.trim()}`);
-      return `${i + 1}. ${text(e.component)}:${text(e.version)} (whole component)${reason} — ${remove}`;
-    }
-    return `${i + 1}. ${text(e.component)} · ${text(e.cve)}${reason} — ${cmdLink('Remove', `unaccept ${flat(e.component)} ${e.cve.trim()}`)}`;
-  });
-  return ['### Accepted', '', ...lines].join('\n');
 }

@@ -47,7 +47,8 @@ function stateOf(session: ImportSession): SearchState | undefined {
   return state && typeof state.query === 'string' ? state : undefined;
 }
 
-function browse(baseUrl: string | undefined, key: string): string | null {
+/** The ticket's browse link, or null without a base URL. */
+export function browseUrl(baseUrl: string | undefined, key: string): string | null {
   return baseUrl ? `${baseUrl.replace(/\/+$/, '')}/browse/${encodeURIComponent(key)}` : null;
 }
 
@@ -58,7 +59,7 @@ function searchView(session: ImportSession, query: string): SearchView {
     return { query, total: 0, results: [], message: 'This import holds no ticket summaries to search. Refresh to read them again.' };
   }
   if (outcome.kind === 'usage') return { query, total: 0, results: [] };
-  const results = outcome.results.map(r => ({ key: r.key, summary: r.summary, status: r.status, url: browse(data.baseUrl, r.key) }));
+  const results = outcome.results.map(r => ({ key: r.key, summary: r.summary, status: r.status, url: browseUrl(data.baseUrl, r.key) }));
   const view: SearchView = { query, total: outcome.total, results };
   if (outcome.total === 0) view.message = `No open ticket of this import has a summary containing "${query}".`;
   else if (outcome.total > results.length) view.message = `${outcome.total - results.length} more match. Narrow the search to see them.`;
@@ -78,7 +79,7 @@ function mergeDetail(into: { findings?: TicketFinding[]; components?: TicketComp
 }
 
 /**
- * The overview of this one report, as the chat import's export builds it, but over the reading the board shows: the
+ * The overview of this one report, over the reading the board shows: the
  * open targets of the Already-ticketed rows are tracked, the stale tickets not closed from the board are stale, and the
  * other rows are the report's items with no open ticket.
  */

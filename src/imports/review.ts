@@ -44,8 +44,7 @@ export interface ReviewBuildContext extends ImportHooks<ReviewBuildEvent> {
  * differ only in how the file is read (utf-8 string for Veracode's XML, Buffer for Waltz's xlsx) and
  * in their own parse/filter functions — those differences are supplied by the caller, not
  * re-implemented here. Returns both the filtered `items` and the pre-filter `rawItems` (`parse()`'s
- * own output) directly — callers that need the raw, unfiltered set (U6's stale-check predicate) no
- * longer need to smuggle it out of the `filter` callback via a mutable outer variable.
+ * own output) directly, for callers that need the raw, unfiltered set (the stale-check predicate).
  */
 export async function readAndFilterReport<TRaw, TItem>(
   filePath: string,
@@ -135,7 +134,7 @@ export async function resolveTemplateFields<TItem, TRow extends ReviewRowBase>(
     }
     // The template was renamed or removed from .jira-templates.json between the list being
     // shown and this reply — additionalFields would otherwise silently stay {} with no signal,
-    // unlike the thrown-error path right below, which does warn (R6/AE3).
+    // unlike the thrown-error path right below, which does warn.
     onDiag?.('warn', `Template no longer found — proceeding without it — ${pickedTemplateName}`, { templateName: pickedTemplateName });
     return { additionalFields: {}, problem: { kind: 'missing' } };
   } catch (err) {
@@ -154,12 +153,12 @@ export interface ImportReviewInput<TItem> {
   issueType: string;
   templateName: string | null;
   additionalFields: Record<string, unknown>;
-  /** Target-ticket descriptions already read for this review (remediation dates, KTD1), reused by a rebuild. */
+  /** Target-ticket descriptions already read for this review, reused by a rebuild. */
   descriptionCache?: Record<string, string | null>;
 }
 
 /**
- * The dedup search, the review rows and the stale check, in one place (KTD9): the first import and every
+ * The dedup search, the review rows and the stale check, in one place: the first import and every
  * refresh or reload build the review through this, so a rebuilt review is the review a fresh import would show.
  * Reports its progress through `onEvent`; the caller decides what to show when nothing is left to review.
  */
@@ -179,7 +178,7 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
   const plural = descriptor.itemNoun.replace('(s)', 's'); // 'flaw(s)' -> 'flaws', 'component(s)' -> 'components'
   const templateLabels = templateLabelsOf(input.additionalFields);
 
-  // KTD2: dedup is optional — an importer that omits searchLabelOf/dedupKeyOf/labelToDedupKey (email)
+  // Dedup is optional — an importer that omits searchLabelOf/dedupKeyOf/labelToDedupKey (email)
   // has no per-item dedup key, so the "already ticketed" search is skipped entirely rather than run
   // and found empty. dedupMap stays empty, so every item is treated as new below.
   let dedupMap: DedupMap = new Map();
@@ -187,19 +186,19 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
     onEvent?.({ kind: 'checking-ticketed', plural });
     // The template session was already cleared above, so a failure here must degrade gracefully
     // rather than throw with nothing left to resume from. findAlreadyTicketed() is itself
-    // fault-tolerant per chunk (R5/AE2) and never rejects — this catch is a defensive backstop for a
+    // fault-tolerant per chunk and never rejects — this catch is a defensive backstop for a
     // failure outside the per-chunk loop (e.g. an error thrown by descriptor.searchLabelOf/labelToDedupKey
     // themselves). Total per-chunk coverage loss (every chunk failed) is a distinct, non-throwing
     // outcome, surfaced instead via the failedChunks/totalChunks check below, which reuses this
     // same user-facing warning for the total-coverage-loss case.
     try {
-      // U2/R11: flattens across every item's own multiple candidate labels (a folded Veracode
+      // Flattens across every item's own multiple candidate labels (a folded Veracode
       // group contributes one label per member flaw) so every member flaw's label is searched for.
       const searchLabels = input.items.flatMap(descriptor.searchLabelOf);
       const result = await findAlreadyTicketed(
         searchLabels,
         DEFAULT_DEDUP_CHUNK_SIZE,
-        // U3/KTD1: resolution + created let buildReviewRows pick each item's newest open ticket; duedate lets Veracode see which have none.
+        // Resolution + created let buildReviewRows pick each item's newest open ticket; duedate lets Veracode see which have none.
         // Every page is read: the union of an item's tickets decides its target and known findings.
         chunk => fetchAllPages(
           (startAt, pageToken) => ticketService.searchTicketsRaw(buildDedupJql(input.projectKey, chunk), DEDUP_PAGE_SIZE, ['resolution', 'created', 'duedate'], startAt, pageToken)
@@ -234,7 +233,7 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
     }
   }
 
-  // Remediation dates (KTD1): an importer with its own action policy compares what each target ticket recorded with
+  // Remediation dates: an importer with its own action policy compares what each target ticket recorded with
   // the report, so it reads those tickets' descriptions (the search cannot carry them: on Cloud it returns ADF).
   // A read that fails leaves that ticket's description unknown, which skips the date comparison for it and marks the
   // review degraded so a refresh does not replace a review built from complete data.
@@ -261,15 +260,15 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
     }
   }
 
-  // U4: every matched item gets its lightweight row fields built eagerly (severity/CWE/summary/
+  // Every matched item gets its lightweight row fields built eagerly (severity/CWE/summary/
   // labels) — no pre-build cap here anymore. The review screen pages through the full "new" set
   // instead of silently dropping the remainder of a run (buildReviewPage below); an importer whose
   // full ticket description is expensive to build (Veracode's folded-group description) defers
   // that part to ticket-creation time via its own buildTicketFields, rather than paying the cost
   // here for every candidate the user may never confirm.
   const dedupKeyOf = descriptor.dedupKeyOf ?? (() => []);
-  // Accepted-CVE list (KTD1): applied to the New items only, after the dedup split, so Already ticketed
-  // and Stale keep seeing the full report (R8). A missing list file or workspace hides nothing; a
+  // Accepted-CVE list: applied to the New items only, after the dedup split, so Already ticketed
+  // and Stale keep seeing the full report. A missing list file or workspace hides nothing; a
   // broken one hides nothing and is reported.
   const acceptedHidden = { cves: 0, belowFloor: 0, components: 0 };
   let narrowNew: ((item: TItem) => TItem | null) | undefined;
@@ -309,7 +308,7 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
     narrowNew,
     dropTicketed,
   );
-  // KTD10/KTD8: a member that left the report counts as a change for every row of its ticket, and rows of one
+  // A member that left the report counts as a change for every row of its ticket, and rows of one
   // ticket share a `rewrite` default because `rewrite` rebuilds the whole ticket.
   if (waltzStyle && descriptor.fold && descriptor.labelToDedupKey) {
     allRows = applyDroppedMembers<TItem, TRow>({
@@ -349,7 +348,7 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
     schemaVersion: CURRENT_SESSION_SCHEMA_VERSION,
   };
 
-  // U6/R1/R5: reverse stale-ticket check — an importer with no marker-label concept (email) omits
+  // Reverse stale-ticket check — an importer with no marker-label concept (email) omits
   // `descriptor.stale` and this whole block is skipped, exactly like the dedup block above.
   if (descriptor.stale) {
     onEvent?.({ kind: 'checking-stale' });
@@ -383,16 +382,14 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
       degraded = true;
       onEvent?.({ kind: 'stale-failed' });
     } else {
-      // Code-review fix: hoisted out of the `stale.length > 0` branch below — this must render
-      // whenever the search was truncated, independent of how many of the checked tickets turned
-      // out stale, or KTD10's "must not silently lose coverage past one search page" guarantee is
-      // defeated on any project with >BATCH_LIMIT open marker-labeled tickets where none of the
-      // checked ones happen to be stale. Wording fixed too: `totalFound` is the total open
-      // marker-labeled ticket count the search matched, not a stale count.
+      // Outside the `stale.length > 0` branch below: this must render whenever the search was
+      // truncated, however many of the checked tickets turned out stale, so coverage is never
+      // silently lost past one search page. `totalFound` is the total open marker-labeled ticket
+      // count the search matched, not a stale count.
       if (staleResult.truncated) {
         onEvent?.({ kind: 'stale-truncated', checked: staleResult.checked, totalFound: staleResult.totalFound, stale: staleResult.stale.length });
       }
-      // Accepted components (KTD5): an importer with an accepted list keeps the open tickets it did not flag.
+      // Accepted components: an importer with an accepted list keeps the open tickets it did not flag.
       if (descriptor.accepted && staleResult.pending.length > 0) {
         const staleCandidates = staleResult.pending.flatMap(m => {
           const detail = issueDetails.get(m.key);
@@ -411,7 +408,7 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
         try {
           const grouped = await buildStaleTicketGroups(staleResult.stale, issueDetails, input.projectKey, resolutions, ctx.workspaceRoot, onDiag);
           // The target (and any resolution) is picked only when the user closes selected tickets
-          // (stale-ticket target pick plan, R1) — nothing is asked here.
+          // — nothing is asked here.
           reviewSession = { ...reviewSession, staleTickets: grouped };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
