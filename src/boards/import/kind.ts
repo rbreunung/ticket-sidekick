@@ -101,8 +101,10 @@ export interface NewRowView {
   included: boolean;
   /** The number of the merge this row is part of, counted from 1. */
   merge?: number;
-  /** The ticket the board created for this row. */
+  /** The ticket the board created for this row, or added it to. */
   created?: string;
+  /** That ticket's page in Jira. */
+  createdUrl?: string;
 }
 
 export interface TicketedRowView {
@@ -633,7 +635,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
           const merge = mergeOf.get(key);
           return {
             id: r.id, ref: rowRef(r), summary: r.summary, rating: rowRating(r), included: !choices.excluded.includes(key),
-            ...(merge ? { merge } : {}), ...(createdKey ? { created: createdKey } : {}),
+            ...(merge ? { merge } : {}), ...(createdKey ? { created: createdKey, ...(browse(data.baseUrl, createdKey) ? { createdUrl: browse(data.baseUrl, createdKey)! } : {}) } : {}),
           };
         }),
       };

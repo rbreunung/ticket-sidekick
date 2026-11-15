@@ -4,12 +4,14 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { answerBoardRequest, asBoardRequest, type BoardHost } from '../boards/boardMessages';
 import { ImportStartScreen } from '../boards/import/startScreen';
+import { importKind } from '../boards/import/kind';
 import { securityReportKind, type SecurityReportDeps } from '../boards/securityReport/kind';
 import { registerKind, type BoardKind } from '../sessions/boardKind';
 import { importSessionId, importSourceKey, type ImportRecipe } from '../boards/import/recipe';
 import { SessionManager } from '../sessions/sessionManager';
 import { SessionStore } from '../sessions/sessionStore';
 import type { TicketService } from '../services/TicketService';
+import { EmptyProjectJira, emptyProjectImportDeps, veracodeReport } from './helpers/importBoardFixture';
 
 // A board page talking to the extension over the editor tab's message channel: it loads its
 // session, changes it, saves a file, and the sessions board lists, reopens and deletes what is
@@ -316,5 +318,62 @@ describe('picking the report file of an import again', () => {
     expect((await askImport({ kind: 'import', id: opened.id }, 'pick-file')).body).toEqual({ outcome: 'cancelled' });
     expect(followed).toEqual([]);
     expect((await askImport({ kind: 'security-report', id: opened.id }, 'pick-file')).status).toBe(404);
+  });
+});
+
+describe('the import board page and the extension', () => {
+  let jira: EmptyProjectJira;
+  let confirmed: string[];
+
+  beforeEach(() => {
+    jira = new EmptyProjectJira();
+    confirmed = [];
+    manager = new SessionManager({
+      store: new SessionStore(path.join(dir, 'sessions')),
+      kinds: [registerKind(importKind, () => emptyProjectImportDeps(dir, jira))],
+      now: () => Date.now(),
+      confirm: async plan => { confirmed.push(plan.title); return true; },
+      saveFile: async file => { saved.push(file.fileName); return true; },
+    });
+  });
+
+  async function openImport(files: string[]): Promise<{ tab: { kind: string; id: string }; state: any }> {
+    const reportPath = path.join(dir, 'report.xml');
+    fs.writeFileSync(reportPath, veracodeReport(files));
+    const opened = await manager.open('import', { kind: 'veracode', projectKey: 'PROJ', reportPath, templateName: 'Security bug', issueType: 'Bug' });
+    if (!opened.ok) throw new Error(opened.reason);
+    const tab = { kind: 'import', id: opened.id };
+    let state = (await ask(tab, 'state')).body;
+    while (state.status === 'building' || state.status === 'checking') state = (await ask(tab, 'state', { tick: state.tick, wait: 2000 })).body;
+    return { tab, state };
+  }
+
+  it('shows the tabs, switches them, previews a create and applies it with the native confirmation for more than one ticket', async () => {
+    const { tab, state } = await openImport(['Login.java', 'Report.java']);
+    expect(state.view.tabs.map((t: { id: string; count: number }) => [t.id, t.count])).toEqual([['new', 2], ['ticketed', 0], ['stale', 0]]);
+
+    const switched = (await ask(tab, 'action', { revision: state.revision, action: { type: 'tab', tab: 'ticketed' } })).body;
+    expect(switched.view.tab).toBe('ticketed');
+    const back = (await ask(tab, 'action', { revision: switched.revision, action: { type: 'tab', tab: 'new' } })).body;
+
+    const plan = (await ask(tab, 'preview', { revision: back.revision, action: { type: 'new-create' } })).body;
+    expect(plan).toMatchObject({ title: 'Create 2 ticket(s) in PROJ', risky: true });
+    expect(plan.lines.map((l: { target: string }) => l.target)).toEqual(['Flaw 101', 'Flaw 102']);
+    const applied = (await ask(tab, 'apply', { planId: plan.planId })).body;
+
+    expect(confirmed).toEqual(['Create 2 ticket(s) in PROJ']);
+    expect(applied.results.map((r: { target: string; outcome: string }) => [r.target, r.outcome])).toEqual([['Flaw 101: PROJ-100', 'done'], ['Flaw 102: PROJ-101', 'done']]);
+    expect(applied.state.view.new.rows.map((r: { created?: string }) => r.created)).toEqual(['PROJ-100', 'PROJ-101']);
+    // A plan is used once.
+    expect((await ask(tab, 'apply', { planId: plan.planId })).status).toBe(409);
+  });
+
+  it('works on the import of its own tab: a session the page names is not looked at', async () => {
+    const { tab, state } = await openImport(['Login.java']);
+    const other = { kind: 'import', id: 'import-ffffffffffffffff' };
+    expect((await ask(other, 'state')).status).toBe(404);
+    const reply = await ask(tab, 'action', { revision: state.revision, id: 'import-ffffffffffffffff', session: 'import-ffffffffffffffff', action: { type: 'tab', tab: 'stale' } });
+    expect(reply.body.id).toBe(tab.id);
+    expect(reply.body.view.tab).toBe('stale');
   });
 });
