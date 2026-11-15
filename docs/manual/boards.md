@@ -94,6 +94,7 @@ The line at the top names the report kind, the file, the project, the template a
 
 - The tab opens on **Changed**: the rows whose findings changed since their ticket was written, and the tickets that have no Due Date yet (marked "No Due Date"). **Unchanged** and **All** show the other rows. Each filter shows its count.
 - Each row shows its ticket with status, the finding, what changed, and its action: **rewrite**, **leave**, or **new ticket** when every ticket of the item is resolved. What each does is in [Report Imports](report-imports.md#reviewing-an-import).
+- When a finding has more than one open ticket, the Ticket cell names the others under "also open:" (up to three, then a count). A changed date shows the ticket's recorded date next to the report's, for example `Planned date none → 2026-12-15`; a Veracode ticket without a Due Date shows `Due Date missing → <date>`.
 - **Set all shown to** changes the action of the rows the filter shows, and no other row. **Preview changes…** writes the action of every row, shown or not.
 - A rewrite rebuilds the whole ticket, so the rows of one ticket are all on **rewrite** or none of them; the preview refuses a mix and names the rows.
 - A ticket that changed in Jira since the board read it is not written to. Its result says so, and the board lists it with its stored and current state until you drop it.
@@ -105,7 +106,7 @@ The line at the top names the report kind, the file, the project, the template a
 - A ticket without a discovered workflow cannot be checked, and its row says why; `/ts-jira workflow <KEY>` discovers it.
 - When the search for stale tickets fails, the tab says so and the other tabs still work.
 
-**Accepted** (Waltz only): the entries of `.jira-oss-accepted.json`, with **Unaccept…** for a CVE and **Unaccept component…** for a whole component. When the file cannot be read in full, accept and unaccept are refused with the warning and the file is left alone.
+**Accepted** (Waltz only): the entries of `.jira-oss-accepted.json`, with **Unaccept…** for a CVE and **Unaccept component…** for a whole component. When the list hid anything from this report, a line above the tabs says how much, for example "2 accepted CVEs hidden · 1 accepted component hidden". When the file cannot be read in full, accept and unaccept are refused with the warning and the file is left alone.
 
 ### Preview, Apply and the VS Code dialog
 

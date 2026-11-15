@@ -129,7 +129,7 @@ Each flaw's due date is the date Veracode first found it plus the number of days
 
 - **On a new ticket**, the Jira **Due Date** is the earliest due date of the ticket's flaws, written as it is even when already past. The ticket's Findings table shows each flaw's **First found** date and **Due date**; a very large fold's slimmer table leaves them out, but the Due Date field still carries the date. A flaw whose report entry has no first-found date counts from the ticket's creation date (today, for a new ticket). A severity at 0 gets no Due Date, and an existing Due Date is never cleared. If your project does not show the Due Date field, the ticket is still created or rewritten without it: you get a warning, and the dates stay in the description.
 - **A Due Date is set once.** Later imports do not recalculate or overwrite it, so a date you moved by hand, such as an agreed extension, stays, and changing the table does not reach tickets that already have a Due Date. The one exception is flaws joining a ticket: with **Add selected to ticket** as a rewrite, or new findings on the ticket, the Due Date becomes the earlier of its current date and the earliest due date of the joining flaws, and never later. Adding as a comment never touches the Due Date.
-- **Tickets that have no Due Date.** On the Already ticketed tab, an open ticket with an empty Due Date whose flaws have a due date shows as changed, marked "No Due Date", and defaults to `rewrite`, which sets it. `rewrite` also rebuilds the ticket's description and replaces any text added by hand, so check the rows before you apply. One Apply writes at most 50 tickets: apply again for the rest, especially on the first import after the upgrade. A resolved ticket is not offered a change for a missing date alone.
+- **Tickets that have no Due Date.** On the Already ticketed tab, an open ticket with an empty Due Date whose flaws have a due date shows as changed, marked "No Due Date" with the change `Due Date missing → <date>`, and defaults to `rewrite`, which sets it. `rewrite` also rebuilds the ticket's description and replaces any text added by hand, so check the rows before you apply. One Apply writes at most 50 tickets: apply again for the rest, especially on the first import after the upgrade. A resolved ticket is not offered a change for a missing date alone.
 - **Export and overview.** **Save overview as CSV…** and **Save overview as Excel…** show the same due dates and flags for items that have no ticket yet (an item without a Fix Version is flagged against the latest unreleased release, see the Flag column below), and the security report board flags Veracode tickets by their Jira Due Date like OSS tickets, see [Security report: open Veracode and Waltz tickets by release](#security-report-open-veracode-and-waltz-tickets-by-release).
 
 ### Reviewing an import
@@ -176,7 +176,7 @@ To find the ticket to add to, **Search matched tickets** lists the open tickets 
 
 ### Merging tickets
 
-Two or more tickets for the same piece of work can be combined. On the **Already ticketed** tab, pick the rows of the tickets, choose the ticket to keep (one of the picked ones, or type its key), and click **Preview merge tickets…**. You choose the direction: keeping PROJ-1301 closes PROJ-1190, and keeping PROJ-1190 closes PROJ-1301.
+Two or more tickets for the same piece of work can be combined. A finding with more than one open ticket names the others in its Ticket cell under "also open:". On the **Already ticketed** tab, pick the rows of the tickets, choose the ticket to keep (one of the picked ones, or type its key), and click **Preview merge tickets…**. You choose the direction: keeping PROJ-1301 closes PROJ-1190, and keeping PROJ-1190 closes PROJ-1301.
 
 The preview reads the tickets and shows them, the steps and any warnings, and writes nothing. Apply asks VS Code's dialog, then a **Ticket merge** tab runs the steps (see [Boards → Ticket merge](boards.md#ticket-merge)). Merging works differently for the two kinds of report.
 
@@ -246,7 +246,7 @@ Import a newer report and the **Already ticketed** tab compares it with your tic
 | **leave** | Does nothing. | Always |
 | **new ticket** | Creates a complete new ticket for the component, with its current content, dates and Due Date, titled `… (follow-up to PROJ-123)` and linked to the resolved ticket. | Only when every ticket of the component is resolved |
 
-A change on an open ticket proposes **rewrite**; a change where every ticket is resolved proposes **new ticket**, because a component that is still in the report is still open work; no change proposes **leave**. Rows that point to the same ticket always propose the same action, because **rewrite** rebuilds the whole ticket. A row whose dates changed says "Remediation dates changed", and the comment a rewrite posts lists each changed date, for example `policy 2026-12-31 → 2027-03-31`.
+A change on an open ticket proposes **rewrite**; a change where every ticket is resolved proposes **new ticket**, because a component that is still in the report is still open work; no change proposes **leave**. Rows that point to the same ticket always propose the same action, because **rewrite** rebuilds the whole ticket. A row whose dates changed shows each changed date as the ticket records it next to the report's, for example `Policy date 2026-12-31 → 2027-03-31`, and the comment a rewrite posts lists the same dates.
 
 Things to know:
 
@@ -291,7 +291,7 @@ How it applies:
 - **Merged rows.** Accepting the CVEs of a merged row accepts the CVEs of every component in it.
 - **CVE entries affect the New tab only.** The Already ticketed and Stale tabs are unchanged by them, so a later import can still propose adding an accepted CVE to an existing ticket. To take a whole component off all three tabs, accept it as a component (below).
 
-The **Accepted** tab lists the entries with their reasons. **Unaccept…** deletes an entry after a preview, and the entry is offered again right away: the tabs read the report again, or, where you have unfinished choices, are marked out of date and offer **Refresh**.
+A line above the tabs says how many accepted CVEs and components the list hid from this report, and how many components fell below the rating floor. The **Accepted** tab lists the entries with their reasons. **Unaccept…** deletes an entry after a preview, and the entry is offered again right away: the tabs read the report again, or, where you have unfinished choices, are marked out of date and offer **Refresh**.
 
 If `.jira-oss-accepted.json` is not valid JSON, the import hides nothing and shows a warning. If it has an entry that cannot be read (for example a mistyped key), that entry is skipped with a warning. In both cases accept and unaccept leave the file alone until you fix it, so nothing you wrote by hand is lost.
 

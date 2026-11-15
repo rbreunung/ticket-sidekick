@@ -145,6 +145,8 @@ function newTab(view, board, ctx) {
 // ---- Already ticketed ---------------------------------------------------------------------
 
 const FILTERS = [['changed', 'Changed'], ['unchanged', 'Unchanged'], ['all', 'All']];
+/** How many other open tickets a row names before it counts the rest. */
+const MAX_ALSO_OPEN_SHOWN = 3;
 
 function ticketedTab(view, board, ctx) {
   const ext = view.ext.ticketed ?? { filter: view.ticketed?.show === 'decision' ? 'changed' : 'all', notice: null, noDueDate: [], counts: {}, actionLabels: {} };
@@ -184,7 +186,10 @@ function ticketedTab(view, board, ctx) {
           type: 'checkbox', id: `pick-${row.id}`, checked: picked.has(row.id), disabled: off, 'aria-label': `Pick ${row.ticket} for a merge`,
           onChange: e => { if (e.target.checked) picked.add(row.id); else picked.delete(row.id); board.repaint(); },
         })),
-        h('td', {}, link(row.ticket, row.url), row.status ? h('span', { class: 'muted' }, ` ${row.status}${row.resolved ? ', resolved' : ''}`) : null),
+        h('td', {}, link(row.ticket, row.url), row.status ? h('span', { class: 'muted' }, ` ${row.status}${row.resolved ? ', resolved' : ''}`) : null,
+          row.alsoOpen?.length ? h('div', { class: 'muted' }, 'also open: ',
+            row.alsoOpen.slice(0, MAX_ALSO_OPEN_SHOWN).flatMap((t, i) => [i > 0 ? ', ' : null, link(t.key, t.url)]),
+            row.alsoOpen.length > MAX_ALSO_OPEN_SHOWN ? ` +${row.alsoOpen.length - MAX_ALSO_OPEN_SHOWN}` : null) : null),
         h('td', {}, h('div', {}, row.ref), h('div', { class: 'muted' }, row.summary)),
         h('td', {}, row.change ?? 'Unchanged', noDue.has(row.id) ? h('div', {}, 'No Due Date') : null),
         h('td', {}, h('select', {
@@ -451,6 +456,7 @@ function render(view, board, locked, state) {
       h('p', {}, view.ext['search-export']?.finishedMessage ?? 'Nothing left to do.'),
       h('vscode-button', { id: 'discard-finished', secondary: true, disabled: locked, onClick: () => board.discard() }, 'Discard')) : null,
     view.notices.map(n => h('p', { class: 'banner' }, n)),
+    view.acceptedHidden ? h('p', { id: 'accepted-hidden', class: 'muted' }, view.acceptedHidden) : null,
     view.dropped.length ? h('section', { class: 'banner', 'aria-label': 'Dropped choices' },
       h('p', {}, 'Refresh could not keep these choices:'),
       h('ul', {}, view.dropped.map(d => h('li', {}, d))),

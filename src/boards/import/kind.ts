@@ -5,7 +5,9 @@ import { IMPORT_HANDLERS } from './registry';
 import type { DerivedPart, Session } from '../../sessions/sessionTypes';
 import { normalizeProjectKey } from '../../services/configValidation';
 import { buildReviewPage } from '../../imports/rows';
-import type { TicketedAction } from '../../imports/types';
+import type { AcceptedHidden, TicketedAction } from '../../imports/types';
+import { countedNoun } from '../../utils/chatPrimitives';
+import type { DateKind } from '../../utils/waltzDates';
 import {
   newRows, readImport, rowKeyOf, slicesOf, staleTickets, ticketedRows,
   type ImportData, type ImportDeps, type ImportRow, type ImportTab, type SliceEntry,
@@ -115,6 +117,8 @@ export interface TicketedRowView {
   status: string | null;
   resolved: boolean;
   url: string | null;
+  /** The finding's other open tickets, when it has more than one; absent otherwise. */
+  alsoOpen?: Array<{ key: string; url: string | null }>;
   change: string | null;
   action: TicketedAction;
   allowedActions: TicketedAction[];
@@ -164,6 +168,8 @@ export interface ImportView {
   accepted?: { rows: AcceptedRowView[]; warning: string | null };
   dropped: string[];
   notices: string[];
+  /** What the accepted list kept off New and Already ticketed (Waltz), e.g. "2 accepted CVEs hidden"; absent when nothing. */
+  acceptedHidden?: string;
   /** Fields the area handlers add, each under its handler's name. */
   ext: Record<string, unknown>;
 }
@@ -217,6 +223,17 @@ function rowRating(row: ImportRow): string {
   return 'issueIds' in row ? row.severityLabelText : row.maxVulnRating;
 }
 
+const DATE_LABELS: Record<DateKind, string> = { policy: 'Policy date', planned: 'Planned date', attestation: 'Attestation date', due: 'Due Date' };
+
+function describeAcceptedHidden(hidden: AcceptedHidden | undefined): string | undefined {
+  if (!hidden) return undefined;
+  const parts: string[] = [];
+  if (hidden.cves > 0) parts.push(`${countedNoun(hidden.cves, 'accepted CVE(s)')} hidden`);
+  if ((hidden.components ?? 0) > 0) parts.push(`${countedNoun(hidden.components!, 'accepted component(s)')} hidden`);
+  if (hidden.belowFloor > 0) parts.push(`${countedNoun(hidden.belowFloor, 'component(s)')} below the rating floor`);
+  return parts.length > 0 ? parts.join(' · ') : undefined;
+}
+
 function describeChange(row: ImportRow): string | null {
   const change = row.change;
   if (!change) return null;
@@ -224,7 +241,10 @@ function describeChange(row: ImportRow): string | null {
   const parts: string[] = [];
   if (change.newIds.length > 0) parts.push(`New: ${change.newIds.join(', ')}`);
   if (change.ratingRise) parts.push(`Rating ${change.ratingRise.from} → ${change.ratingRise.to}`);
-  if (change.dates && change.dates.length > 0) parts.push('Remediation dates changed');
+  // Recorded on the ticket → given by the report now.
+  for (const d of change.dates ?? []) {
+    parts.push(`${DATE_LABELS[d.date]} ${d.from ?? (d.date === 'due' ? 'missing' : 'none')} → ${d.to ?? 'none'}`);
+  }
   if (change.droppedMembers) parts.push(`${change.droppedMembers} no longer in the report`);
   return parts.join('; ') || 'Changed';
 }
@@ -621,6 +641,8 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
       notices: data.notices,
       ext: {},
     };
+    const hidden = describeAcceptedHidden(data.review.acceptedHidden);
+    if (hidden) view.acceptedHidden = hidden;
     for (const handler of IMPORT_HANDLERS) {
       const extra = handler.view?.(session, current);
       if (extra !== undefined) view.ext[handler.name] = extra;
@@ -648,9 +670,10 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
           .map(r => {
             const ticket = r.target?.key ?? r.existingTicketKey!;
             const key = rowKeyOf(data, r);
+            const alsoOpen = (r.openTicketKeys ?? []).map(k => ({ key: k, url: browse(data.baseUrl, k) }));
             return {
               id: r.id, ref: rowRef(r), summary: r.summary, ticket, status: r.target?.status ?? null, resolved: r.target?.resolved ?? false,
-              url: browse(data.baseUrl, ticket), change: describeChange(r),
+              url: browse(data.baseUrl, ticket), ...(alsoOpen.length > 0 ? { alsoOpen } : {}), change: describeChange(r),
               action: choices.actions[key] ?? r.action ?? 'leave', allowedActions: [...(r.allowedActions ?? ['leave'])],
               needsDecision: needsDecision(r, writes), written: decided(writes, ticket),
             };

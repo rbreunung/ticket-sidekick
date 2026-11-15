@@ -311,3 +311,19 @@ describe('reloading the report', () => {
     expect(v.dropped[0]).toMatch(/Flaw 103/);
   });
 });
+
+describe('what the accepted list hides', () => {
+  it('says how many accepted CVEs and components the review hid', async () => {
+    writeList([{ component: 'example-io', cve: 'CVE-2099-0003' }, { component: 'example-lib', version: '1.2.3' }]);
+    const session = await open(recipe('waltz', copyWaltz()));
+    expect(newRefs(session)).toEqual(['example-http:3.3.3']);
+    for (const tab of ['new', 'ticketed', 'stale', 'accepted']) {
+      expect(view(session, tab).acceptedHidden).toBe('1 accepted CVE hidden · 1 accepted component hidden');
+    }
+  });
+
+  it('says nothing when the accepted list hid nothing', async () => {
+    const session = await open(recipe('waltz', copyWaltz()));
+    expect(view(session).acceptedHidden).toBeUndefined();
+  });
+});

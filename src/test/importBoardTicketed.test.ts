@@ -532,3 +532,41 @@ describe('applying the Already ticketed actions', () => {
     expect(p.title).toMatch(/2 .*remain/);
   });
 });
+
+describe('what an Already ticketed row shows', () => {
+  it('names the other open tickets of a finding that has more than one', async () => {
+    jira.tickets = { 'PROJ-1': veracodeTicket(['101']), 'PROJ-2': veracodeTicket(['101']) };
+    const session = onTicketed(await open(recipe('veracode', writeVeracode([{ id: '101', file: 'A.java' }]))));
+    const v = view(act(session, { type: 'ticketed-filter', filter: 'all' }));
+    const row = v.ticketed!.rows[0];
+    const other = row.ticket === 'PROJ-1' ? 'PROJ-2' : 'PROJ-1';
+    expect(row.alsoOpen).toEqual([{ key: other, url: `https://jira.example.com/browse/${other}` }]);
+  });
+
+  it('leaves the other open tickets out when the finding has one ticket', async () => {
+    jira.tickets = { 'PROJ-1': veracodeTicket(['101']) };
+    const session = onTicketed(await open(recipe('veracode', writeVeracode([{ id: '101', file: 'A.java' }]))));
+    const v = view(act(session, { type: 'ticketed-filter', filter: 'all' }));
+    expect(v.ticketed!.rows[0].alsoOpen).toBeUndefined();
+  });
+
+  it('shows the recorded and the reported Waltz remediation dates side by side', async () => {
+    const recorded = comp('example-lib:1.2.3', { policyDate: '2026-11-01' });
+    jira.tickets = {
+      'PROJ-1': { labels: buildGroupLabels([recorded]), description: buildGroupDescriptionWiki([recorded]), updated: 't1', duedate: '2026-11-01' },
+    };
+    const session = onTicketed(await open(recipe('waltz', writeWaltz([comp('example-lib:1.2.3', { policyDate: '2026-12-01', plannedDate: '2026-12-15' })]))));
+    const change = rowOf(view(session), 'PROJ-1').change!;
+    expect(change).toContain('Policy date 2026-11-01 → 2026-12-01');
+    expect(change).toContain('Planned date none → 2026-12-15');
+    expect(change).not.toContain('Remediation dates changed');
+  });
+
+  it('says a Veracode ticket has no Due Date and which date the report gives it', async () => {
+    slaDays = { High: 90 };
+    jira.tickets = { 'PROJ-1': veracodeTicket(['101'], { duedate: null }) };
+    const session = onTicketed(await open(recipe('veracode', writeVeracode([{ id: '101', file: 'A.java' }]))));
+    const change = rowOf(view(session), 'PROJ-1').change!;
+    expect(change).toBe('Due Date missing → 2026-07-19');
+  });
+});

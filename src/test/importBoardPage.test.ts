@@ -376,6 +376,30 @@ describe('the import board page', () => {
     expect(action.elements().find(o => o.value === 'follow-up')?.textContent).toBe('new ticket');
   });
 
+  it('names the other open tickets on an Already ticketed row, and the dates side by side', async () => {
+    installCanned({
+      state: boardState(baseView({
+        tab: 'ticketed', new: undefined,
+        ticketed: { show: 'all', rows: [
+          ticketedRow(1, { alsoOpen: [{ key: 'PROJ-9', url: 'https://jira.example.com/browse/PROJ-9' }], change: 'Policy date 2026-11-01 → 2026-12-01' }),
+          ticketedRow(2),
+        ] },
+      })),
+    });
+    await loadPage();
+    expect(rowEl('A1').textContent).toContain('also open: PROJ-9');
+    const other = rowEl('A1').elements().find(el => el.tagName === 'a' && el.textContent === 'PROJ-9');
+    expect(String(other?.href)).toBe('https://jira.example.com/browse/PROJ-9');
+    expect(rowEl('A1').textContent).toContain('Policy date 2026-11-01 → 2026-12-01');
+    expect(rowEl('A2').textContent).not.toContain('also open');
+  });
+
+  it('says how many findings the accepted list hid', async () => {
+    installCanned({ state: boardState(baseView({ acceptedHidden: '2 accepted CVEs hidden · 1 accepted component hidden' })) });
+    await loadPage();
+    expect(must('accepted-hidden').textContent).toBe('2 accepted CVEs hidden · 1 accepted component hidden');
+  });
+
   it('says there is nothing left to do and offers Discard on a finished import', async () => {
     installCanned({ state: boardState(baseView({ finished: true, new: { rows: [] } })), answer: async () => ({ ok: true }) });
     await loadPage();
