@@ -175,7 +175,8 @@ export function fingerprintsOf(data: ImportData, report: string, accepted: strin
   };
 }
 
-function acceptedFingerprint(root: string | undefined): string {
+/** The accepted list's fingerprint, so a later check knows whether the file changed and an accept knows its own write. */
+export function acceptedFingerprint(root: string | undefined): string {
   if (!root) return 'none';
   try {
     return hash(fs.readFileSync(path.join(root, ACCEPTED_FILE_NAME)));
