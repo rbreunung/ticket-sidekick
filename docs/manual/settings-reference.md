@@ -108,7 +108,7 @@ When enabled, every `@jira` import response starts with an italic line showing t
 | --- | --- | --- |
 | Session retention | `ticketSidekick.sessions.retentionDays` | `14` |
 
-A board (the security report, a ticket list, and later imports and reviews) keeps its work in progress as a **session** in VS Code's storage for the workspace, so it survives a restart. A session not used for this many days is deleted. See [Boards](boards.md#stored-sessions).
+A board (the security report, a ticket list, an import, and later reviews) keeps its work in progress as a **session** in VS Code's storage for the workspace, so it survives a restart. A session not used for this many days is deleted. See [Boards](boards.md#stored-sessions).
 
 ## Report import settings
 

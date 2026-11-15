@@ -1,6 +1,6 @@
 # Migration status: from chat participants to tools and boards
 
-Last updated: 2026-11-14.
+Last updated: 2026-11-15.
 
 This page says where the migration stands and what is still open. It is the working list; the other documents hold the detail:
 
@@ -27,11 +27,11 @@ Update this page in every change that closes or adds an open point.
 | Area | State |
 | --- | --- |
 | Single-ticket Jira work | 16 tools: check connection, view, find, list filters, workflow, list templates, list fields, check required fields, load, move, create, comment, update any field (set, add, remove), upload, correct a description, create a template from a ticket |
-| Opening boards | `jira_open_board` tool (with cleanup rules and fix version, sprint, assignee and team narrowing), four Command Palette commands, `/ts-jira search`, `cleanup`, `security-report`, `sessions` |
+| Opening boards | `jira_open_board` tool (with cleanup rules, fix version, sprint, assignee and team narrowing, and the import board with a report kind and path), five Command Palette commands, `/ts-jira search`, `cleanup`, `security-report`, `sessions`, `import` |
 | Skills | `/ts-jira` (typed commands), `/ts-jira-create`, `/ts-jira-brief`, `/ts-jira-spell-check`, `/ts-jira-template` |
-| Removed `@jira` flows | Every Step 1 flow: create, view, summarize, show fields, check required fields, comments, field, move, load, upload, workflow, check, search, filters, bulk transition, bulk field update, cleanup, `/security-report`, the description and comment preview, spell check and template generation. `@jira` has no slash command left and runs only the report imports; any other request gets a notice pointing to `/ts-jira` and Agent mode |
-| Session model | Sessions stored per workspace, shown from cache and checked in the background, conflicts, single-use write plans, native confirmation for risky writes, expiry and a clear command |
-| Boards | Security report (filters, sort, CSV and Excel export), ticket list (search, 50 rows a page up to 300, `searchFields`/`cleanupFields` columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules` with nested subtasks, an out-of-date state that offers only Refresh), stored sessions |
+| Removed `@jira` flows | Every Step 1 flow: create, view, summarize, show fields, check required fields, comments, field, move, load, upload, workflow, check, search, filters, bulk transition, bulk field update, cleanup, `/security-report`, the description and comment preview, spell check and template generation. `@jira` has no slash command left. The Veracode and Waltz imports and their two Command Palette commands followed on 2026-11-15; `@jira` runs only the email import, and any other request, a Veracode or Waltz one included, gets a notice pointing to the import board, `/ts-jira` and Agent mode |
+| Session model | Sessions stored per workspace, shown from cache and checked in the background, conflicts, single-use write plans, native confirmation for risky writes, expiry and a clear command; on every board a save after each write of an Apply, Apply progress with the controls locked, a rebuild from the stored recipe after an update that changes the stored format (`revalidate`), a `prepare` read before a plan's preview, and `relocate` to give a session a new source |
+| Boards | Security report (filters, sort, CSV and Excel export), ticket list (search, 50 rows a page up to 300, `searchFields`/`cleanupFields` columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules` with nested subtasks, an out-of-date state that offers only Refresh), stored sessions, the import board for Veracode and Waltz reports (start screen with the template settings, tabs New, Already ticketed, Stale and Accepted, the ticket merge tab with its resumable run, per-tab out-of-date marks, Pick the file again, search, CSV and Excel export) |
 | Documentation | README, manual, `CLAUDE.md`, glossary, architecture page and plan describe tools and boards as current and the participants as deprecated |
 
 ## 3. Open points
@@ -48,13 +48,15 @@ O1, O2 and O5 are closed by [`../plans/2026-11-14-1257-feat-ticket-list-parity-a
 
 ### Step 2: imports
 
+The Veracode and Waltz part of the [manual checklist](manual-checklist.md) is written; the maintainer runs it on the pre-release build of the pull request that adds the import board, against Jira Data Center.
+
 | # | Open point | Requirement | Blocks removal of |
 | --- | --- | --- | --- |
-| O7 | Import board: start screen, Veracode, Waltz and email kinds on the session model, and everything marked "Carry over" in the [import board parity ledger](#import-board-parity-ledger) below: every review-screen action as a board control (create, merge and unmerge, accept and unaccept, add to ticket, the Already-ticketed actions including rewrite, stale close, ticket merge with its resumable run, search, export with due-date columns, reload report), the Due Date rules (Veracode SLA Due Date on create, new ticket and rewrite, the backfill flag, the Waltz rewrite Due Date), the out-of-date marking after `unaccept` and a ticket merge, and a drained email import finishing on its own | R14 to R19 | `@jira` imports, the three Command Palette import commands |
+| O7 | Import board, email part. The start screen and the Veracode and Waltz kinds are done, with every Veracode and Waltz "Carry over" row of the [import board parity ledger](#import-board-parity-ledger) below, and their chat imports and two commands are removed ([`../plans/2026-11-14-1641-feat-import-board-veracode-waltz-parity-plan.md`](../plans/2026-11-14-1641-feat-import-board-veracode-waltz-parity-plan.md)). Left: the email kind on the board with the email "Carry over" rows (`email-*`, `afterCreate`) and a drained email import finishing on its own; done together with O8 | R14 to R19 | `@jira` email import, `Ticket Sidekick: Create Jira ticket from email (.eml)` |
 | O8 | Email kind: boilerplate cleanup with consent as a board step; "add one email as a comment"; search for tickets matching an email's subject before creating | R18, R43 | `@jira` email import, email as comment |
 | O9 | Model settings: one for the review passes, one for the email check, with a pick step when empty | R24, R25 | — |
 | O10 | Prompts that belong to a board run happen on the board, before any model call | R45 | — |
-| O11 | Remove the imports, the import commands, `@jira` itself and its help screen | R33, R34 | — |
+| O11 | Remove the email import, its Command Palette command, `@jira` itself and its help screen | R33, R34 | — |
 
 #### Import board parity ledger
 
@@ -126,9 +128,9 @@ What the `@jira` import did and what the import board does with it. The list is 
 | # | Open point | Note |
 | --- | --- | --- |
 | O17 | Keyboard and screen reader check of every board control | R46. The built boards use VS Code Elements and plain tables; not yet checked with a screen reader |
-| O18 | `@bitbucket` is presented in the chat UI without a deprecation mark | `@jira`'s description now says "Deprecated" and names the imports, and the Jira walkthrough teaches the tools and boards. `@bitbucket` and the Bitbucket walkthrough still teach the participant |
+| O18 | `@bitbucket` is presented in the chat UI without a deprecation mark | `@jira`'s description now says "Deprecated" and names the email import, and the Jira walkthrough teaches the tools and boards. `@bitbucket` and the Bitbucket walkthrough still teach the participant |
 | O19 | The participant checklist in `CLAUDE.md` ("Adding a new Bitbucket operation") still carries participant steps, marked as deprecated | R48. The Jira checklist no longer routes into `@jira`; drop the Bitbucket steps when `@bitbucket` goes |
-| O20 | `docs/onboarding.md`, `docs/jira-flows.md`, `docs/report-import.md` and `docs/review-process.md` describe participant flows, each under a deprecation note | `docs/jira-flows.md` now marks the removed Step 1 flows as removed and keeps their rules as the reference the boards and tools follow. Rewrite or delete the rest with the step that removes the flow |
+| O20 | `docs/onboarding.md`, `docs/jira-flows.md`, `docs/report-import.md` and `docs/review-process.md` describe participant flows, each under a deprecation note | `docs/jira-flows.md` now marks the removed Step 1 flows as removed and keeps their rules as the reference the boards and tools follow, and `docs/report-import.md` does the same for the Veracode and Waltz chat flows, with a section on the import board. Rewrite or delete the rest with the step that removes the flow |
 
 ## 4. Open decisions
 
@@ -155,8 +157,8 @@ When O5, O11 and O15 are done, none of the following is left:
 
 - `src/participant/` and its tests
 - `contributes.chatParticipants`, their slash commands and disambiguation entries in `package.json`
-- The three import commands in the Command Palette
+- The email import command in the Command Palette (the Veracode and Waltz commands are gone)
 - `workspaceState` keys of the participant sessions (`jira.session.*`, `bitbucket.session.*`)
-- The README sections "@jira — Jira" and "@bitbucket — Bitbucket PR Reviews" as participant manuals; their setup steps move to the top
+- The README sections "Report imports → Emails: `@jira` (deprecated)" and "@bitbucket — Bitbucket PR Reviews" as participant manuals; their setup steps move to the top
 - The deprecation notes added on 2026-11-13, since nothing deprecated remains to point at
 - Guard tests tied to the participants (`jiraCommandsGuard.test.ts`, `importCommandsGuard.test.ts`, `importBoardParity.test.ts` with the import board parity ledger, the `@jira` command table in `skillsGuard.test.ts`)

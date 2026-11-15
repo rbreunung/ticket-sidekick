@@ -29,9 +29,9 @@ export const DEFAULT_DEDUP_CHUNK_SIZE = 40; // keeps generated JQL well under Ji
 
 /**
  * Turns a configured `ticketSidekick.<x>.maxReportSizeMB`/`maxBatchSizeMB` setting value into a
- * validated byte limit — the single source of truth every config-reading call site (extension.ts's
- * two command registrations, veracodeHandler.ts, waltzHandler.ts, emailHandler.ts) uses instead of
- * re-implementing the same range check four times. A non-finite value or one outside
+ * validated byte limit — the single source of truth every config-reading call site
+ * (src/services/importSettings.ts for Veracode and Waltz, emailHandler.ts for email) uses instead
+ * of re-implementing the same range check. A non-finite value or one outside
  * `[minMB, maxMB]` falls back to `defaultMB` rather than disabling the cap or throwing — a user
  * typo in settings.json must never leave an import unbounded.
  */

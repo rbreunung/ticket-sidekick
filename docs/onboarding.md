@@ -125,7 +125,7 @@ participant without the user typing `@jira`/`@bitbucket` explicitly.
 
 ### `@jira`
 
-`@jira` has no slash command since 2026-11-14: it runs only the report imports, which start from their Command Palette commands or a plain request ("import veracode report"). `src/test/jiraCommandsGuard.test.ts` fails if a slash command comes back. The removed commands' replacements are listed in [`docs/jira-flows.md`](jira-flows.md#where-the-removed-flows-went).
+`@jira` has no slash command since 2026-11-14. Since 2026-11-15 it runs only the email import, which starts from its Command Palette command or a plain request ("create ticket from mail"); its disambiguation entry names emails only. Veracode and Waltz reports are imported on the import board (`Ticket Sidekick: Open import board`, or `jira_open_board` with board `import`). `src/test/jiraCommandsGuard.test.ts` fails if a slash command comes back. The removed commands' replacements are listed in [`docs/jira-flows.md`](jira-flows.md#where-the-removed-flows-went).
 
 ### `@bitbucket`
 
@@ -191,12 +191,12 @@ for the general specific-before-generic principle this sidesteps by
 construction.
 
 For `@jira`, every phrase in that set prints the same single help screen: the tool name and version (read from
-`context.extension.packageJSON` when the help is shown, `unknown` when missing), the three imports and the
+`context.extension.packageJSON` when the help is shown, `unknown` when missing), the email import and the
 imports-only notice, built from the catalog in `src/participant/session/jiraCommands.ts`.
 
-**Imports-only notice (`@jira` only).** A prompt the intent parse does not read as one of the imports
-(`createFromEmail`, `addEmailComment`, `importVeracode`, `importWaltzReport`) is `other` and gets
-`JIRA_ONLY_IMPORTS_NOTICE`, which points to `/ts-jira help` and Agent mode; nothing is read from or written to Jira.
+**Imports-only notice (`@jira` only).** A prompt the intent parse does not read as an email import
+(`createFromEmail`, `addEmailComment`) is `other` and gets
+`JIRA_ONLY_IMPORTS_NOTICE`, which points to the import board for Veracode and Waltz reports, and to `/ts-jira help` and Agent mode; nothing is read from or written to Jira.
 `@bitbucket` has no equivalent, since it has no LLM intent classifier, only a PR-URL match.
 
 **KTD14.** `@bitbucket`'s greeting response delivers its example prompts *only* as follow-up chips, capped at 2-3
@@ -231,7 +231,7 @@ added in a later unit) does not auto-open.
 
 Each step's button opens Copilot Chat pre-filled with the relevant `/ts-jira`
 command via `workbench.action.chat.open` (the same command
-`extension.ts`'s `.eml`/Veracode/Waltz import commands already use to open
+`extension.ts`'s `.eml` import command uses to open
 chat with a fixed query), or runs the credential-setup command directly.
 
 ## Getting-Started walkthrough: Bitbucket

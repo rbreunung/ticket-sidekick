@@ -365,7 +365,7 @@ describe('buildDescriptionWiki', () => {
 });
 
 // chunkComponentLabels/buildDedupJql/extractDedupMap/buildReviewRows were Waltz-local wrappers
-// around the shared primitives in reportImport.ts; they've been removed now that waltzHandler.ts
+// around the shared primitives in reportImport.ts; they've been removed now that src/imports/waltz.ts
 // calls those shared primitives directly — see reportImport.test.ts for their tests.
 
 describe('Waltz record labels', () => {

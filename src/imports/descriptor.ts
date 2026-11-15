@@ -26,10 +26,10 @@ export interface ReportImportRow extends ReviewRowBase {
  * shape instead.
  */
 export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
-  // R6/KTD4: identifies which importer this is to the shared issue-type chat-ask's
-  // AwaitIssueTypeResume — JiraParticipant.ts's router uses it to pick which of
-  // veracodeHandler.ts's/waltzHandler.ts's/emailHandler.ts's handleXAwaitIssueType wrapper to
-  // resume through.
+  // Identifies which importer this is. The shared issue-type chat-ask's AwaitIssueTypeResume
+  // carries it, and JiraParticipant.ts's router resumes only an 'email' one, through
+  // emailHandler.ts's handleEmailAwaitIssueType; the import board picks the Veracode or Waltz
+  // descriptor by its recipe's kind.
   descriptorKind: 'veracode' | 'waltz' | 'email';
   scope: string; // logDiag scope, e.g. 'jira.veracode' / 'jira.waltz' / 'jira.email'
   importLabel: string; // e.g. 'Veracode' / 'Waltz OSS' — used only in the final diag-log line
@@ -80,8 +80,8 @@ export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
   // marker-label concept (email) omits this and the stale section/ask never runs for it.
   // `buildActivePredicate` receives the batch's raw, unfiltered items (see
   // ImportTemplateSelectionSession.rawItems) and returns the "is this marker id still active"
-  // predicate findStaleTickets() needs; the importer's own handler file (veracodeHandler.ts/
-  // waltzHandler.ts) casts `rawItems` back to its real type before delegating to
+  // predicate findStaleTickets() needs; the importer's own descriptor (src/imports/veracode.ts /
+  // src/imports/waltz.ts) casts `rawItems` back to its real type before delegating to
   // buildVeracodeActiveFlawPredicate/buildWaltzActiveComponentPredicate.
   stale?: {
     markerLabel: string;

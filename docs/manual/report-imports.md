@@ -1,8 +1,8 @@
 # Report Imports (Email, Veracode, Waltz)
 
-> **Deprecated.** The `@jira` chat participant this page describes is deprecated. It stays the way to do this until the imports have a board; see [Jira Tools for Copilot Chats](copilot-tools.md) and [Boards](boards.md) for the current way to work.
+> **Where each import runs.** Veracode and OSS (Waltz) reports are imported on the [import board](boards.md#import-board), which replaced their `@jira` imports. Emails are still imported with the deprecated `@jira` chat participant, until the import board has an email kind.
 
-Part of `@jira` — turns a `.eml` email, a Veracode Detailed Report, or a Waltz OSS Report into Jira tickets. See the main [README](../../README.md) for setup and core commands first.
+Turns a `.eml` email, a Veracode Detailed Report, or a Waltz OSS Report into Jira tickets. See the main [README](../../README.md) for setup and core commands first.
 
 ## Create Jira ticket from email (.eml)
 
@@ -92,23 +92,22 @@ The comment includes the sender name and received date as a header, followed by 
 | `ticketSidekick.email.maxBatchSizeMB` | `150` | Largest total size (1–500 MB) of the `.eml` files selected for one batch; a larger batch is rejected before any file is read |
 | `ticketSidekick.email.boilerplatePatterns` | `[]` | Your known confidentiality headers, legal footers and signatures, found and offered for removal before import (see above) |
 
+## Reviewing an email batch
+
+An email batch has only new tickets, so `@jira` opens its review screen directly. Toggle rows by replying their numbers (or `include all` / `exclude all`, `next` / `prev` for more pages of 50), then reply **Create N tickets** (or **ok**). Each **Create N tickets** creates at most 50 tickets. The batch finishes by itself once every ticket is created: the summary appears right after the results and you do not need to reply **Done**. It stays open, with **Done**, while an email failed to create or you excluded it, so you can retry or end it yourself.
+
+The screen keeps its buttons and ends with one `Commands:` line listing the typed commands it understands. Reply `help` (or click **help**) to see every command with its syntax and what it does. A reply the screen cannot use prints the same help, after one line saying what was not understood or why it was refused.
+
 ## Create Jira tickets from a Veracode report (.xml)
+
+Veracode reports are imported on the **import board**. The `@jira import veracode report` request and the "Create Jira tickets from Veracode report (.xml)" command are gone; `@jira` now answers such a request with a pointer to the board.
 
 Export a Detailed Report XML from Veracode, then:
 
-1. Run **Command Palette → Ticket Sidekick: Create Jira tickets from Veracode report (.xml)**
-2. Select the `.xml` file
-3. Pick a template or issue type in the `@jira` chat
-4. Review the results (see [Reviewing an import](#reviewing-an-import) below) — new flaws, flaws that already have a ticket, and stale tickets each get their own screen and their own action
-5. Tickets are created one per group of related flaws (flaws in the same file with the same CWE, or on the same line, fold into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with severity, CWE (linked to the public CWE definition), file/line location, each flaw's own description, and the category's remediation recommendation
-
-You can also trigger the import from the chat directly:
-
-```text
-@jira import veracode report
-```
-
-A file picker opens, and you proceed as above.
+1. Run **Command Palette → Ticket Sidekick: Open import board**, or ask Copilot in Agent mode with the file's path (or drag the file into the chat), or type `/ts-jira import veracode <path>`
+2. On the start screen, pick **Veracode** and the `.xml` file. The template comes from `ticketSidekick.veracode.template`; when that setting is empty, the start screen asks for one once and saves it (see [Boards → Import board](boards.md#import-board))
+3. Review the results on the board's tabs (see [Reviewing an import](#reviewing-an-import) below): new flaws, flaws that already have a ticket, and stale tickets each have their own tab, with their own Preview and Apply
+4. Tickets are created one per group of related flaws (flaws in the same file with the same CWE, or on the same line, fold into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with severity, CWE (linked to the public CWE definition), file/line location, each flaw's own description, and the category's remediation recommendation
 
 Each ticket is labeled `veracode`, `veracode-issue-<id>`, and `cwe-<id>` (plus any labels from your chosen template), so re-running the import after a partial run — or after remediating some flaws and re-scanning — will not create duplicate tickets for flaws that already have one.
 
@@ -116,45 +115,37 @@ Each ticket is labeled `veracode`, `veracode-issue-<id>`, and `cwe-<id>` (plus a
 
 | Setting | Default | Description |
 |---|---|---|
+| `ticketSidekick.veracode.template` | empty | The template a Veracode import uses; asked for once on the start screen and saved here when empty |
 | `ticketSidekick.veracode.minSeverity` | `4` | Minimum severity (0–5) included by default |
 | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` | Remediation statuses included by default |
 | `ticketSidekick.veracode.maxReportSizeMB` | `50` | Largest report file (1–200 MB) accepted; a larger file is rejected before it is read |
 | `ticketSidekick.veracode.slaDays` | Very High 14, High 28, the rest 0 | Calendar days from first found to the Jira Due Date, per severity; 0 means no Due Date (see [Due dates from your SLA table](#due-dates-from-your-sla-table)) |
 
-Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of scope). Each **Create N tickets** creates at most 50 tickets (one page) — reply `next` on the New screen and create again for the remainder of a larger report.
+Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of scope). One Apply creates at most 50 tickets; the preview says how many remain, and the next Apply creates the rest.
 
 ### Due dates from your SLA table
 
 Each flaw's due date is the date Veracode first found it plus the number of days for its severity in `ticketSidekick.veracode.slaDays` (see the [settings reference](settings-reference.md#report-import-settings)). The table ships with Very High 14 days and High 28 days; the other severities are 0, which means no due date. Change the numbers to your company's policy.
 
 - **On a new ticket**, the Jira **Due Date** is the earliest due date of the ticket's flaws, written as it is even when already past. The ticket's Findings table shows each flaw's **First found** date and **Due date**; a very large fold's slimmer table leaves them out, but the Due Date field still carries the date. A flaw whose report entry has no first-found date counts from the ticket's creation date (today, for a new ticket). A severity at 0 gets no Due Date, and an existing Due Date is never cleared. If your project does not show the Due Date field, the ticket is still created or rewritten without it: you get a warning, and the dates stay in the description.
-- **A Due Date is set once.** Later imports do not recalculate or overwrite it, so a date you moved by hand, such as an agreed extension, stays, and changing the table does not reach tickets that already have a Due Date. The one exception is flaws joining a ticket: with `add … to <KEY>` and `as rewrite`, or new findings on the ticket, the Due Date becomes the earlier of its current date and the earliest due date of the joining flaws, and never later. `as comment` never touches the Due Date.
-- **Tickets that have no Due Date.** On the Already ticketed screen, an open ticket with an empty Due Date whose flaws have a due date shows as changed (for example `due none→2026-12-01`) and defaults to `rewrite`, which sets it. `rewrite` also rebuilds the ticket's description and replaces any text added by hand, so check the rows before you apply. Apply runs at most 50 actions per reply: repeat it, especially on the first import after the upgrade. A resolved ticket is not offered a change for a missing date alone.
-- **Export and overview.** `export`, `export csv` and `export xlsx` show the same due dates and flags for items that have no ticket yet (an item without a Fix Version is flagged against the latest unreleased release, see the Flag column below), and the security report board flags Veracode tickets by their Jira Due Date like OSS tickets, see [Security report: open Veracode and Waltz tickets by release](#security-report-open-veracode-and-waltz-tickets-by-release).
+- **A Due Date is set once.** Later imports do not recalculate or overwrite it, so a date you moved by hand, such as an agreed extension, stays, and changing the table does not reach tickets that already have a Due Date. The one exception is flaws joining a ticket: with **Add selected to ticket** as a rewrite, or new findings on the ticket, the Due Date becomes the earlier of its current date and the earliest due date of the joining flaws, and never later. Adding as a comment never touches the Due Date.
+- **Tickets that have no Due Date.** On the Already ticketed tab, an open ticket with an empty Due Date whose flaws have a due date shows as changed, marked "No Due Date", and defaults to `rewrite`, which sets it. `rewrite` also rebuilds the ticket's description and replaces any text added by hand, so check the rows before you apply. One Apply writes at most 50 tickets: apply again for the rest, especially on the first import after the upgrade. A resolved ticket is not offered a change for a missing date alone.
+- **Export and overview.** **Save overview as CSV…** and **Save overview as Excel…** show the same due dates and flags for items that have no ticket yet (an item without a Fix Version is flagged against the latest unreleased release, see the Flag column below), and the security report board flags Veracode tickets by their Jira Due Date like OSS tickets, see [Security report: open Veracode and Waltz tickets by release](#security-report-open-veracode-and-waltz-tickets-by-release).
 
 ### Reviewing an import
 
-When an import finds more than one kind of result, `@jira` first shows an **overview** listing each group with its count:
+The import board shows each group as a tab with its count. Its controls are described in [Boards → Import board](boards.md#import-board); this section says what each group means.
 
-- **New** — findings without a ticket yet. Open it to toggle rows (reply row numbers, `include all` / `exclude all`, `next` / `prev` for more pages), fold rows together (`merge 2 4`, `unmerge 2`) or add them to an existing ticket (`add 2 4 to PROJ-123`) — see [Folding findings into one ticket](#folding-findings-into-one-ticket) — hide CVEs you have decided to accept (`accept CVE 2 4`, OSS reports only — see [Accepting CVEs](#accepting-cves-you-have-decided-to-live-with)) — and reply **Create N tickets** (or **ok**) to create the included rows on the visible page.
-- **Already ticketed** — findings that already have a ticket. Each row shows its ticket, the ticket's status, what changed since the ticket was made (for example "+2 CVEs, High→Critical" or "+1 flaw"), and a proposed action. The screen lists 20 rows per page: reply `next`, `prev` or `page 3` to move between pages. Click another action in the row, or reply e.g. `A2 new ticket` (for a row on any page) or `all leave`, then reply **Apply** (or **ok**); **Apply** acts on the rows of every page. Veracode and OSS reports offer the same three actions:
-  - **rewrite** — rebuilds the existing ticket's title, description and labels from the report and posts a comment naming what was added and what dropped out (see [Folding findings into one ticket](#folding-findings-into-one-ticket)). It replaces text you added to the description by hand. It rebuilds the whole ticket, so set it on all the rows that point to the same ticket or on none of them; **Apply** stops with nothing written otherwise.
+- **New** — findings without a ticket yet. Include or leave out rows, fold rows together or add them to an existing ticket (see [Folding findings into one ticket](#folding-findings-into-one-ticket)), accept CVEs or components (OSS reports only — see [Accepting CVEs](#accepting-cves-you-have-decided-to-live-with)), and create the included rows.
+- **Already ticketed** — findings that already have a ticket. Each row shows its ticket, the ticket's status, what changed since the ticket was made (for example a new CVE, a higher rating or a new flaw), and a proposed action. The tab opens on the rows that changed or have no Due Date; the others are under **Unchanged** and **All**. Veracode and OSS reports offer the same three actions:
+  - **rewrite** — rebuilds the existing ticket's title, description and labels from the report and posts a comment naming what was added and what dropped out (see [Folding findings into one ticket](#folding-findings-into-one-ticket)). It replaces text you added to the description by hand. It rebuilds the whole ticket, so set it on all the rows that point to the same ticket or on none of them; the preview refuses a mix and writes nothing.
   - **new ticket** — creates a complete new ticket for the finding with its current content, titled `… (follow-up to PROJ-123)` and linked to the resolved ticket. Offered only when every ticket for the finding is resolved. See also [Keeping OSS tickets up to date](#keeping-oss-tickets-up-to-date).
   - **leave** — does nothing.
 
   Rows without changes propose **leave**. A change on an open ticket proposes **rewrite**; a change whose tickets are all resolved proposes **new ticket**.
-- **Stale tickets** — open tickets whose finding is no longer in the report. The screen lists 20 tickets per page: reply `next`, `prev` or `page 3` to move between pages. Toggle a ticket by its key (e.g. `PROJ-123`) and reply **Close N tickets** (or **ok**); tickets marked on any page are closed together. You then pick where the tickets go: one of your matching cleanup rules (listed first), or any status your workflow can reach, such as a review status like "Verification". Each run handles one issue type; if your selection mixes issue types, you are asked which one to close first. A resolution is asked only when the target is a closing status and no rule supplies one. Reply **Back** at any point to return without changing anything. A ticket needs a discovered workflow to be selectable; `/ts-jira workflow <KEY>` discovers it for a ticket of that project and issue type. Tickets you move to a status that isn't final stay open, so later imports list them again as stale.
+- **Stale** — open tickets whose finding is no longer in the report. Check the tickets to close, then choose where each issue type goes: one of your matching cleanup rules (listed first), or any status your workflow can reach, such as a review status like "Verification". A resolution is asked only when the target is a closing status and no rule supplies one. One Apply can close tickets of several issue types. A ticket needs a discovered workflow to be selectable; `/ts-jira workflow <KEY>` discovers it for a ticket of that project and issue type. Tickets you move to a status that isn't final stay open, so later imports list them again as stale.
 
-Each screen only understands its own replies, and each action only affects its own group — nothing is created, updated or closed until you choose that group's action. Reply **Back to overview** to switch groups and **Done** to finish; the overview keeps track of what you already did (e.g. "50 created · 12 left"). When an import has only one kind of result (always the case for email batches), that screen opens directly and offers **Done** instead of an overview. An email batch finishes by itself once every ticket is created: the summary appears right after the results and you do not need to reply **Done**. It stays open, with **Done**, while an email failed to create or you excluded it, so you can retry or end it yourself.
-
-### The Commands line, help and finding a ticket
-
-Each review screen keeps its buttons (**Create**, **Apply**, **Close**, **Back to overview**, **Done**) and ends with one `Commands:` line listing the typed commands that screen understands, grouped by purpose, for example `rows`, `group`, `hide` and `find` on the New screen. The line shows only what your report type supports: `search` for Veracode and OSS reports, the accept commands for OSS reports only. The overview and the add and merge confirmations show just a **help** link.
-
-Reply `help` (or click **help**) to see every command of the current screen with its syntax and what it does. The help is printed once; the next screen is compact again. A reply the screen cannot use prints the same help, after one line saying what was not understood, or why it was refused (for example "Row 9 isn't a New row on this page").
-
-- **Paging.** The page line shows a control only for a direction that exists: `next` on the first page, `prev` on the last, both in between, and `page <n>` once there are three or more pages. `next` on the last page or `prev` on the first answers "You are on the last page" or "You are on the first page" and changes nothing.
-- **Finding the ticket to add to.** On the New and Already ticketed screens (Veracode and OSS reports), `search netty` lists the open tickets this review already matched whose summary contains every word, each with the row ids it belongs to. `merge 2 4 into A3` (or a ticket key) then adds those New rows to a listed ticket, the same as `add 2 4 to PROJ-123`. `show` prints the screen you came from again after a search or an export. Search only reads tickets the import already found; for any other ticket use `add 2 4 to PROJ-123` with its key.
+Each tab's Apply affects only its own group — nothing is created, updated or closed until you apply that tab's change.
 
 ### Folding findings into one ticket
 
@@ -162,37 +153,32 @@ Several findings are often one piece of work: ten SQL injections in one reposito
 
 **Veracode folds automatically.** Flaws in the same file with the same CWE become one row and one ticket, whatever their lines. Flaws on the same line fold too, whatever their CWE. A flaw with no source file never folds, and a flaw with no CWE never folds by CWE. Waltz folds nothing automatically; every component is its own row.
 
-**Fold more yourself on the New screen** (both importers):
+**Fold more yourself on the New tab** (both report kinds):
 
-| Reply | What it does |
+| Control | What it does |
 |---|---|
-| `merge 2 4` (or `merge 2,4`) | Combines the named rows into one row — any CWEs, files, components or versions. Works on the rows of the visible page only. |
-| `unmerge 2` | Splits a merged row back into the rows it came from. |
-| `add 2 4 to PROJ-123` | Adds those rows to an existing ticket (see below). |
+| **Merge selected** | Combines the selected rows into one row — any CWEs, files, components or versions. |
+| **Unmerge** | Splits a merged row back into the rows it came from. |
+| **Add selected to ticket** | Adds the selected rows to an existing ticket (see below). |
 
-A merge is not saved between pages or between imports: moving to another page discards it, and a later import shows the members as separate rows again.
+A merge stays on the board until you unmerge it or create the ticket. It is not kept between imports: a later import shows the members as separate rows again.
 
 **What a folded ticket looks like.** The title says what it folds instead of listing ids, for example `OrderRepository.java - SQL Injection (7 findings)`, `OrderRepository.java - 7 findings: SQL Injection, Cross-Site Scripting` when CWEs are mixed, `OrderRepository.java +2 files - SQL Injection (7 findings)` across files, or `[OSS] netty-codec:4.1.100 +2 components — High`. The description opens with a banner stating how many findings it folds and a table with one row per finding (issue id or component, severity or rating, location, and so on), followed by a section per finding with its own details. If a description would get too long for Jira, the per-finding text is shortened and a note says so; the table always lists every finding. The ticket carries the labels of every finding in it, so the next import recognizes each of them.
 
-**Add rows to an existing ticket.** `add 2 4 to PROJ-123` works for any ticket, including one a colleague created by hand. It first shows the ticket, warns if it is resolved, and offers two links:
+**Add rows to an existing ticket.** **Add selected to ticket** works for any ticket, including one a colleague created by hand. Type its key and choose how:
 
-- **Comment** — adds the findings' labels to the ticket and posts one comment listing them. The ticket's description and title stay as they are.
-- **Rewrite** — **overwrites the ticket's description and title** with the findings of this report (the added rows plus the Already-ticketed rows that point to this ticket), adds the labels, and posts a comment listing what was added and any finding the ticket recorded that the new description no longer covers. The first screen lists those findings before you click.
+- **as a comment** — adds the findings' labels to the ticket and posts one comment listing them. The ticket's description and title stay as they are.
+- **as a rewrite** — **overwrites the ticket's description and title** with the findings of this report (the added rows plus the Already-ticketed rows that point to this ticket), adds the labels, and posts a comment listing what was added and any finding the ticket recorded that the new description no longer covers.
 
-Both choices change the ticket's labels. Nothing is written until you click one. If a write fails, the rows stay in New; if only the comment fails, the write stands and the rows leave New.
+**Preview add…** reads the ticket first: it shows its summary and status, warns if it is resolved, and for a rewrite lists the findings the rewrite drops. Both choices change the ticket's labels. Nothing is written until you apply. If a write fails, the rows stay in New; if only the comment fails, the write stands and the rows leave New. A comment does not settle the ticket's rows on Already ticketed: they still offer their own action.
+
+To find the ticket to add to, **Search matched tickets** lists the open tickets this import already matched whose summary contains the text. It makes no Jira call; for any other ticket, type its key.
 
 ### Merging tickets
 
-The **Ticket** cell on the Already ticketed screen shows the ticket a row points to. When another ticket for the same item is still open, the cell names it, for example `PROJ-1301 · also open: PROJ-1190` (up to three keys, then `+N`). Closed tickets (a resolution is set) are not shown. The screen then offers a `merge` reply built from that row's tickets.
+Two or more tickets for the same piece of work can be combined. On the **Already ticketed** tab, pick the rows of the tickets, choose the ticket to keep (one of the picked ones, or type its key), and click **Preview merge tickets…**. You choose the direction: keeping PROJ-1301 closes PROJ-1190, and keeping PROJ-1190 closes PROJ-1301.
 
-Two or more tickets for the same piece of work can be combined. On the overview or the **Already ticketed** screen, reply `merge` with the tickets to close, then `into` and the ticket to keep. Name tickets by their `A` number or their key. You choose the direction; `merge PROJ-1190 into PROJ-1301` keeps PROJ-1301, and swapping the two keeps PROJ-1190:
-
-```text
-merge A5 A6 into A3
-merge PROJ-15 PROJ-18 into PROJ-12
-```
-
-`@jira` first shows the tickets, the steps and any warnings, and writes nothing. Click **Merge** to go ahead. Merging works differently for the two kinds of report.
+The preview reads the tickets and shows them, the steps and any warnings, and writes nothing. Apply asks VS Code's dialog, then a **Ticket merge** tab runs the steps (see [Boards → Ticket merge](boards.md#ticket-merge)). Merging works differently for the two kinds of report.
 
 **OSS reports.** Then:
 
@@ -204,44 +190,36 @@ merge PROJ-15 PROJ-18 into PROJ-12
 
 1. If it records flaws the kept ticket lacks and the report still lists them, or the report lists a flaw no ticket records yet, the kept ticket is rebuilt once from the report so it carries them all (its Due Date follows the usual rule: set only when empty, moved earlier only when the added flaws are due sooner). If every flaw is already on the kept ticket, nothing is rewritten.
 2. The two tickets are linked: `Duplicate` when nothing moved, `Relates` when flaws moved.
-3. A comment on the closed ticket names the kept one. A flaw that is not moved is named in that comment: one the report no longer lists, or one the report still lists but outside the kept ticket's rows (filtered by your settings, or grouped under another ticket). The confirmation says which.
+3. A comment on the closed ticket names the kept one. A flaw that is not moved is named in that comment: one the report no longer lists, or one the report still lists but outside the kept ticket's rows (filtered by your settings, or grouped under another ticket). The preview says which.
 4. The ticket is closed. You pick the status; the resolution is Duplicate when your project has it, otherwise you pick one.
 
-If the kept ticket cannot be rebuilt (the step fails and you reply **Ignore**), the sources that had flaws to move are not linked, commented on or closed, so their flaws never end up only on a closed ticket; the final report lists those steps as still missing.
+If the kept ticket cannot be rebuilt (the step fails and you choose **Ignore**), the sources that had flaws to move are not linked, commented on or closed, so their flaws never end up only on a closed ticket; the end of the merge lists those steps as not done.
 
 What to expect:
 
-- **Warnings before you click.** A resolved kept ticket, a ticket that no import created (a rewrite replaces its text, and the finding it would drop are listed), and an already-resolved cancelled ticket (OSS reports: it is rewritten and linked but not closed; Veracode: it is linked and commented on but not closed).
-- **Missing Jira pieces.** Without a Duplicate link type the tickets are linked as Relates. Without a Duplicate resolution you pick the resolution from your project's list. The confirmation says so up front.
-- **If a step fails,** the merge stops and lists every ticket with its link, the step that failed and the error. Reply **Retry** to run that step again, **Ignore** to skip it and carry on with the rest (the final report lists what is missing), or **Stop here** to end the merge. Steps already done stay done.
-- **A ticket Jira closes without the Duplicate resolution** (some workflows reject the field) is named in the final report.
-- **Reload report.** Merge also turns on `reload report` for Veracode imports, because the screens go out of date after a merge.
-- **Where it works.** The overview and the Already ticketed screen. On the New screen `merge 2 4` still combines rows, and `add 2 4 to PROJ-123` still adds rows to a ticket. The Stale screen has its own **Close tickets**.
-- **Later imports.** Nothing is stored. The kept ticket stays open, so it is the one later imports propose changes for; the closed ticket is resolved and is left alone, and its labels still count as known, so its items do not come back as new.
+- **Warnings before you apply.** A resolved kept ticket, a ticket that no import created (a rewrite replaces its text, and the findings it would drop are listed), and an already-resolved cancelled ticket (OSS reports: it is rewritten and linked but not closed; Veracode: it is linked and commented on but not closed).
+- **Missing Jira pieces.** Without a Duplicate link type the tickets are linked as Relates. Without a Duplicate resolution you pick the resolution from your project's list. The preview says so up front.
+- **If a step fails,** the merge stops and the merge tab shows every step with its status and the error. **Retry…** runs that step again, **Ignore…** skips it and carries on with the rest (the end of the merge lists what is missing), and **Stop…** ends the merge. Steps already done stay done.
+- **The closes.** Before the tickets are closed, you choose the target status, and the resolution where one is asked, for every issue type of the tickets to close. One Apply then closes them all.
+- **A ticket Jira closes without the Duplicate resolution** (some workflows reject the field) is named when the merge ends.
+- **Later imports.** The kept ticket stays open, so it is the one later imports propose changes for; the closed ticket is resolved and is left alone, and its labels still count as known, so its items do not come back as new.
 
-After a merge the review refreshes itself from Jira, unless you have unfinished choices on the screen (excluded or merged New rows, or Already-ticketed actions you changed). In that case the overview says the screens are out of date and offers **Reload report**.
+After a merge the tabs show the new reading from Jira, except a tab where you have unfinished choices: it is marked out of date and offers **Refresh**, which keeps every choice whose rows still exist.
 
 ### Reloading the report
 
-Reply **Reload report** (`reload report`) on the overview, or on the only screen of a single-group import, to read the same report file again, check Jira again and rebuild every screen. It also picks up edits to `.jira-oss-accepted.json`. `@jira` says what it will do, and warns first if you would lose choices you have made on the screens. If the report file has moved, it opens the file picker.
+**Reload report…** reads the same report file again, checks Jira again and rebuilds every tab. It also picks up edits to `.jira-oss-accepted.json`. Its preview lists the choices you have made, each kept if its rows are still in the report and dropped otherwise; after Apply the board names the ones it dropped. If the report file has moved, the board offers **Pick the file again…** instead.
 
 ## Create Jira tickets from an OSS report (.xlsx)
 
+OSS reports are imported on the **import board**. The `@jira import oss report` request and the "Create Jira tickets from OSS report (.xlsx)" command are gone; `@jira` now answers such a request with a pointer to the board.
+
 Export an "OSS Report" from Waltz (or a compatible SCA tool) as `.xlsx`, then:
 
-1. Run **Command Palette → Ticket Sidekick: Create Jira tickets from OSS report (.xlsx)**
-2. Select the `.xlsx` file
-3. Pick a template or issue type in the `@jira` chat
-4. Review the results (see [Reviewing an import](#reviewing-an-import) below), the same way as a Veracode import
-5. Tickets are created one per component (use `merge` to fold related components such as a family of `netty-*` artifacts into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with the max vulnerability rating, the dates by which the component must be fixed, the single most critical CVE up front, affected artifact paths, and a table of known vulnerabilities
-
-You can also trigger the import from the chat directly:
-
-```text
-@jira import oss report
-```
-
-A file picker opens, and you proceed as above.
+1. Run **Command Palette → Ticket Sidekick: Open import board**, or ask Copilot in Agent mode with the file's path (or drag the file into the chat), or type `/ts-jira import waltz <path>`
+2. On the start screen, pick **Waltz OSS** and the `.xlsx` file. The template comes from `ticketSidekick.waltz.template`; when that setting is empty, the start screen asks for one once and saves it
+3. Review the results on the board's tabs (see [Reviewing an import](#reviewing-an-import) above), the same way as a Veracode import, plus an **Accepted** tab
+4. Tickets are created one per component (use **Merge selected** to fold related components such as a family of `netty-*` artifacts into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with the max vulnerability rating, the dates by which the component must be fixed, the single most critical CVE up front, affected artifact paths, and a table of known vulnerabilities
 
 Each ticket is labeled `oss-dependency` and a sanitized, collision-safe version of the component's name (plus any labels from your chosen template), so re-running the import will not create duplicate tickets for components that already have one.
 
@@ -260,7 +238,7 @@ The ticket's Jira **Due Date** is the planned date, or the policy date when ther
 
 ### Keeping OSS tickets up to date
 
-Import a newer report and the **Already ticketed** screen compares it with your tickets. A row is a **change** when its component has a new CVE, a higher rating, different dates than the ticket's description records (the plan status is not compared), or when a component that a combined ticket covers is no longer in the report. A ticket made before dates existed records none, so it counts as changed as soon as the report has dates for it. A component that is only hidden by your rating or action settings, or that you accepted, has not left the report.
+Import a newer report and the **Already ticketed** tab compares it with your tickets. A row is a **change** when its component has a new CVE, a higher rating, different dates than the ticket's description records (the plan status is not compared), or when a component that a combined ticket covers is no longer in the report. A ticket made before dates existed records none, so it counts as changed as soon as the report has dates for it. A component that is only hidden by your rating or action settings, or that you accepted, has not left the report.
 
 | Action | What it does | When it is offered |
 |---|---|---|
@@ -268,37 +246,31 @@ Import a newer report and the **Already ticketed** screen compares it with your 
 | **leave** | Does nothing. | Always |
 | **new ticket** | Creates a complete new ticket for the component, with its current content, dates and Due Date, titled `… (follow-up to PROJ-123)` and linked to the resolved ticket. | Only when every ticket of the component is resolved |
 
-A change on an open ticket proposes **rewrite**; a change where every ticket is resolved proposes **new ticket**, because a component that is still in the report is still open work; no change proposes **leave**. Rows that point to the same ticket always propose the same action, because **rewrite** rebuilds the whole ticket. Each changed row shows the dates side by side, for example `planned 2026-12-15→2027-01-31`, so importing an older report over a newer one is visible before you **Apply**. Type the action as e.g. `A2 new ticket`.
+A change on an open ticket proposes **rewrite**; a change where every ticket is resolved proposes **new ticket**, because a component that is still in the report is still open work; no change proposes **leave**. Rows that point to the same ticket always propose the same action, because **rewrite** rebuilds the whole ticket. A row whose dates changed says "Remediation dates changed", and the comment a rewrite posts lists each changed date, for example `policy 2026-12-31 → 2027-03-31`.
 
 Things to know:
 
-- **A rewrite sets the Due Date from the report, even over a date you changed by hand in Jira**, and the result line says so. It also replaces text you added to the description by hand.
-- A component that disappears from the report is handled by the **Stale tickets** group, which does not touch the Due Date.
-- The first import after upgrading can propose many actions: every open ticket whose component now has dates proposes **rewrite**, and every resolved one that is still in the report proposes **new ticket**. **Apply** runs at most 50 per reply, so repeat it, and look through the **new ticket** rows before you apply them.
-- **update** and **re-create** are no longer offered for OSS reports.
+- **A rewrite sets the Due Date from the report, even over a date you changed by hand in Jira**, and the result says so. It also replaces text you added to the description by hand.
+- A component that disappears from the report is handled by the **Stale** tab, which does not touch the Due Date.
+- The first import after upgrading can propose many actions: every open ticket whose component now has dates proposes **rewrite**, and every resolved one that is still in the report proposes **new ticket**. One Apply writes at most 50 tickets, so apply again for the rest, and look through the **new ticket** rows before you apply them.
+- **update** and **re-create** are not offered for OSS reports.
 
 **Settings:**
 
 | Setting | Default | Description |
 |---|---|---|
+| `ticketSidekick.waltz.template` | empty | The template an OSS report import uses; asked for once on the start screen and saved here when empty |
 | `ticketSidekick.waltz.minVulnRating` | `High` | Minimum "Max Vuln Rating" (Low/Medium/High/Critical) included by default |
 | `ticketSidekick.waltz.includeRemediationActions` | `["", "Remediate"]` | Remediation Action values included by default (empty string means the column was blank) |
 | `ticketSidekick.waltz.maxReportSizeMB` | `50` | Largest report file (1–200 MB) accepted; a larger file is rejected before it is read |
 
-Each **Create N tickets** creates at most 50 tickets (one page) — reply `next` on the New screen and create again for the remainder. If you re-run the import later, already-created tickets are automatically skipped via the dedup check.
+One Apply creates at most 50 tickets; the preview says how many remain, and the next Apply creates the rest. If you re-run the import later, already-created tickets are automatically skipped via the dedup check.
 
 ### Accepting CVEs you have decided to live with
 
 Some CVEs are known and accepted (not reachable in your setup, no fix available yet). Record them once and the OSS import stops offering them in **New**.
 
-On the New screen, reply `accept CVE` and the row numbers:
-
-```text
-accept CVE 2 4
-accept CVE 2 because only reachable from the internal network
-```
-
-A bare `accept 2 4` records nothing: it answers with the two spellings, `accept CVE <rows>` for the rows' CVEs and `accept component <rows>` for whole components (below).
+On the New tab, select the rows, type a reason if you want one, and click **Preview accept CVEs of selected…**, then Apply. CVEs can be accepted from New rows only.
 
 The CVEs listed on those rows are written to `.jira-oss-accepted.json` in the workspace root, next to `.jira-templates.json`. The reason is optional. Commit the file and your team shares the same decisions; you can also edit it by hand:
 
@@ -316,23 +288,16 @@ How it applies:
 - **Matched by component name and CVE, not version.** `netty-codec:4.1.100` and `netty-codec:4.1.101` are the same component, so an upgrade that still reports the accepted CVE stays hidden. A new CVE on the same component is offered again.
 - **A partly accepted component stays in New** with only its remaining CVEs: the ticket's description, CVE labels and rating cover just those, and the rating is recomputed from them. A component whose CVEs are all accepted disappears from New.
 - **The rating floor still applies.** If a component's remaining CVEs rate below `ticketSidekick.waltz.minVulnRating` after the accepted ones are dropped, it is hidden too.
-- **Merged rows.** `accept CVE` on a merged row accepts the CVEs of every component in it.
-- **CVE entries affect the New screen only.** The Already ticketed and Stale screens are unchanged by them, so a later import can still propose adding an accepted CVE to an existing ticket. To take a whole component off all three screens, accept it as a component (below).
+- **Merged rows.** Accepting the CVEs of a merged row accepts the CVEs of every component in it.
+- **CVE entries affect the New tab only.** The Already ticketed and Stale tabs are unchanged by them, so a later import can still propose adding an accepted CVE to an existing ticket. To take a whole component off all three tabs, accept it as a component (below).
 
-Nothing is hidden silently: the overview (or the New screen, when the import has only one group) shows a line such as "3 accepted CVEs hidden · 1 component below the rating floor". Reply `accepted` to list the entries with their reasons, and `unaccept 2` (or click **Remove**) to delete an entry. A **Remove** link names the entry itself (`unaccept netty-codec CVE-2024-1234`), so a link from an older list never deletes a different entry after the list has changed. A removed entry is offered again right away: OSS reviews rebuild themselves from the report (or, if you have unfinished choices on the screens, mark themselves out of date and offer **Reload report**).
+The **Accepted** tab lists the entries with their reasons. **Unaccept…** deletes an entry after a preview, and the entry is offered again right away: the tabs read the report again, or, where you have unfinished choices, are marked out of date and offer **Refresh**.
 
-If `.jira-oss-accepted.json` is not valid JSON, the import hides nothing and shows a warning. If it has an entry that cannot be read (for example a mistyped key), that entry is skipped with a warning. In both cases `accept` and `unaccept` leave the file alone until you fix it, so nothing you wrote by hand is lost.
+If `.jira-oss-accepted.json` is not valid JSON, the import hides nothing and shows a warning. If it has an entry that cannot be read (for example a mistyped key), that entry is skipped with a warning. In both cases accept and unaccept leave the file alone until you fix it, so nothing you wrote by hand is lost.
 
 ### Accepting a whole component at its version
 
-Some components cannot be fixed at all (no newer version exists, or the risk is accepted). Accept the component at that exact version and the OSS import stops asking about it everywhere:
-
-```text
-accept component 2 4
-accept component A3 because no newer version exists
-```
-
-Use the New screen's row numbers, or the `A` numbers on the Already ticketed screen. The reason is optional. Each component is written to the same `.jira-oss-accepted.json` as an entry with a `version` and no `cve`:
+Some components cannot be fixed at all (no newer version exists, or the risk is accepted). Accept the component at that exact version and the OSS import stops asking about it everywhere: select its rows on the New tab and click **Preview accept components of selected…**, or pick its rows on the Already ticketed tab and click **Preview accept components of picked…**. The reason is optional. Each component is written to the same `.jira-oss-accepted.json` as an entry with a `version` and no `cve`:
 
 ```json
 {
@@ -346,20 +311,20 @@ Use the New screen's row numbers, or the `A` numbers on the Already ticketed scr
 What happens to an accepted component:
 
 - **New:** it is never offered as a new ticket.
-- **Already ticketed:** its existing tickets drop off the screen, whether they are open or resolved.
-- **Stale:** an existing ticket with no resolution is offered for closing on the Stale screen, even though the report still lists the component. Closing works as for any stale ticket (issue type, target, resolution). A resolved ticket is not offered. Accepting a row on the Already ticketed screen adds its ticket to Stale straight away. A ticket that also covers a component that is still active is left alone.
+- **Already ticketed:** its existing tickets drop off the tab, whether they are open or resolved.
+- **Stale:** an existing ticket with no resolution is offered for closing on the Stale tab, even though the report still lists the component. Closing works as for any stale ticket (issue type, target, resolution). A resolved ticket is not offered. Accepting a row on the Already ticketed tab adds its ticket to Stale straight away. A ticket that also covers a component that is still active is left alone.
 - **Exact version:** `netty-codec:4.1.100` accepted does not cover `4.1.101`. After you upgrade, the new version is a normal row again.
 - **Stays accepted:** a new CVE, a higher rating or a fixed version in the report does not bring the component back. Remove the entry to review it again.
 - **Jira is not changed** by accepting. Only closing a stale ticket changes Jira, and only when you ask for it.
 
-The overview shows "2 accepted components hidden" with a **Show accepted** link. The `accepted` list shows component entries as "whole component" with a **Remove** link, which sends `unaccept-component netty-codec 4.1.100`. A removed entry is offered again right away: OSS reviews rebuild themselves from the report (or, if you have unfinished choices on the screens, mark themselves out of date and offer **Reload report**). A version of the extension without this feature skips component entries with a warning and leaves the file alone, so update the extension for the whole team.
+The **Accepted** tab shows component entries as "Whole component, version …" with **Unaccept component…**. A removed entry is offered again right away, as for a CVE. A version of the extension without this feature skips component entries with a warning and leaves the file alone, so update the extension for the whole team.
 
 ## Security report: open Veracode and Waltz tickets by release
 
 The unresolved Veracode and Waltz tickets of a project can be listed by the release they are planned for, with each ticket's Due Date, so you can see what blocks a release and which tickets have no release yet. There are two ways to start it.
 
 - **The security report board** (`/ts-jira security-report PROJ`, "show the security report for PROJ", or `Ticket Sidekick: Open security report`) searches Jira for the project's unresolved Veracode (`veracode` label) and Waltz (`oss-dependency` label) tickets, with both tools in the same tables, and saves them as CSV or Excel; see [Boards](boards.md#security-report). The `@jira /security-report` command it replaces is gone.
-- **`export`** on the overview of a Veracode or Waltz import (or on the only screen of an import with a single kind of result) does the same for that one report and compares it with Jira. The overview, and a screen that is the only one, offer it as an **Export** link. The export is the last thing in the chat: the review screen is not printed again, and a link under it leads back (**Back to overview**, or **Done** when there is no overview). The review stays open. Each row also gets a **Report match**: *tracked* (an open ticket for an item of the report), *stale* (an open ticket whose item is no longer in the report) or *in report, no ticket* (a New row, or an item whose tickets are all resolved).
+- **Save overview as CSV…** and **Save overview as Excel…** on the [import board](boards.md#search-and-export) do the same for that one report and compare it with Jira, as the board read it: the board reads nothing new when you save, and a stale ticket the board closed is left out. Each row also gets a **Report match**: *tracked* (an open ticket for an item of the report), *stale* (an open ticket whose item is no longer in the report) or *in report, no ticket* (a New row, or an item whose tickets are all resolved).
 
 The result is one table per Jira **Fix Version**, ordered by release date, and a last table **Not assigned to a release** for tickets without a Fix Version and, in an import, for report items without a ticket. Each table has a count line and a link to the matching list in Jira. An import's links list the tickets by key, so stale tickets are included; items without a ticket cannot be in a Jira list, and the table says how many there are.
 
@@ -373,7 +338,7 @@ The result is one table per Jira **Fix Version**, ordered by release date, and a
 
 A ticket with several Fix Versions appears once, under the earliest release, and names the others. Release dates come from the project's version list in Jira.
 
-Reply with the **Save as CSV** or **Save as Excel** link (or type `export csv` or `export xlsx`) to save the same overview through a save dialog; the security report board saves the same files with **Save full report as CSV** and **Save full report as Excel**. Both files have the same rows and columns: Veracode tickets give one row per finding (issue id, CWE, module, path, file, line, function), Waltz tickets one row per ticket with its components in the **Members** column and the earliest of their dates. The columns run Fix Version, Release Date, Due Date, Policy date, Planned date and Attestation date side by side, with **Members** as the last column. Every row has a **Detail source** column: *report* (the loaded report), *table* (the ticket's findings or components table), *legacy* (an older ticket layout) or *title and labels* (only the ticket's title and labels could be read). Text from tickets is shown as the ticket holds it, which can differ slightly from the report for unusual characters.
+The import board saves the overview through a save dialog; the security report board saves the same files with **Save full report as CSV** and **Save full report as Excel**. An import overview with no rows is saved with the header row only. Both files have the same rows and columns: Veracode tickets give one row per finding (issue id, CWE, module, path, file, line, function), Waltz tickets one row per ticket with its components in the **Members** column and the earliest of their dates. The columns run Fix Version, Release Date, Due Date, Policy date, Planned date and Attestation date side by side, with **Members** as the last column. Every row has a **Detail source** column: *report* (the loaded report), *table* (the ticket's findings or components table), *legacy* (an older ticket layout) or *title and labels* (only the ticket's title and labels could be read). Text from tickets is shown as the ticket holds it, which can differ slightly from the report for unusual characters.
 
 The Excel file is one sheet with real date cells (they sort and filter as dates), a frozen header row and a filter on every column. Rows flagged **⚠ overdue** are filled orange and rows flagged **⚠ due before release** yellow; the Flag column carries the same words. The CSV has no colours. If a spreadsheet opens the CSV in one column, set `ticketSidekick.jira.overviewCsvDelimiter` to `semicolon`; the setting does not affect the Excel file. The column order changed from earlier versions (the dates moved next to Due Date and Members moved to the end), so a script that reads the CSV by column position needs to read it by header name instead.
 

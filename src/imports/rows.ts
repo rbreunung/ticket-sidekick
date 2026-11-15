@@ -146,7 +146,7 @@ export function applyTicketedActionChange<TRow extends ReviewRowBase>(
   });
 }
 
-/** Rows shown per page on the Stale and Already-ticketed screens. Fixed, not a setting (KL16). */
+/** Rows shown per page on the chat's Stale and Already-ticketed screens, which only the removed Veracode and Waltz chat imports had. Fixed, not a setting. */
 export const GROUP_PAGE_SIZE = 20;
 
 /** Every row the Stale screen lists: eligible tickets, then the ones that cannot be closed. */

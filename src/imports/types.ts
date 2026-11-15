@@ -40,7 +40,7 @@ export interface TransitionBatchTicket {
 // template/issue-type → dedup-search already-ticketed items → show a review table the user can
 // toggle rows on/off in → create tickets for the included rows. Only the parser, per-row
 // label/summary/description building, and config live in each importer's own file
-// (veracodeReport.ts/veracodeHandler.ts vs waltzReport.ts/waltzHandler.ts) — everything about the
+// (veracodeReport.ts/src/imports/veracode.ts vs waltzReport.ts/src/imports/waltz.ts) — everything about the
 // session shape and the review screen itself is generic and lives here (R1/R10).
 // ---------------------------------------------------------------------------------------------
 
@@ -245,7 +245,7 @@ export interface ReviewSession<TRow> {
   // ticketed" and "new" rows live here (built eagerly from lightweight per-item fields; an
   // importer whose full ticket description is expensive to build, e.g. Veracode's folded-group
   // description, defers that part to creation time instead of pre-building it into this array —
-  // see veracodeHandler.ts's descriptor). The paging source of truth: buildReviewPage() re-derives
+  // see src/imports/veracode.ts's descriptor). The paging source of truth: buildReviewPage() re-derives
   // `rows` from this on every page change, which is what makes a "new" row's toggle page-local
   // (R7) — see applyReviewSessionToggle()'s own doc comment.
   allRows: TRow[];

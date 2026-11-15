@@ -24,13 +24,13 @@ The dates by which a Waltz Component must be fixed, read from the OSS Report: th
 The number of calendar days the company's policy allows, per Veracode severity, between the date Veracode first found a flaw and its fix, kept in `ticketSidekick.veracode.slaDays` (Very High 14 and High 28 by default; 0 means no due date). A flaw's **due date** is its first-found date plus its severity's SLA days, and a ticket's Jira Due Date is the earliest due date of its flaws. The Due Date is set once: later imports do not recalculate it, and flaws that join a ticket can only move it earlier. The Veracode counterpart of Remediation dates.
 
 ### Fold
-A group of findings or components that an import turns into one review row and one ticket instead of one per finding. Veracode folds flaws that share a file and CWE, or a file and a line, automatically; in both importers the user can fold more with `merge`. A ticket created from a fold is a **Folded ticket**: its title says what it folds by count, and its description opens with a banner and an overview table so the fold is visible. A merge lasts only for the page and the import it was made on; the findings it folded stay recorded on the ticket as labels.
+A group of findings or components that an import turns into one review row and one ticket instead of one per finding. Veracode folds flaws that share a file and CWE, or a file and a line, automatically; in both importers the user can fold more with **Merge selected** on the import board's New tab. A ticket created from a fold is a **Folded ticket**: its title says what it folds by count, and its description opens with a banner and an overview table so the fold is visible. A merge lasts until it is undone or its ticket is created, and only for the import it was made on; the findings it folded stay recorded on the ticket as labels.
 
 ### Ticket merge
-An import action that combines related tickets: several **source** tickets are cancelled as duplicates of one **survivor**. The survivor is rewritten from the report rows of all of them, each source is linked as a duplicate, marked as merged (a `[Merged into KEY]` title prefix and a banner above its text, original text kept) and closed with resolution Duplicate. Nothing is stored about it: the survivor carries the combined labels, so a later import targets it and leaves the resolved source alone. Distinct from a **Fold** (several findings in one row and one new ticket) and from a **Rewrite** (one ticket rebuilt, no ticket cancelled). Waltz only.
+An import action that combines related tickets: several **source** tickets are cancelled as duplicates of one **survivor**. The survivor is rewritten from the report rows of all of them, each source is linked as a duplicate, marked as merged (a `[Merged into KEY]` title prefix and a banner above its text, original text kept) and closed with resolution Duplicate. Nothing is stored about it: the survivor carries the combined labels, so a later import targets it and leaves the resolved source alone. Distinct from a **Fold** (several findings in one row and one new ticket) and from a **Rewrite** (one ticket rebuilt, no ticket cancelled). This is the Waltz mode; a Veracode merge closes the sources without renaming them and rebuilds the survivor only when a source has flaws it lacks. On the import board a merge runs in a tab of its own and survives a restart.
 
 ### Rewrite
-An import action that rebuilds an existing ticket's title, description and labels from the report as if the ticket had always been one fold, and posts a comment naming the findings it added and any it dropped. Offered when adding rows to a ticket (`add … to <KEY>`, as an alternative to a plain comment) and on Already-ticketed rows, where it covers all the rows that point to the ticket or none. Distinct from a re-created ticket, which is a new ticket, and from an update, which only adds labels and a comment.
+An import action that rebuilds an existing ticket's title, description and labels from the report as if the ticket had always been one fold, and posts a comment naming the findings it added and any it dropped. Offered when adding rows to a ticket (**Add selected to ticket** as a rewrite, as an alternative to a plain comment) and on Already-ticketed rows, where it covers all the rows that point to the ticket or none. Distinct from a re-created ticket, which is a new ticket, and from an update, which only adds labels and a comment.
 
 ### Stale ticket
 An open Jira ticket carrying an importer's marker label whose findings are all gone from the current report or no longer match the importer's remediation filter. Applies to both Veracode and Waltz imports. A stale ticket is only offered for a transition, never moved automatically, and a ticket moved to a non-final status stays stale on later imports because it is still open.
@@ -38,10 +38,10 @@ An open Jira ticket carrying an importer's marker label whose findings are all g
 ## Copilot Chat Surfaces
 
 ### Chat participant (deprecated)
-`@jira` and `@bitbucket`: the chat entry points the extension started with. Deprecated; replaced by extension tools, `/ts-jira` commands and boards, and removed once the imports and the pull request review have a board. Nothing new is built on them.
+`@jira` and `@bitbucket`: the chat entry points the extension started with. Deprecated; replaced by extension tools, `/ts-jira` commands and boards, and removed once the email import and the pull request review have a board. `@jira` runs only the email import; Veracode and Waltz reports are imported on the import board. Nothing new is built on them.
 
 ### Security report
-A project's unresolved Veracode and Waltz tickets grouped by Fix Version, with Due Date flags (overdue, due before release), shown by the security report board (and by the deprecated `@jira /security-report`) and saved as CSV or Excel. Code and developer docs call the same thing the "security overview".
+A project's unresolved Veracode and Waltz tickets grouped by Fix Version, with Due Date flags (overdue, due before release), shown by the security report board and saved as CSV or Excel; the import board saves the same overview for one report. Code and developer docs call the same thing the "security overview".
 
 ## Bitbucket Review
 
@@ -56,14 +56,14 @@ A ticket field whose value is usually the same across many tickets of a kind —
 ## Boards
 
 ### Board
-A page in an editor tab (a VS Code webview) that shows a session and sends the developer's actions to the extension over the tab's message channel; the page holds no state. Also called an editor view. A write is shown as a preview before a second Apply click, and a write to several tickets, a close or a Bitbucket post also needs a VS Code confirmation. Built: the security report (no writes), the ticket list (search, bulk move, bulk field update, cleanup) and the sessions board. Planned: the import board (Veracode, Waltz, email) and the PR review board.
+A page in an editor tab (a VS Code webview) that shows a session and sends the developer's actions to the extension over the tab's message channel; the page holds no state. Also called an editor view. A write is shown as a preview before a second Apply click, and a write to several tickets, a close or a Bitbucket post also needs a VS Code confirmation. Built: the security report (no writes), the ticket list (search, bulk move, bulk field update, cleanup), the sessions board and the import board (Veracode, Waltz). Planned: the import board's email kind and the PR review board.
 *Avoid:* "canvas" — VS Code canvases were tried and removed; a board is never one.
 
 ### Cleanup board
 A ticket list board loaded from a `cleanupRules` rule, or opened with a proposed transition (an ad-hoc bulk close). It shows the `cleanupFields` columns, lists each parent's open subtasks beneath it (they follow the parent's selection), and applies only the selected rows of the page being viewed.
 
 ### Import board
-The board that imports a Veracode or Waltz report into Jira, one session per report file. It shows the review's groups as tabs (New, Already ticketed, Stale, and Accepted for Waltz), each with its own Preview and Apply, and gives a running ticket merge a tab of its own. It replaces the `@jira` report imports with the same rules and results; the email kind comes later.
+The board that imports a Veracode or Waltz report into Jira, one session per report file. It shows the review's groups as tabs (New, Already ticketed, Stale, and Accepted for Waltz), each with its own Preview and Apply, and gives a running ticket merge a tab of its own. A tab whose rows changed while it holds unfinished choices is marked out of date and offers only Refresh, which keeps every choice whose rows still exist. It replaced the `@jira` Veracode and Waltz imports with the same rules and results; the email kind comes later.
 
 ### Session
 The extension's record of one piece of board work: the recipe (what was asked for), the data derived from Jira, Bitbucket, a report file or a model run, and the developer's working state. There is one per source, it is cached on disk so a restart continues it, and it is never the truth: the sources are. Not the same as the old `@jira`/`@bitbucket` multi-turn session kept in `workspaceState`.

@@ -33,14 +33,14 @@ export interface WaltzComponent {
   remediation?: WaltzRemediation;
 }
 
-// Exported (rather than a local/duplicated constant) so waltzHandler.ts and extension.ts's file-size
-// pre-check share this single source of truth instead of three independently hardcoded copies.
+// Exported (rather than a local/duplicated constant) so every Waltz size check shares this single
+// source of truth instead of independently hardcoded copies.
 // Traces back to reportImport.ts's shared MAX_REPORT_BYTES (KTD4) — value unchanged (20 MB).
 export const MAX_REPORT_BYTES = SHARED_MAX_REPORT_BYTES;
 const REQUIRED_SHEET = 'ComponentRemediations';
 
 // `maxBytes` defaults to the shared constant so every existing single-argument call (including the
-// pure unit tests) keeps working unchanged; a configured caller (waltzHandler.ts, extension.ts)
+// pure unit tests) keeps working unchanged; a configured caller (src/imports/waltz.ts)
 // passes its own resolved limit explicitly.
 export function assertSafeWaltzReportSize(buffer: Buffer, maxBytes: number = MAX_REPORT_BYTES): void {
   if (buffer.length > maxBytes) {
