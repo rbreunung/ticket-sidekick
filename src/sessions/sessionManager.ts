@@ -31,6 +31,8 @@ export interface BoardState {
   conflicts: Conflict[];
   notice?: string;
   error?: string;
+  /** What kind of failure `error` is, when the board kind names it (e.g. `report-not-found`), so the page can offer the way out. */
+  errorCode?: string;
   /** The last check against the sources failed on a board that writes: nothing is applied until one passes. */
   writesBlocked: boolean;
   /** Set while an Apply runs: how many of its targets are finished. The page disables its controls meanwhile. */
@@ -75,6 +77,7 @@ interface Entry {
   stored: boolean;
   notice?: string;
   error?: string;
+  errorCode?: string;
   applying?: { done: number; total: number };
   queue: Promise<unknown>;
   waiters: Set<() => void>;
@@ -89,6 +92,12 @@ interface PendingPlan {
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** The failure's name when a board kind gives its error one (`boardErrorCode`). */
+function errorCodeOf(err: unknown): string | undefined {
+  const code = (err as { boardErrorCode?: unknown } | null)?.boardErrorCode;
+  return typeof code === 'string' ? code : undefined;
 }
 
 export class SessionManager {
@@ -201,9 +210,11 @@ export class SessionManager {
       await this.persist(entry);
       entry.status = 'ready';
       entry.error = undefined;
+      entry.errorCode = undefined;
     } catch (err) {
       entry.status = 'failed';
       entry.error = messageOf(err);
+      entry.errorCode = errorCodeOf(err);
     }
     this.changed(entry);
   }
@@ -214,6 +225,7 @@ export class SessionManager {
     if (!session) return this.build(entry);
     entry.status = 'checking';
     entry.error = undefined;
+    entry.errorCode = undefined;
     this.changed(entry);
     try {
       const { kind } = entry.reg;
@@ -230,6 +242,7 @@ export class SessionManager {
     } catch (err) {
       // The stored state stays on show; the board says the check failed.
       entry.error = messageOf(err);
+      entry.errorCode = errorCodeOf(err);
     }
     entry.status = 'ready';
     this.changed(entry);
@@ -282,6 +295,7 @@ export class SessionManager {
       id: entry.id, kind: kind.kind, title: kind.title(entry.recipe), status: entry.status, tick: entry.tick,
       revision: session?.revision ?? 0, asOf: session?.derived.readAt, restored: entry.restored, stored: entry.stored,
       conflicts: session?.conflicts ?? [], notice: entry.notice, error: entry.error,
+      ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
       writesBlocked: this.writesBlocked(entry),
       ...(entry.applying ? { applying: { ...entry.applying } } : {}),
       view: session ? kind.view(session) : undefined,
@@ -436,6 +450,55 @@ export class SessionManager {
       this.changed(entry);
       return { results: applied.results, state: this.toState(entry) };
     });
+  }
+
+  /**
+   * Gives a session another source of the same kind, e.g. its report file at a new place: the kind's
+   * `revalidate` checks the new recipe, the session moves to the id of the new source (stored there,
+   * the old file deleted) and is checked against the new source. Refused when another session
+   * already has that id. The working state stays; previews of the old id are no longer valid.
+   */
+  async relocate(kindName: string, id: string, recipe: unknown): Promise<{ id: string; state: BoardState }> {
+    const entry = await this.entry(kindName, id);
+    const { kind } = entry.reg;
+    const revalidate = kind.revalidate;
+    if (!revalidate) throw new SessionError(400, 'This board cannot change its source.');
+    const moved = await this.enqueue(entry, async (): Promise<Entry> => {
+      const session = entry.session;
+      if (!session || entry.status === 'building') throw new SessionError(409, 'The board is still loading.');
+      if (this.entries.get(id) !== entry) throw new SessionError(404, 'This session no longer exists. Ask for the board again.');
+      const checked = await revalidate(recipe, await entry.reg.deps());
+      if (!checked.ok) throw new SessionError(400, checked.reason);
+      const newId = sessionIdFor(kind.kind, kind.sourceKey(checked.recipe));
+      const next: Session = { ...session, id: newId, recipe: checked.recipe, revision: session.revision + 1, lastUsedAt: this.deps.now() };
+      for (const [planId, pending] of this.plans) if (pending.sessionId === id) this.plans.delete(planId);
+      if (newId === id) {
+        entry.recipe = checked.recipe;
+        entry.session = next;
+        await this.persist(entry);
+        this.changed(entry);
+        return entry;
+      }
+      const other = this.entries.get(newId)?.session ?? (await this.deps.store.load(newId))?.session;
+      if (other) {
+        throw new SessionError(409, `Another board already uses that source: "${kind.title(other.recipe)}" (${kind.sourceLabel(other.recipe)}). Open or discard that one first.`);
+      }
+      const target: Entry = {
+        id: newId, reg: entry.reg, recipe: checked.recipe, session: next, status: 'ready', tick: entry.tick + 1,
+        restored: entry.restored, stored: false, notice: entry.notice, error: entry.error, errorCode: entry.errorCode,
+        queue: Promise.resolve(), waiters: new Set(),
+      };
+      this.entries.set(newId, target);
+      await this.persist(target);
+      this.entries.delete(id);
+      await this.deps.store.delete(id);
+      this.log('info', 'Moved a session to another source', { kind: kind.kind });
+      // A page still waiting on the old id wakes and finds it gone.
+      this.changed(entry);
+      return target;
+    });
+    await this.enqueue(moved, () => this.check(moved));
+    return { id: moved.id, state: this.toState(moved) };
   }
 
   /** Saves a file built from the session through the window's save dialog. */

@@ -303,6 +303,43 @@ describe('restart', () => {
   });
 });
 
+describe('moving a session to another source', () => {
+  it('moves the session with its working state to the id of the new source, and checks it there', async () => {
+    const m = manager(1, { revalidate: true });
+    let state = await openReady(m);
+    state = await m.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
+    const reads = source.reads.count;
+
+    const moved = await m.relocate('demo', state.id, { project: 'OTHER' });
+
+    expect(moved.id).toBe(sessionIdFor('demo', 'OTHER'));
+    expect(moved.state).toMatchObject({ title: 'Demo: OTHER', view: { selected: ['PROJ-1'] } });
+    expect(source.reads.count).toBe(reads + 1);
+    await expect(m.state('demo', state.id)).rejects.toMatchObject({ status: 404 });
+    expect(await new SessionStore(dir).load(state.id)).toBeUndefined();
+    expect((await new SessionStore(dir).load(moved.id))?.session.recipe).toEqual({ project: 'OTHER' });
+    // Asking for the new source finds the moved session.
+    expect(await m.open('demo', { project: 'OTHER' })).toMatchObject({ ok: true, id: moved.id });
+  });
+
+  it('refuses a source another session already has, naming that session, and leaves both as they were', async () => {
+    const m = manager(1, { revalidate: true });
+    const first = await openReady(m, 'PROJ');
+    const second = await openReady(m, 'OTHER');
+    await expect(m.relocate('demo', first.id, { project: 'other' })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('Demo: OTHER') });
+    expect((await m.state('demo', first.id)).title).toBe('Demo: PROJ');
+    expect((await m.state('demo', second.id)).title).toBe('Demo: OTHER');
+  });
+
+  it('refuses a recipe the board does not accept, and a board that cannot change its source', async () => {
+    const m = manager(1, { revalidate: true });
+    const state = await openReady(m);
+    await expect(m.relocate('demo', state.id, { project: 42 })).rejects.toMatchObject({ status: 400 });
+    const plain = manager(1);
+    await expect(plain.relocate('demo', state.id, { project: 'OTHER' })).rejects.toMatchObject({ status: 400 });
+  });
+});
+
 describe('writing from a board', () => {
   async function selected(m: SessionManager, keys: string[]) {
     let state = await openReady(m);

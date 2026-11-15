@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { answerBoardRequest, asBoardRequest, type BoardHost } from '../boards/boardMessages';
 import { ImportStartScreen } from '../boards/import/startScreen';
 import { securityReportKind, type SecurityReportDeps } from '../boards/securityReport/kind';
-import { registerKind } from '../sessions/boardKind';
+import { registerKind, type BoardKind } from '../sessions/boardKind';
+import { importSessionId, importSourceKey, type ImportRecipe } from '../boards/import/recipe';
 import { SessionManager } from '../sessions/sessionManager';
 import { SessionStore } from '../sessions/sessionStore';
 import type { TicketService } from '../services/TicketService';
@@ -240,5 +241,80 @@ describe('the import start screen', () => {
     expect((await askStart(boardHost, 'state')).status).toBe(404);
     expect((await askStart(boardHost, 'apply', { planId: 'x' })).status).toBe(404);
     expect(await askStart(host, 'view')).toEqual({ status: 404, body: { error: 'There is no import start screen here.' } });
+  });
+});
+
+describe('picking the report file of an import again', () => {
+  /** An import board whose reading is its recipe's report path, so the move can be seen without Jira. */
+  const importStub: BoardKind<ImportRecipe, { path: string }, { tab: string }, { type: 'tab'; tab: string }, unknown, null> = {
+    kind: 'import',
+    formatVersion: 1,
+    title: r => `Import: ${path.basename(r.reportPath)}`,
+    validate: async input => ({ ok: true, recipe: input as ImportRecipe }),
+    revalidate: async stored => ({ ok: true, recipe: stored as ImportRecipe }),
+    sourceKey: r => importSourceKey(r),
+    sourceLabel: r => r.reportPath,
+    initialWorking: () => ({ tab: 'new' }),
+    read: async r => ({ readAt: 1, fingerprints: {}, data: { path: r.reportPath } }),
+    reconcile: (session, fresh) => ({ derived: fresh, working: session.working, conflicts: [] }),
+    reduce: (_session, action) => ({ ok: true, working: { tab: action.tab } }),
+    view: session => ({ path: session.derived.data.path, tab: session.working.tab }),
+  };
+  const recipeAt = (file: string): ImportRecipe => ({ kind: 'veracode', projectKey: 'PROJ', reportPath: file, templateName: 'T', issueType: 'Bug' });
+  let followed: string[];
+  let picks: Array<string | undefined>;
+  let importHost: BoardHost;
+
+  beforeEach(() => {
+    followed = [];
+    picks = [];
+    manager = new SessionManager({
+      store: new SessionStore(path.join(dir, 'sessions')),
+      kinds: [registerKind(importStub, () => null)],
+      now: () => Date.now(),
+      confirm: async () => true,
+      saveFile: async () => true,
+    });
+    importHost = {
+      ...host,
+      pickReportFile: async kind => { picks.push(kind); return pickedPath; },
+      followSession: async (kind, from, to) => { followed.push(`${kind}:${from}->${to}`); },
+    };
+  });
+  let pickedPath: string | undefined;
+
+  async function askImport(target: { kind: string; id: string }, op: string, body: Record<string, unknown> = {}) {
+    const reply = await answerBoardRequest(manager, target, { id: nextId++, op, body }, importHost, message => errors.push(message));
+    return reply.ok ? { status: 200, body: reply.data as any } : { status: reply.status, body: { error: reply.error } };
+  }
+
+  it('moves the session to the picked file, keeps its choices and points the tab at the new session', async () => {
+    const opened = await manager.open('import', recipeAt(path.join(dir, 'old.xml')));
+    if (!opened.ok) throw new Error(opened.reason);
+    const tab = { kind: 'import', id: opened.id };
+    let state = (await askImport(tab, 'state')).body;
+    while (state.status !== 'ready') state = (await askImport(tab, 'state', { tick: state.tick, wait: 2000 })).body;
+    await askImport(tab, 'action', { revision: state.revision, action: { type: 'tab', tab: 'stale' } });
+
+    pickedPath = path.join(dir, 'moved', 'old.xml');
+    // The page names no path: the file comes from the native dialog only.
+    const picked = await askImport(tab, 'pick-file', { path: '/etc/passwd' });
+
+    expect(picked.status).toBe(200);
+    expect(picks).toEqual(['veracode']);
+    const newId = importSessionId(recipeAt(pickedPath));
+    expect(picked.body).toMatchObject({ outcome: 'picked', id: newId, state: { view: { path: pickedPath, tab: 'stale' } } });
+    expect(followed).toEqual([`import:${opened.id}->${newId}`]);
+  });
+
+  it('changes nothing when the dialog is cancelled, and is no request of other boards', async () => {
+    const opened = await manager.open('import', recipeAt(path.join(dir, 'old.xml')));
+    if (!opened.ok) throw new Error(opened.reason);
+    pickedPath = undefined;
+    let state = (await askImport({ kind: 'import', id: opened.id }, 'state')).body;
+    while (state.status !== 'ready') state = (await askImport({ kind: 'import', id: opened.id }, 'state', { tick: state.tick, wait: 2000 })).body;
+    expect((await askImport({ kind: 'import', id: opened.id }, 'pick-file')).body).toEqual({ outcome: 'cancelled' });
+    expect(followed).toEqual([]);
+    expect((await askImport({ kind: 'security-report', id: opened.id }, 'pick-file')).status).toBe(404);
   });
 });

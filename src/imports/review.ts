@@ -169,11 +169,13 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
   ticketService: TicketService,
   descriptor: ReportImportDescriptor<TItem, TRow>,
   ctx: ReviewBuildContext,
-): Promise<{ session: ReviewSession<TRow>; degraded: boolean }> {
+): Promise<{ session: ReviewSession<TRow>; degraded: boolean; dedupFailed: boolean }> {
   const { onDiag, onEvent } = ctx;
   // True when a Jira search the review depends on failed in whole or in part: the result is then a first-import best
   // effort, not something a refresh may put in place of a review that was built from complete data.
   let degraded = false;
+  // True when any part of the dedup search failed: an item could then show as New although it has a ticket.
+  let dedupFailed = false;
   const plural = descriptor.itemNoun.replace('(s)', 's'); // 'flaw(s)' -> 'flaws', 'component(s)' -> 'components'
   const templateLabels = templateLabelsOf(input.additionalFields);
 
@@ -210,7 +212,10 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
         onDiag,
       );
       dedupMap = result.map;
-      if (result.failedChunks > 0) degraded = true;
+      if (result.failedChunks > 0) {
+        degraded = true;
+        dedupFailed = true;
+      }
       if (result.totalChunks > 0 && result.failedChunks === result.totalChunks) {
         onDiag?.('warn', `Could not check for already-ticketed ${plural} — proceeding without dedup`, {
           projectKey: input.projectKey, failedChunks: result.failedChunks, totalChunks: result.totalChunks,
@@ -225,6 +230,7 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
       onEvent?.({ kind: 'dedup-failed', plural, error: message });
       dedupMap = new Map();
       degraded = true;
+      dedupFailed = true;
     }
   }
 
@@ -418,7 +424,7 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
     }
   }
 
-  return { session: reviewSession, degraded };
+  return { session: reviewSession, degraded, dedupFailed };
 }
 
 /**

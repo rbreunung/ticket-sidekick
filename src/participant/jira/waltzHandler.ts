@@ -11,40 +11,18 @@ import {
   continueStaleClose,
   type ReportImportDescriptor,
 } from './reportImportHandler';
-import { resolveSizeLimitSetting } from '../../utils/reportImport';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
 import { createWaltzDescriptor } from '../../imports/waltz';
+import { waltzSettings } from '../../services/importSettings';
 
 // The importer's labels and stale-check predicate live in src/imports/waltz.ts, which the import board shares.
 export { WALTZ_STALE_MARKER_LABEL, buildWaltzActiveComponentPredicate } from '../../imports/waltz';
 
-// Exported so extension.ts's command-palette entry point resolves ticketSidekick.waltz.maxReportSizeMB
-// exactly the same way as the @jira chat entry point below, rather than re-deriving the bounds and
-// risking the two entry points drifting apart.
-export function getWaltzMaxReportBytes(): number {
-  const cfg = vscode.workspace.getConfiguration('ticketSidekick');
-  return resolveSizeLimitSetting('waltz.maxReportSizeMB', (key) => cfg.get(key));
-}
+// The settings readers live in src/services/importSettings.ts, which the import board shares; extension.ts reads the size limit from here.
+export { getWaltzMaxReportBytes } from '../../services/importSettings';
 
-function getWaltzMinVulnRating(): string {
-  return vscode.workspace.getConfiguration('ticketSidekick').get<string>('waltz.minVulnRating') ?? 'High';
-}
-
-function getWaltzConfig(): { minVulnRating: string; includeRemediationActions: string[]; maxReportBytes: number } {
-  const cfg = vscode.workspace.getConfiguration('ticketSidekick');
-  return {
-    minVulnRating: getWaltzMinVulnRating(),
-    includeRemediationActions: cfg.get<string[]>('waltz.includeRemediationActions') ?? ['', 'Remediate'],
-    maxReportBytes: getWaltzMaxReportBytes(),
-  };
-}
-
-const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> = createWaltzDescriptor({
-  filter: getWaltzConfig,
-  minVulnRating: getWaltzMinVulnRating,
-  workspaceRoot: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-}, {
+const waltzDescriptor: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow> = createWaltzDescriptor(waltzSettings(() => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath), {
   reviewColumns: WALTZ_REVIEW_COLUMNS,
   // Waltz has no issue-type-fetch-failure pop-up today — omitting onIssueTypeFetchFailed keeps that
   // path log-only, matching current behavior (KTD9).

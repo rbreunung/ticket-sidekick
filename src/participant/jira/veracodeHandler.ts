@@ -10,37 +10,18 @@ import {
   continueStaleClose,
   type ReportImportDescriptor,
 } from './reportImportHandler';
-import { resolveSizeLimitSetting } from '../../utils/reportImport';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { logDiag } from '../../utils/diagLog';
 import type { AwaitIssueTypeResume } from '../sessionState';
 import { sessionWasSuperseded } from './ticketContext';
-import { createVeracodeDescriptor, logVeracodeSlaProblems as logVeracodeSlaProblemsCore, type VeracodeSettings } from '../../imports/veracode';
+import { createVeracodeDescriptor, logVeracodeSlaProblems as logVeracodeSlaProblemsCore } from '../../imports/veracode';
+import { veracodeSettings } from '../../services/importSettings';
 
 // The importer's labels and stale-check predicate live in src/imports/veracode.ts, which the import board shares.
 export { VERACODE_STALE_MARKER_LABEL, buildVeracodeActiveFlawPredicate, veracodeLabelToIssueId } from '../../imports/veracode';
 
-// Exported so extension.ts's command-palette entry point resolves ticketSidekick.veracode.maxReportSizeMB
-// exactly the same way as the @jira chat entry point below, rather than re-deriving the bounds and
-// risking the two entry points drifting apart.
-export function getVeracodeMaxReportBytes(): number {
-  const cfg = vscode.workspace.getConfiguration('ticketSidekick');
-  return resolveSizeLimitSetting('veracode.maxReportSizeMB', (key) => cfg.get(key));
-}
-
-function getVeracodeConfig(): { minSeverity: number; includeStatuses: string[]; maxReportBytes: number } {
-  const cfg = vscode.workspace.getConfiguration('ticketSidekick');
-  return {
-    minSeverity: cfg.get<number>('veracode.minSeverity') ?? 4,
-    includeStatuses: cfg.get<string[]>('veracode.includeRemediationStatuses') ?? ['New', 'Open', 'Reopened'],
-    maxReportBytes: getVeracodeMaxReportBytes(),
-  };
-}
-
-const veracodeSettings: VeracodeSettings = {
-  filter: getVeracodeConfig,
-  slaDays: () => vscode.workspace.getConfiguration('ticketSidekick').get('veracode.slaDays'),
-};
+// The settings readers live in src/services/importSettings.ts, which the import board shares; extension.ts reads the size limit from here.
+export { getVeracodeMaxReportBytes } from '../../services/importSettings';
 
 const veracodeDiag: DiagLogger = (level, message, details) => logDiag('jira.veracode', level, message, details);
 

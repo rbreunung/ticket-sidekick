@@ -1,6 +1,7 @@
 import { isSessionId } from '../sessions/sessionId';
 import type { SessionManager } from '../sessions/sessionManager';
 import { SessionError } from '../sessions/sessionTypes';
+import { IMPORT_KIND, withReportPath, type ImportRecipe, type ReportKind } from './import/recipe';
 import { IMPORT_START_BOARD, type ImportStartScreen } from './import/startScreen';
 
 // What a board page may ask of the extension. A page lives in an editor tab (a webview) and talks
@@ -35,6 +36,10 @@ export interface BoardHost {
   openStored(kind: string, id: string): Promise<{ ok: true } | { ok: false; reason: string }>;
   /** The import start screen of this window; absent where imports are not available. */
   readonly importStart?: ImportStartScreen;
+  /** VS Code's native open dialog for a report of this kind; undefined when it was cancelled. */
+  pickReportFile?(kind: ReportKind): Promise<string | undefined>;
+  /** Points the tab that shows `fromId` at the session it moved to. */
+  followSession?(kind: string, fromId: string, toId: string, title: string): Promise<void>;
 }
 
 export interface BoardRequest {
@@ -88,7 +93,24 @@ async function sessionsBoard(manager: SessionManager, op: string, body: Record<s
   }
 }
 
-async function sessionBoard(manager: SessionManager, { kind, id }: BoardTarget, op: string, body: Record<string, unknown>): Promise<unknown> {
+/**
+ * "Pick the file again" on an import whose report file moved: the file comes from the native dialog,
+ * never from the page; the session moves to the id of the new path and the tab follows it.
+ */
+async function pickReportFileAgain(manager: SessionManager, { kind, id }: BoardTarget, host: BoardHost): Promise<unknown> {
+  if (kind !== IMPORT_KIND || !host.pickReportFile) throw new BoardRequestError(404, 'Unknown request.');
+  const session = await manager.read(kind, id);
+  if (!session) throw new BoardRequestError(409, 'The board is still loading.');
+  const recipe = session.recipe as ImportRecipe;
+  const picked = await host.pickReportFile(recipe.kind);
+  if (!picked) return { outcome: 'cancelled' };
+  const moved = await manager.relocate(kind, id, withReportPath(recipe, picked));
+  if (moved.id !== id) await host.followSession?.(kind, id, moved.id, moved.state.title);
+  return { outcome: 'picked', id: moved.id, state: moved.state };
+}
+
+async function sessionBoard(manager: SessionManager, target: BoardTarget, op: string, body: Record<string, unknown>, host: BoardHost): Promise<unknown> {
+  const { kind, id } = target;
   switch (op) {
     case 'state': {
       const tick = typeof body.tick === 'number' && Number.isInteger(body.tick) ? body.tick : undefined;
@@ -110,6 +132,8 @@ async function sessionBoard(manager: SessionManager, { kind, id }: BoardTarget, 
     case 'discard':
       await manager.discard(id);
       return { ok: true };
+    case 'pick-file':
+      return pickReportFileAgain(manager, target, host);
     default:
       throw new BoardRequestError(404, 'Unknown request.');
   }
@@ -123,7 +147,7 @@ export async function handleBoardRequest(manager: SessionManager, target: BoardT
       if (!host.importStart) throw new BoardRequestError(404, 'There is no import start screen here.');
       return await host.importStart.handle(op, body);
     }
-    return await sessionBoard(manager, target, op, body);
+    return await sessionBoard(manager, target, op, body, host);
   } catch (err) {
     if (err instanceof SessionError) throw new BoardRequestError(err.status, err.message);
     throw err;

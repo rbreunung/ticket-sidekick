@@ -43,3 +43,8 @@ export function importSourceKey(source: Pick<ImportRecipe, 'kind' | 'projectKey'
 export function importSessionId(source: Pick<ImportRecipe, 'kind' | 'projectKey' | 'reportPath'>): string {
   return sessionIdFor(IMPORT_KIND, importSourceKey(source));
 }
+
+/** The recipe with its report file at another place: what "Pick the file again" opens the session with. */
+export function withReportPath(recipe: ImportRecipe, filePath: string): ImportRecipe {
+  return { ...recipe, reportPath: normaliseReportPath(filePath) };
+}
