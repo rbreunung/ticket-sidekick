@@ -1,5 +1,7 @@
 import * as path from 'path';
 import type { BoardKind, CheckMode, Validated } from '../../sessions/boardKind';
+import { handlerOf } from './handlers';
+import { IMPORT_HANDLERS } from './registry';
 import type { DerivedPart, Session } from '../../sessions/sessionTypes';
 import { normalizeProjectKey } from '../../services/configValidation';
 import { buildReviewPage } from '../../imports/rows';
@@ -62,13 +64,19 @@ export interface ImportWorking {
   dropped: string[];
   choices: ImportChoices;
   writes: ImportWrites;
+  /** State the area handlers keep for themselves (a running ticket merge, a search), each under its handler's name. */
+  ext: Record<string, unknown>;
 }
 
-export type ImportAction =
+/** The actions the kind handles itself. */
+export type KnownImportAction =
   | { type: 'tab'; tab: ImportTab }
   | { type: 'filter'; tab: ImportTab; text: string }
   | { type: 'ticketed-show'; show: 'decision' | 'all' }
   | { type: 'dismiss-dropped' };
+
+/** A kind action, or an action one of the area handlers takes (selection, merge, actions, accept, close, search). */
+export type ImportAction = KnownImportAction | ({ type: string } & Record<string, unknown>);
 
 export interface ImportTabView {
   id: ImportTab;
@@ -152,6 +160,8 @@ export interface ImportView {
   accepted?: { rows: AcceptedRowView[]; warning: string | null };
   dropped: string[];
   notices: string[];
+  /** Fields the area handlers add, each under its handler's name. */
+  ext: Record<string, unknown>;
 }
 
 type ImportSession = Session<ImportRecipe, ImportData, ImportWorking>;
@@ -251,10 +261,15 @@ function hasWork(data: ImportData, writes: ImportWrites, choices: ImportChoices,
   return false;
 }
 
-function openingTab(session: ImportSession): ImportTab {
+/** Whether a tab has work left, counting what the area handlers still hold. */
+function tabHasWork(session: ImportSession, tab: ImportTab): boolean {
   const { data } = session.derived;
   const { writes, choices } = session.working;
-  return (['new', 'ticketed', 'stale'] as ImportTab[]).find(tab => hasWork(data, writes, choices, tab)) ?? 'new';
+  return hasWork(data, writes, choices, tab) || IMPORT_HANDLERS.some(h => h.hasWork?.(session, tab) ?? false);
+}
+
+function openingTab(session: ImportSession): ImportTab {
+  return (['new', 'ticketed', 'stale'] as ImportTab[]).find(tab => tabHasWork(session, tab)) ?? 'new';
 }
 
 /** Whether a tab holds choices not applied yet, which a fresh reading must not take away unseen. */
@@ -448,6 +463,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
     tab: null, filters: {}, ticketedShow: null, outOfDate: [], dropped: [],
     choices: { excluded: [], merges: [], actions: {}, staleSelected: [] },
     writes: { created: [], tickets: {} },
+    ext: {},
   }),
 
   read: (recipe, deps) => readImport(recipe, deps),
@@ -459,14 +475,16 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
       return { derived: fresh, working: { ...session.working, ...kept, outOfDate: [] }, conflicts: [] };
     }
     const changed = changedTabs(session.derived, fresh, session.working.writes, tabs);
-    const marked = tabs.filter(tab => changed.has(tab) && hasUnfinishedChoices(session.derived.data, session.working, tab));
+    const marked = tabs.filter(tab => changed.has(tab)
+      && (hasUnfinishedChoices(session.derived.data, session.working, tab) || IMPORT_HANDLERS.some(h => h.unfinished?.(session, tab) ?? false)));
     const take = new Set(tabs.filter(tab => !marked.includes(tab)));
     return { derived: compose(session.derived, fresh, take, tabs), working: { ...session.working, outOfDate: marked }, conflicts: [] };
   },
 
-  reduce: (session, action) => {
+  reduce: (session, generic) => {
     const tabs = tabsOf(session.recipe);
     const working = session.working;
+    const action = generic as KnownImportAction;
     switch (action?.type) {
       case 'tab':
         if (!tabs.includes(action.tab)) return { ok: false, reason: 'This import has no such tab.' };
@@ -484,9 +502,44 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
         return { ok: true, working: { ...working, ticketedShow: action.show } };
       case 'dismiss-dropped':
         return { ok: true, working: { ...working, dropped: [] } };
-      default:
+      default: {
+        if (typeof generic?.type !== 'string') return { ok: false, reason: 'Unknown action.' };
+        for (const handler of IMPORT_HANDLERS) {
+          const reduced = handler.reduce?.(session, generic as { type: string } & Record<string, unknown>);
+          if (reduced) return reduced;
+        }
         return { ok: false, reason: 'Unknown action.' };
+      }
     }
+  },
+
+  plan: (session, action) => {
+    if (typeof action?.type !== 'string') return { ok: false, reason: 'Unknown action.' };
+    for (const handler of IMPORT_HANDLERS) {
+      const planned = handler.plan?.(session, action as { type: string } & Record<string, unknown>);
+      if (!planned) continue;
+      if (planned.ok) {
+        const blocked = IMPORT_HANDLERS.filter(h => h !== handler).map(h => h.blocksPlans?.(session)).find(Boolean);
+        if (blocked) return { ok: false, reason: blocked };
+      }
+      return planned;
+    }
+    return { ok: false, reason: 'This board does not write that.' };
+  },
+
+  apply: async (session, plan, deps, progress) => {
+    const name = handlerOf(plan);
+    const handler = IMPORT_HANDLERS.find(h => h.name === name && h.apply);
+    if (!handler?.apply) throw new Error('This board did not build that plan.');
+    return handler.apply(session, plan, deps, progress);
+  },
+
+  exportFile: async (session, format, deps) => {
+    for (const handler of IMPORT_HANDLERS) {
+      const file = handler.exportFile?.(session, format, deps);
+      if (file) return file;
+    }
+    throw new Error(`This board cannot save ${format} files.`);
   },
 
   view: session => {
@@ -513,7 +566,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
         : id === 'accepted' && data.accepted?.warning ? data.accepted.warning : undefined;
       return {
         id, label: TAB_LABELS[id], count: counts[id], outOfDate: working.outOfDate.includes(id),
-        hasWork: hasWork(data, writes, choices, id),
+        hasWork: tabHasWork(session, id),
         ...(unavailable ? { unavailable } : {}),
         ...(counts[id] === 0 && !unavailable ? { empty: EMPTY[id] } : {}),
         ...(warning ? { warning } : {}),
@@ -535,7 +588,12 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
       filter: filter ?? '',
       dropped: working.dropped,
       notices: data.notices,
+      ext: {},
     };
+    for (const handler of IMPORT_HANDLERS) {
+      const extra = handler.view?.(session, current);
+      if (extra !== undefined) view.ext[handler.name] = extra;
+    }
 
     if (current === 'new') {
       const mergeOf = new Map(choices.merges.flatMap((m, n) => m.map(key => [key, n + 1] as const)));

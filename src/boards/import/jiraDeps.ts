@@ -43,6 +43,10 @@ export function importJiraDeps(options: ImportJiraOptions): ImportDeps {
   return {
     jiraConfigured: async () => (await options.getJira()).configured,
     descriptors: () => (typeof options.descriptors === 'function' ? options.descriptors() : options.descriptors),
+    writeAccess: async () => {
+      const { ticketService, client } = await jira();
+      return { ticketService, client };
+    },
     baseUrl: async () => {
       const access = await options.getJira();
       return access.configured ? access.config.baseUrl : undefined;

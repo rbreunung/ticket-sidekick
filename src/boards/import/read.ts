@@ -2,7 +2,8 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { DerivedPart } from '../../sessions/sessionTypes';
-import type { OverviewTicket, ProjectVersionInfo } from '../../services/TicketService';
+import type { OverviewTicket, ProjectVersionInfo, TicketService } from '../../services/TicketService';
+import type { IJiraClient } from '../../jira/IJiraClient';
 import type { ReportImportDescriptor } from '../../imports/descriptor';
 import type { ImportReviewInput, ReviewBuildEvent } from '../../imports/review';
 import type { ReviewRowBase, ReviewSession } from '../../imports/types';
@@ -45,6 +46,8 @@ export interface ImportDeps {
   projectVersions(projectKey: string): Promise<ProjectVersionInfo[]>;
   /** The descriptions of the named tickets; a ticket that cannot be read is null. */
   descriptions(keys: string[]): Promise<Record<string, string | null>>;
+  /** The Jira services the write actions run through, as the chat import uses them; throws when Jira is not set up. */
+  writeAccess(): Promise<{ ticketService: TicketService; client: IJiraClient }>;
   /** The folder the accepted list lives in. */
   workspaceRoot(): string | undefined;
   now(): number;
