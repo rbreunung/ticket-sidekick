@@ -14,10 +14,12 @@ const openBoardShape = {
   board: z.enum(['security-report', 'ticket-list', 'sessions', 'import']).describe(
     'security-report: a project\'s open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, '
     + 'where the user selects tickets and moves them or sets a field, or a cleanup rule\'s tickets. sessions: the stored board sessions of this workspace. '
-    + 'import: imports a Veracode Detailed Report or a Waltz OSS Report into Jira tickets.',
+    + 'import: imports a Veracode Detailed Report, a Waltz OSS Report or .eml emails into Jira tickets.',
   ),
-  kind: z.enum(['veracode', 'waltz']).optional().describe('import: the report kind, veracode (Detailed Report XML) or waltz (OSS Report .xlsx).'),
+  kind: z.enum(['veracode', 'waltz', 'email']).optional().describe('import: the report kind, veracode (Detailed Report XML), waltz (OSS Report .xlsx) or email (.eml files).'),
   path: z.string().optional().describe('import: the report file, a path in the workspace or an absolute path or file URI, e.g. a file dragged into the chat.'),
+  paths: z.array(z.string()).max(50).optional().describe('import with kind email: the .eml files, in place of path, each like path.'),
+  dragged: z.boolean().optional().describe('import with kind email: true when the user dragged the emails into the chat, which counts as agreeing to the model check of their text.'),
   project: z.string().optional().describe('security-report: the Jira project key, e.g. PROJ. Leave out to use the default project.'),
   jql: z.string().optional().describe('ticket-list: a JQL query, e.g. project = PROJ AND status = Done.'),
   filter: z.string().optional().describe('ticket-list: a saved filter\'s id or name, in place of jql.'),
@@ -84,11 +86,12 @@ export const openBoardTool = defineTool<JiraToolDeps, typeof openBoardShape>({
   title: 'Open a Ticket Sidekick board',
   description:
     'Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, the stored sessions, '
-    + 'or the import board for a Veracode or Waltz report. '
+    + 'or the import board for a Veracode or Waltz report or for .eml emails. '
     + 'Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; '
     + 'do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. '
     + 'For a cleanup by a rule from .jira-templates.json, pass the rule\'s name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. '
     + 'For a report import, pass board import with kind and path; the user reviews and creates the tickets on the board. '
+    + 'For emails, pass kind email with paths, and dragged true when the user dragged them into the chat; the user creates tickets or adds the emails as comments on the board. '
     + 'The answer says only whether the board opened, never its content. Changes nothing in Jira.',
   inputSchema: openBoardShape,
   annotations: { readOnlyHint: true },
@@ -101,12 +104,16 @@ export const openBoardTool = defineTool<JiraToolDeps, typeof openBoardShape>({
     if (args.board === 'security-report') return open({ project: args.project });
     if (args.board === 'sessions') return open({});
     if (args.board === 'import') {
-      if (args.path && isNetworkPath(args.path)) {
+      const given = [...(args.path ? [args.path] : []), ...(args.paths ?? [])];
+      if (given.some(isNetworkPath)) {
         return 'Not opened: the report is on another machine (a network path). Ask the user to copy it into the workspace or to choose it in the import board\'s file dialog.';
       }
-      // The start screen, opened as the import board when the file reads and the template and project settings are complete.
-      const reportPath = args.kind && args.path ? reportPathOf(args.path, deps.workspaceFolders()[0]) : undefined;
-      const opened = await deps.openBoard(IMPORT_START_BOARD, { kind: args.kind, ...(reportPath ? { reportPath } : {}), openWhenReady: true });
+      // The start screen, opened as the import board when the files read and the template and project settings are complete.
+      const resolved = args.kind ? given.map(p => reportPathOf(p, deps.workspaceFolders()[0])).filter((p): p is string => p !== undefined) : [];
+      const files = args.kind === 'email'
+        ? { ...(resolved.length > 0 ? { reportPaths: resolved } : {}), ...(args.dragged === true ? { emailConsent: true } : {}) }
+        : resolved[0] ? { reportPath: resolved[0] } : {};
+      const opened = await deps.openBoard(IMPORT_START_BOARD, { kind: args.kind, ...files, openWhenReady: true });
       if (!opened.ok) return `Not opened: ${opened.reason}`;
       // Only whether the tab opened, plus whether the report was loaded, so the agent does not claim more than happened.
       if (opened.title === IMPORT_START_TITLE) {

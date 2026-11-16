@@ -12,6 +12,8 @@ import type { VeracodeFlaw, VeracodeReviewRow } from '../../utils/veracodeReport
 import type { WaltzComponent, WaltzReviewRow } from '../../utils/waltzReport';
 import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
 import { matchRepeats, subjectSearchTerm } from '../../imports/email';
+import { detectPatternBlocks, type BoilerplatePattern, type DetectedBlock } from '../../utils/emailBoilerplate';
+import { emailModelInUse, modelLabel, type BoardModels, type ModelSettings, type ModelSource } from '../boardModels';
 import { ACCEPTED_FILE_NAME, type AcceptedEntry } from '../../utils/waltzAccepted';
 import { recipePaths, type ImportRecipe } from './recipe';
 
@@ -30,7 +32,7 @@ export interface RepeatTicket {
 }
 
 /** An email's row on the board: the chat's email row with its subject as the summary every tab shows, and the tickets it likely repeats. */
-export type EmailBoardRow = EmailReviewRow & { summary: string; repeatOf?: RepeatTicket[] };
+export type EmailBoardRow = EmailReviewRow & { summary: string; repeatOf?: RepeatTicket[]; patternBlocks?: DetectedBlock[] };
 
 export type ImportRow = (VeracodeReviewRow | WaltzReviewRow | EmailBoardRow) & ReviewRowBase;
 
@@ -64,6 +66,13 @@ export interface ImportDeps {
   projectVersions(projectKey: string): Promise<ProjectVersionInfo[]>;
   /** The project's tickets whose summary matches one of these text search terms; candidates only, compared exactly by the caller. Throws with a worded reason. */
   summarySearch?(projectKey: string, terms: string[]): Promise<RepeatTicket[]>;
+  /** The email cleanup's patterns (`ticketSidekick.email.boilerplatePatterns`), invalid entries dropped. */
+  boilerplatePatterns?(): BoilerplatePattern[];
+  /** Appends a pattern to `ticketSidekick.email.boilerplatePatterns`. */
+  savePattern?(pattern: BoilerplatePattern): Promise<void>;
+  /** The language models a board may call, and the model settings; without them an email import offers no model check. */
+  models?: BoardModels;
+  modelSettings?: ModelSettings;
   /** The descriptions of the named tickets; a ticket that cannot be read is null. */
   descriptions(keys: string[]): Promise<Record<string, string | null>>;
   /** The Jira services the write actions run through; throws when Jira is not set up. */
@@ -105,6 +114,8 @@ export interface ImportData {
   notices: string[];
   /** An email import's files that were not there at this reading. */
   missingFiles?: string[];
+  /** An email import's model for the boilerplate check: the one in use, the ones to pick from, or why none can be listed. */
+  emailModels?: { inUse?: { id: string; label: string; source: ModelSource }; options?: Array<{ id: string; label: string }>; problem?: string };
   export: ImportExportData;
   baseUrl?: string;
 }
@@ -359,7 +370,11 @@ async function readEmails(recipe: ImportRecipe, deps: ImportDeps): Promise<Deriv
   }, descriptor, () => undefined);
 
   const repeats = await findRepeats(recipe, session.allRows, deps, notices);
-  const asBoardRow = (row: EmailReviewRow & ReviewRowBase) => ({ ...row, summary: row.subject, ...(repeats[row.id] ? { repeatOf: repeats[row.id] } : {}) });
+  const patterns = deps.boilerplatePatterns?.() ?? [];
+  const asBoardRow = (row: EmailReviewRow & ReviewRowBase) => {
+    const patternBlocks = row.markdownBody.trim() ? detectPatternBlocks(row.markdownBody, patterns, row.senderName) : [];
+    return { ...row, summary: row.subject, ...(repeats[row.id] ? { repeatOf: repeats[row.id] } : {}), ...(patternBlocks.length > 0 ? { patternBlocks } : {}) };
+  };
   const allRows = session.allRows.map(asBoardRow) as ImportRow[];
   const review = { ...session, allRows, rows: session.rows.map(asBoardRow) } as unknown as ReviewSession<ImportRow>;
   const rowKeys: Record<string, string[]> = {};
@@ -370,8 +385,30 @@ async function readEmails(recipe: ImportRecipe, deps: ImportDeps): Promise<Deriv
     ...(missingFiles.length > 0 ? { missingFiles } : {}),
     export: { tickets: [], versions: [], versionsFailed: false, descriptions: {} },
   };
+  const emailModels = await listEmailModels(deps);
+  if (emailModels) data.emailModels = emailModels;
   data.baseUrl = await deps.baseUrl();
   return { readAt: deps.now(), fingerprints: fingerprintsOf(data, hash([...hashes, ...missingFiles].join('\n')), 'none'), data };
+}
+
+/** The model of the email check as the board shows it; undefined where no model can be called. */
+async function listEmailModels(deps: ImportDeps): Promise<ImportData['emailModels']> {
+  if (!deps.models || !deps.modelSettings) return undefined;
+  const view: NonNullable<ImportData['emailModels']> = {};
+  let listed: Awaited<ReturnType<BoardModels['list']>> = [];
+  try {
+    listed = await deps.models.list();
+    if (listed.length === 0) view.problem = 'No language model is available in this VS Code. Sign in to GitHub Copilot to use the model check.';
+    else view.options = listed.map(m => ({ id: m.id, label: modelLabel(m) }));
+  } catch (err) {
+    view.problem = `The language models could not be listed: ${messageOf(err)}`;
+  }
+  const inUse = emailModelInUse(deps.modelSettings);
+  if (inUse) {
+    const model = listed.find(m => m.id === inUse.id);
+    view.inUse = { id: inUse.id, label: model ? modelLabel(model) : inUse.id, source: inUse.source };
+  }
+  return view;
 }
 
 /** How many subjects one text search asks Jira for. */

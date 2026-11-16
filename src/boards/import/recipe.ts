@@ -21,6 +21,8 @@ export interface ImportRecipe {
   reportPath: string;
   /** An email import's `.eml` files: normalised, absolute and sorted. Absent for the other kinds. */
   reportPaths?: string[];
+  /** The emails were dragged into the chat, which counts as agreeing to send them to the model. */
+  emailConsent?: boolean;
   templateName: string;
   issueType: string;
 }

@@ -158,6 +158,8 @@ interface StartState {
   reportPath?: string;
   /** An email import's files, normalised and sorted; `reportPath` is the first. */
   reportPaths?: string[];
+  /** The emails were dragged into the chat: that counts as agreeing to the model check. Dropped when other files are chosen. */
+  emailConsent?: boolean;
   /** The issue type picked for a template that names none, with that template's name. */
   issueType?: { template: string; name: string };
 }
@@ -187,13 +189,16 @@ export class ImportStartScreen {
 
   /** Starts on a kind and a report file the board was asked for with; anything else in the input is ignored. */
   prefill(input: unknown): void {
-    const v = (typeof input === 'object' && input !== null ? input : {}) as { kind?: unknown; reportPath?: unknown; reportPaths?: unknown };
+    const v = (typeof input === 'object' && input !== null ? input : {}) as { kind?: unknown; reportPath?: unknown; reportPaths?: unknown; emailConsent?: unknown };
     if (!isReportKind(v.kind)) return;
     if (v.kind !== this.state.kind) this.state = { kind: v.kind };
     if (v.kind === 'email') {
       const files = Array.isArray(v.reportPaths) ? v.reportPaths : [v.reportPath];
       const absolute = files.filter((f): f is string => typeof f === 'string' && path.isAbsolute(f));
-      if (absolute.length > 0) this.setEmails(absolute);
+      if (absolute.length > 0) {
+        this.setEmails(absolute);
+        if (v.emailConsent === true) this.state.emailConsent = true;
+      }
       return;
     }
     if (typeof v.reportPath === 'string' && path.isAbsolute(v.reportPath)) this.setReport(v.reportPath);
@@ -350,6 +355,8 @@ export class ImportStartScreen {
 
   private setEmails(filePaths: string[]): void {
     const reportPaths = normaliseEmailPaths(filePaths);
+    // Agreeing by dragging covers the dragged emails only.
+    delete this.state.emailConsent;
     this.state.reportPaths = reportPaths;
     this.state.reportPath = reportPaths[0];
     this.reports.delete(this.emailKey(reportPaths));
@@ -557,6 +564,7 @@ export class ImportStartScreen {
     if (view.kind === 'email') {
       return emailRecipe({
         projectKey: view.project.key as string, templateName: view.template.name as string, issueType: view.issueType.name as string,
+        ...(this.state.emailConsent ? { emailConsent: true } : {}),
       }, view.report.paths as string[]);
     }
     return {

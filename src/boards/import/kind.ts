@@ -237,7 +237,7 @@ function recipeOf(value: unknown): Validated<ImportRecipe> {
     }
     if (!templateName) return { ok: false, reason: 'the import names no template.' };
     if (!issueType) return { ok: false, reason: 'the import names no issue type.' };
-    return { ok: true, recipe: emailRecipe({ projectKey, templateName, issueType }, files) };
+    return { ok: true, recipe: emailRecipe({ projectKey, templateName, issueType, ...(v.emailConsent === true ? { emailConsent: true } : {}) }, files) };
   }
   if (!fullPath(v.reportPath)) {
     return { ok: false, reason: 'the import names no report file by its full path.' };

@@ -23,6 +23,8 @@ export interface ImportJiraOptions {
   descriptors: ImportDescriptors | (() => ImportDescriptors);
   now(): number;
   csvDelimiter?(): string;
+  /** What an email import's cleanup needs beyond Jira: the patterns, saving one, and the models. */
+  email?: Pick<ImportDeps, 'boilerplatePatterns' | 'savePattern' | 'models' | 'modelSettings'>;
   onDiag?: DiagLogger;
 }
 
@@ -131,6 +133,7 @@ export function importJiraDeps(options: ImportJiraOptions): ImportDeps {
 
     now: options.now,
     ...(options.csvDelimiter ? { csvDelimiter: options.csvDelimiter } : {}),
+    ...options.email,
     onDiag: options.onDiag,
   };
 }

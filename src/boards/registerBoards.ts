@@ -8,6 +8,7 @@ import { createVeracodeDescriptor } from '../imports/veracode';
 import { createWaltzDescriptor } from '../imports/waltz';
 import { checkEmailBatchCaps, createEmailDescriptor } from '../imports/email';
 import { parseEmlFile } from '../utils/emlParser';
+import { resolveBoilerplatePatterns } from '../utils/emailBoilerplate';
 import { EMAIL_MODEL_SETTING, REVIEW_MODEL_SETTING, type BoardModels, type ModelSettings } from './boardModels';
 import { emailSettings, veracodeSettings, waltzSettings } from '../services/importSettings';
 import { registerKind } from '../sessions/boardKind';
@@ -132,6 +133,29 @@ export function registerBoards(
     descriptors,
     now: () => Date.now(),
     csvDelimiter: () => resolveCsvDelimiter(vscode.workspace.getConfiguration('ticketSidekick').get('jira.overviewCsvDelimiter')),
+    email: {
+      boilerplatePatterns: () => resolveBoilerplatePatterns(
+        vscode.workspace.getConfiguration('ticketSidekick').get<unknown>('email.boilerplatePatterns'),
+        // An entry's phrases are email text: only the reason and the kind are logged.
+        (reason, entry) => logDiag('boards.import', 'warn', `Ignored an invalid ticketSidekick.email.boilerplatePatterns entry — ${reason}`, {
+          reason, kind: typeof entry === 'object' && entry !== null && typeof (entry as { kind?: unknown }).kind === 'string' ? (entry as { kind: string }).kind.slice(0, 20) : undefined,
+        }),
+      ),
+      savePattern: async pattern => {
+        const cfg = vscode.workspace.getConfiguration('ticketSidekick');
+        const current = cfg.inspect<unknown>('email.boilerplatePatterns')?.globalValue;
+        try {
+          await cfg.update('email.boilerplatePatterns', [...(Array.isArray(current) ? current : []), pattern], vscode.ConfigurationTarget.Global);
+        } catch (err) {
+          // An error may echo the written value, whose phrases are email text.
+          const message = err instanceof Error ? err.message : String(err);
+          const phrases = [pattern.start, pattern.end].filter((p): p is string => !!p);
+          throw new Error(phrases.reduce((m, p) => m.split(p).join('<pattern text>'), message));
+        }
+      },
+      models: vscodeBoardModels('Ticket Sidekick checks imported emails for boilerplate such as signatures and legal footers.'),
+      modelSettings: vscodeModelSettings(),
+    },
     onDiag: (level, message, details) => logDiag('boards.import', level, message, details),
   });
   const kinds = [

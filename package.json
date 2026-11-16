@@ -718,7 +718,7 @@
       {
         "name": "jira_open_board",
         "displayName": "Open a Ticket Sidekick board",
-        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, the stored sessions, or the import board for a Veracode or Waltz report. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. For a cleanup by a rule from .jira-templates.json, pass the rule's name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. For a report import, pass board import with kind and path; the user reviews and creates the tickets on the board. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
+        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, the stored sessions, or the import board for a Veracode or Waltz report or for .eml emails. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. For a cleanup by a rule from .jira-templates.json, pass the rule's name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. For a report import, pass board import with kind and path; the user reviews and creates the tickets on the board. For emails, pass kind email with paths, and dragged true when the user dragged them into the chat; the user creates tickets or adds the emails as comments on the board. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
         "userDescription": "Opens a board in its own editor tab.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraOpenBoard",
@@ -737,19 +737,32 @@
                 "sessions",
                 "import"
               ],
-              "description": "security-report: a project's open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, where the user selects tickets and moves them or sets a field, or a cleanup rule's tickets. sessions: the stored board sessions of this workspace. import: imports a Veracode Detailed Report or a Waltz OSS Report into Jira tickets."
+              "description": "security-report: a project's open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, where the user selects tickets and moves them or sets a field, or a cleanup rule's tickets. sessions: the stored board sessions of this workspace. import: imports a Veracode Detailed Report, a Waltz OSS Report or .eml emails into Jira tickets."
             },
             "kind": {
-              "description": "import: the report kind, veracode (Detailed Report XML) or waltz (OSS Report .xlsx).",
+              "description": "import: the report kind, veracode (Detailed Report XML), waltz (OSS Report .xlsx) or email (.eml files).",
               "type": "string",
               "enum": [
                 "veracode",
-                "waltz"
+                "waltz",
+                "email"
               ]
             },
             "path": {
               "description": "import: the report file, a path in the workspace or an absolute path or file URI, e.g. a file dragged into the chat.",
               "type": "string"
+            },
+            "paths": {
+              "description": "import with kind email: the .eml files, in place of path, each like path.",
+              "maxItems": 50,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "dragged": {
+              "description": "import with kind email: true when the user dragged the emails into the chat, which counts as agreeing to the model check of their text.",
+              "type": "boolean"
             },
             "project": {
               "description": "security-report: the Jira project key, e.g. PROJ. Leave out to use the default project.",

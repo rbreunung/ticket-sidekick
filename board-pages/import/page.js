@@ -105,7 +105,77 @@ function repeatNote(row, ctx) {
     }, `Add as comment to ${first.key}…`));
 }
 
+// ---- Email cleanup ----------------------------------------------------------------------------
+
+const MODEL_STATUS = {
+  'not-needed': '', 'awaiting-consent': 'Waiting for your answer', declined: 'Not checked (you said no)',
+  checked: 'Checked', failed: 'Check failed', 'too-long': 'Too long for the check',
+};
+const cleanupDrafts = { modelId: '' };
+
+/** The model picker of the check: the model in use, or a pick, plus the reason none can be picked. */
+function modelPicker(cleanup, off) {
+  const model = cleanup.model ?? {};
+  const options = model.options ?? [];
+  return [
+    model.inUse ? h('span', {}, `Model: ${model.inUse.label}. `) : h('span', {}, 'No model is set for the check. '),
+    options.length > 0 ? h('select', {
+      id: 'cleanup-model', 'aria-label': 'Model for the email check', disabled: off, onChange: e => { cleanupDrafts.modelId = e.target.value; },
+    }, h('option', { value: '', selected: !cleanupDrafts.modelId }, model.inUse ? 'Keep this model' : 'Choose a model…'),
+    options.map(o => h('option', { value: o.id, selected: o.id === cleanupDrafts.modelId }, o.label))) : null,
+    model.problem ? h('p', { class: 'banner' }, model.problem) : null,
+  ];
+}
+
+/** The cleanup stage before the New tab: the consent question, then what was found, to strip or keep. */
+function cleanupStage(cleanup, board, ctx) {
+  const { off, writeOff } = ctx;
+  const check = () => ctx.preview({ type: 'cleanup-check', ...(cleanupDrafts.modelId ? { modelId: cleanupDrafts.modelId } : {}) });
+  const rows = cleanup.rows;
+  const table = h('div', { class: 'table-wrap' }, h('table', { 'aria-label': 'Emails and the boilerplate found' },
+    headRow(cleanup.phase === 'preview' ? 'Clean' : '', 'File', 'Subject', 'Found', 'Model check'),
+    h('tbody', {}, rows.map(row => h('tr', { id: `cleanup-${row.id}` },
+      h('td', {}, cleanup.phase === 'preview' ? h('input', {
+        type: 'checkbox', id: `cleanup-include-${row.id}`, checked: !row.excluded, disabled: off, 'aria-label': `Clean ${row.ref}`,
+        onChange: () => board.act({ type: 'cleanup-exclude', id: row.id, excluded: !row.excluded }),
+      }) : ''),
+      h('td', {}, row.ref), h('td', {}, row.subject),
+      h('td', {}, row.blocks.length === 0 ? h('span', { class: 'muted' }, 'Nothing') : h('ul', {}, row.blocks.map(b => h('li', {},
+        `${b.kind} (${b.lines} line(s), ${b.source === 'model' ? 'found by the model' : 'your pattern'}): `, h('q', {}, b.excerpt), ' ',
+        b.savable ? h('vscode-button', { id: `save-${b.id}`, secondary: true, disabled: writeOff, onClick: () => ctx.preview({ type: 'cleanup-save', block: b.id }) }, 'Save as pattern…') : null,
+        b.saved ? h('span', { class: 'muted' }, 'Saved') : null)))),
+      h('td', {}, `${MODEL_STATUS[row.status] ?? row.status}${row.modelId ? ` (${row.modelId})` : ''}`))))));
+
+  if (cleanup.phase === 'consent') {
+    return [
+      h('h2', {}, 'Boilerplate cleanup'),
+      h('p', {}, cleanup.agreed
+        ? `You agreed to the model check by dragging the emails into the chat. Preview the check to see what is sent: ${cleanup.toCheck} email(s) none of your patterns matched.`
+        : `${cleanup.toCheck} email(s) match none of your boilerplate patterns. A language model can look for headers, footers and signatures in them. Nothing is sent until you preview the check and apply it.`),
+      h('div', { class: 'bar' }, modelPicker(cleanup, off)),
+      h('div', { class: 'bar' },
+        h('vscode-button', { id: 'cleanup-check', disabled: writeOff || cleanup.toCheck === 0, onClick: check }, 'Preview model check…'),
+        h('vscode-button', { id: 'cleanup-skip', secondary: true, disabled: off, onClick: () => board.act({ type: 'cleanup-skip' }) }, 'Continue without the model')),
+      ctx.summary,
+      table,
+    ];
+  }
+  return [
+    h('h2', {}, 'Boilerplate cleanup'),
+    h('p', {}, 'This is what was found. Strip removes it from the emails that are ticked, keeping a signature\'s name line; Keep imports every email as it is. The files are never changed.'),
+    ctx.summary,
+    table,
+    h('div', { class: 'bar' },
+      h('vscode-button', { id: 'cleanup-strip', disabled: off, onClick: () => board.act({ type: 'cleanup-strip' }) }, 'Strip and continue'),
+      h('vscode-button', { id: 'cleanup-keep', secondary: true, disabled: off, onClick: () => board.act({ type: 'cleanup-keep' }) }, 'Keep everything and continue')),
+    cleanup.toCheck > 0 ? h('div', { class: 'bar' }, modelPicker(cleanup, off),
+      h('vscode-button', { id: 'cleanup-check', secondary: true, disabled: writeOff, onClick: check }, `Preview model check of ${cleanup.toCheck} more email(s)…`)) : null,
+  ];
+}
+
 function newTab(view, board, ctx) {
+  const cleanup = view.ext['email-cleanup'];
+  if (cleanup && cleanup.phase !== 'done') return cleanupStage(cleanup, board, ctx);
   const rows = view.new?.rows ?? [];
   const ext = view.ext.new ?? { toCreate: 0, perApply: 50, addedTo: {} };
   const addedTo = ext.addedTo ?? {};
