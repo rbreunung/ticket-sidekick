@@ -537,7 +537,7 @@ function render(view, board, locked, state) {
       h('vscode-button', { id: 'pick-file-again', disabled: locked, onClick: () => board.pickFile() }, 'Pick the file again…')) : null,
     view.finished ? h('section', { class: 'banner', 'aria-label': 'Finished' },
       h('p', {}, view.ext['search-export']?.finishedMessage ?? 'Nothing left to do.'),
-      h('vscode-button', { id: 'discard-finished', secondary: true, disabled: locked, onClick: () => board.discard() }, 'Discard')) : null,
+      h('vscode-button', { id: 'discard-finished', secondary: true, disabled: locked, onClick: () => board.discard() }, 'Close')) : null,
     view.notices.map(n => h('p', { class: 'banner' }, n)),
     view.acceptedHidden ? h('p', { id: 'accepted-hidden', class: 'muted' }, view.acceptedHidden) : null,
     view.dropped.length ? h('section', { class: 'banner', 'aria-label': 'Dropped choices' },

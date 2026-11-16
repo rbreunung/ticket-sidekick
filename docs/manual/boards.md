@@ -149,7 +149,7 @@ The board checks the report file and Jira when it opens, after a restart and whe
 
 ### Finished
 
-When no tab has work left, the board says there is nothing left to do and offers **Discard**. The import stays, with export and **Reload report**, until you discard it or it expires after `ticketSidekick.sessions.retentionDays`.
+When no tab has work left, the board says there is nothing left to do and offers **Close**. The import stays, with export and **Reload report**, until you close it or it expires after `ticketSidekick.sessions.retentionDays`.
 
 ## How a board keeps its data
 
@@ -160,7 +160,7 @@ Every board shows a **session**: the data it read and what you set on the board.
 - **After a restart.** VS Code brings a board's tab back with the window, and the board shows its stored session, marked "restored session", then checks the source.
 - **If the check fails.** The stored data stays on show, with a line saying the check failed and when the data is from. A board that writes applies nothing until a check passes: it offers paging and **Refresh** only.
 - **While Apply runs** the board shows its progress and disables every control except its tabs. Each finished write is saved at once, so a board brought back after VS Code closed in the middle of an Apply shows the finished tickets as done, and the next preview covers only the rest.
-- **Discard session** on a board deletes its session.
+- **Close** on a board deletes its session and closes its tab. Closing the tab with its × keeps the session, so the board opens again where you left it.
 
 ## Stored sessions
 

@@ -224,7 +224,7 @@ sequenceDiagram
 | Contents | Never credentials. Vulnerability rows, ticket text and PR findings are stored, as decided; the manual says so and names the clear command. |
 | Format | Each board kind has a `formatVersion`. A file whose version differs is rebuilt from its stored recipe when the kind's `revalidate` accepts that recipe: the board is built again and says it was rebuilt after an update, and the earlier working state is not kept. A kind without `revalidate`, or a recipe that fails it, deletes the file and the board says the stored session was discarded. No migration code. |
 | Expiry | At start and once a day, sessions not used for `ticketSidekick.sessions.retentionDays` (default 14) are deleted. |
-| Removal | Finish or Discard on the board, Delete on the sessions board, and the command "Ticket Sidekick: Clear stored sessions". |
+| Removal | Finish or Close on the board (which also closes its tab), Delete on the sessions board, and the command "Ticket Sidekick: Clear stored sessions". |
 | Size | A session over a fixed limit is kept in memory only, and the board says it will not survive a restart. |
 
 ### 4.5 Restart
@@ -280,7 +280,7 @@ extension → page    { id, ok: true, data }  or  { id, ok: false, status, error
 | `preview` with `revision`, `action` | Returns a write plan and its plan ID |
 | `apply` with `planId` | Redeems a plan ID |
 | `save` with `format` | For boards that export: writes a file through VS Code's save dialog |
-| `discard` | Deletes the session |
+| `discard` | Deletes the session and closes its tab (the page's Close) |
 | `pick-file` | The import board only: "Pick the file again". The path comes from VS Code's native open dialog, never from the page; the session moves with `relocate` and the tab follows it to the new id |
 | `list`, `delete`, `delete-all`, `open` | The sessions board only: list stored sessions, delete one or all, reopen one in its own tab |
 | `view`, `kind`, `pick-file`, `template`, `issue-type`, `open`, `start-over`, `open-setting` | The import start screen only (`ImportStartScreen.handle`): the native file dialog, the template setting write and the Settings screen are supplied by the host, so the page names no path, setting key or session |

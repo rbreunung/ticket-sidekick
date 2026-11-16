@@ -400,7 +400,7 @@ describe('the import board page', () => {
     expect(must('accepted-hidden').textContent).toBe('2 accepted CVEs hidden · 1 accepted component hidden');
   });
 
-  it('says there is nothing left to do and offers Discard on a finished import', async () => {
+  it('says there is nothing left to do and offers Close on a finished import', async () => {
     installCanned({ state: boardState(baseView({ finished: true, new: { rows: [] } })), answer: async () => ({ ok: true }) });
     await loadPage();
     expect(page.root.textContent).toContain('Nothing left to do');

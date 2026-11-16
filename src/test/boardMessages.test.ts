@@ -51,7 +51,9 @@ const host: BoardHost = {
     reopened.push(`${kind}:${id}`);
     return { ok: true };
   },
+  closeSession: (kind, id) => { closed.push(`${kind}:${id}`); },
 };
+let closed: string[] = [];
 
 let nextId = 1;
 
@@ -103,6 +105,14 @@ describe('a board page and the extension', () => {
     expect(asBoardRequest({ op: 'state' })).toBeUndefined();
     expect(asBoardRequest({ id: 1, op: 'state', body: [] })).toBeUndefined();
     expect(asBoardRequest({ id: 1, op: 'state' })).toEqual({ id: 1, op: 'state', body: {} });
+  });
+
+  it('closes the tab when the page closes the board, and the session is gone', async () => {
+    closed = [];
+    const state = await openReady();
+    expect((await ask(report(state.id), 'discard')).status).toBe(200);
+    expect(closed).toEqual([`security-report:${state.id}`]);
+    expect((await ask(SESSIONS, 'list')).body.sessions).toEqual([]);
   });
 
   it('shows the session, applies a filter, and waits for changes', async () => {
