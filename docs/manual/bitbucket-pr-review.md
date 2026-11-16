@@ -132,7 +132,6 @@ The session also ends on its own when you move on:
 
 - A message with a PR URL always starts a fresh review, whatever mode word or question comes with it.
 - `/review` or a bare `quick`, `smart` or `deep` without a PR URL ends the session and shows the usual "point me at a PR" help instead of being answered as a question about the old review.
-- Any `@jira` request ends it, so a later `@bitbucket` message is not answered as a follow-up to the old review.
 
 `@bitbucket check` and `@bitbucket usage` do not end it: you can run either in the middle of a review and keep asking follow-up questions.
 

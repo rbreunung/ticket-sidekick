@@ -6,4 +6,4 @@ Lists of tickets, the security report and Veracode and OSS report imports open a
 
 A tool that changes Jira asks you to confirm first, showing exactly what it will write.
 
-The `@jira` chat participant now only imports emails, and `@bitbucket` reviews pull requests; both are deprecated, and the tools, `/ts-jira` commands and boards replace them.
+Every Jira task, the email import included, runs with these tools, the `/ts-jira` commands and the boards. The `@bitbucket` chat participant still reviews pull requests and is deprecated.

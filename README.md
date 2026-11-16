@@ -5,10 +5,10 @@
 Jira and Bitbucket inside GitHub Copilot Chat in VS Code:
 
 - **Jira tools for Copilot** — Copilot's agent views, finds, creates, comments on, moves and updates Jira tickets through Ticket Sidekick's tools, or you type a command such as `/ts-jira view PROJ-123`
-- **Boards** — ticket lists, the security report and Veracode and OSS report imports open in an editor tab, where you select, preview and apply changes; a board comes back after a restart
-- **`@jira` and `@bitbucket` chat participants (deprecated)** — `@jira` now only imports emails, and `@bitbucket` runs the pull request reviews
+- **Boards** — ticket lists, the security report and the imports of Veracode reports, OSS reports and emails open in an editor tab, where you select, preview and apply changes; a board comes back after a restart
+- **`@bitbucket` chat participant (deprecated)** — runs the pull request reviews until the review board exists
 
-> **Deprecation notice.** The `@jira` and `@bitbucket` chat participants are deprecated. `@jira` keeps only the email import; Veracode and OSS reports are imported on the import board, and every other Jira task is done with the Copilot tools, `/ts-jira` commands and boards. Both participants will be removed once the email import and the pull request review have moved to boards. Start with [Copilot tools and boards](#copilot-tools-and-boards).
+> **`@jira` is gone.** Every Jira task, the email import included, runs from a Copilot chat with the Jira tools and `/ts-jira` commands, or on a board. The `@bitbucket` chat participant is deprecated and will be removed once the pull request review has moved to a board. Start with [Copilot tools and boards](#copilot-tools-and-boards).
 
 ---
 
@@ -26,13 +26,13 @@ See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool 
 
 ### Boards
 
-Larger views open as a **board** in their own editor tab. The security report opens with "the security report for PROJ", `/ts-jira security-report PROJ` or `Ticket Sidekick: Open security report`. A ticket list opens when you ask Copilot to see tickets or to change several of them, with `/ts-jira search <JQL or filter>` or `Ticket Sidekick: Open ticket list`: you select tickets there and move them or set a field after a preview. A cleanup rule from `.jira-templates.json` opens the same board with "run the cleanup Close released bugs", `/ts-jira cleanup <rule> [in VERSION]` or `Ticket Sidekick: Run a cleanup rule`. A Veracode Detailed Report or a Waltz OSS Report is imported on the import board: `Ticket Sidekick: Open import board`, `/ts-jira import <veracode or waltz> [PATH]`, or ask Copilot with the report's path. A board keeps its work in progress as a stored session, so it comes back after a restart; `/ts-jira sessions` or `Ticket Sidekick: Open stored sessions` lists the stored sessions and `Ticket Sidekick: Clear stored sessions` deletes them all. The Command Palette commands work without Copilot. See [Boards](docs/manual/boards.md).
+Larger views open as a **board** in their own editor tab. The security report opens with "the security report for PROJ", `/ts-jira security-report PROJ` or `Ticket Sidekick: Open security report`. A ticket list opens when you ask Copilot to see tickets or to change several of them, with `/ts-jira search <JQL or filter>` or `Ticket Sidekick: Open ticket list`: you select tickets there and move them or set a field after a preview. A cleanup rule from `.jira-templates.json` opens the same board with "run the cleanup Close released bugs", `/ts-jira cleanup <rule> [in VERSION]` or `Ticket Sidekick: Run a cleanup rule`. A Veracode Detailed Report, a Waltz OSS Report or one or more `.eml` emails are imported on the import board: `Ticket Sidekick: Open import board`, `/ts-jira import <veracode, waltz or email> [PATH ...]`, or ask Copilot with the files' paths or with the emails attached. A board keeps its work in progress as a stored session, so it comes back after a restart; `/ts-jira sessions` or `Ticket Sidekick: Open stored sessions` lists the stored sessions and `Ticket Sidekick: Clear stored sessions` deletes them all. The Command Palette commands work without Copilot. See [Boards](docs/manual/boards.md).
 
 ---
 
 ## Jira setup
 
-The Jira tools, the boards and the `@jira` email import share this setup.
+The Jira tools and the boards share this setup.
 
 ### Quickstart
 
@@ -84,15 +84,13 @@ Omit this setting for Data Center (default).
 
 ## Report imports
 
-### Veracode and OSS reports: the import board
+### The import board: Veracode reports, OSS reports and emails
 
-`Ticket Sidekick: Open import board` opens a start screen: pick Veracode or Waltz OSS and the report file. The template comes from `ticketSidekick.veracode.template` or `ticketSidekick.waltz.template`, asked for once and saved when empty; the project is `ticketSidekick.jira.defaultProject`, asked for (typed, or chosen from Jira's projects) and saved the same way when it is empty or wrong. The board shows the report's groups as tabs (New, Already ticketed, Stale, and Accepted for OSS reports), each with its own preview and Apply. You can fold findings into one ticket, add them to an existing ticket, refresh existing tickets with `rewrite` or `new ticket`, close stale tickets, merge tickets, accept OSS CVEs and components, and save the overview as CSV or Excel. Veracode tickets get their Jira Due Date from the per-severity day table in `ticketSidekick.veracode.slaDays`; OSS tickets from the report's remediation dates. An unfinished import, including a half-done ticket merge, comes back after a restart. See [Boards → Import board](docs/manual/boards.md#import-board) and [Report Imports](docs/manual/report-imports.md).
+`Ticket Sidekick: Open import board` opens a start screen: pick Veracode, Waltz OSS or Email and the report file or the `.eml` files. The template comes from `ticketSidekick.veracode.template`, `ticketSidekick.waltz.template` or `ticketSidekick.email.template`, asked for once and saved when empty; the project is `ticketSidekick.jira.defaultProject`, asked for (typed, or chosen from Jira's projects) and saved the same way when it is empty or wrong. The board shows the report's groups as tabs (New, Already ticketed, Stale, and Accepted for OSS reports), each with its own preview and Apply. You can fold findings into one ticket, add them to an existing ticket, refresh existing tickets with `rewrite` or `new ticket`, close stale tickets, merge tickets, accept OSS CVEs and components, and save the overview as CSV or Excel. Veracode tickets get their Jira Due Date from the per-severity day table in `ticketSidekick.veracode.slaDays`; OSS tickets from the report's remediation dates. An unfinished import, including a half-done ticket merge, comes back after a restart. See [Boards → Import board](docs/manual/boards.md#import-board) and [Report Imports](docs/manual/report-imports.md).
 
-The two commands "Create Jira tickets from Veracode report (.xml)" and "Create Jira tickets from OSS report (.xlsx)" and `@jira`'s Veracode and Waltz imports are gone.
+An email import starts with the boilerplate cleanup: your patterns from `ticketSidekick.email.boilerplatePatterns` find confidentiality headers, legal footers and signatures first. Emails they do not match can be checked by a language model, but only after you preview that check, which names every email it sends and the model, and apply it; the model is `ticketSidekick.email.checkModel`, picked on the board when it is empty. You then strip or keep what was found. Each email becomes a new ticket with its attachments, or a comment on an existing ticket; an email whose subject is already a ticket's summary is marked as a likely repeat and offers to be added to that ticket. See [Report Imports](docs/manual/report-imports.md).
 
-### Emails: `@jira` (deprecated)
-
-`@jira` now only imports emails: a `.eml` email becomes a new ticket, or a comment on an existing one. Start it with `Ticket Sidekick: Create Jira ticket from email (.eml)` or `@jira create ticket from mail`. Type `@jira help` (or just `@jira`) for its commands with the extension version; inside an email import, `help` lists the commands of the screen you are on. A Veracode or OSS report request to `@jira` answers with a pointer to the import board, and any other request with a pointer to `/ts-jira` and Agent mode, where viewing, creating, commenting, moving and searching tickets, cleanup rules and the security report work now. See [Report Imports](docs/manual/report-imports.md).
+The `@jira` chat participant, its email import and the commands "Create Jira ticket from email (.eml)", "Create Jira tickets from Veracode report (.xml)" and "Create Jira tickets from OSS report (.xlsx)" are gone.
 
 ### Templates and cleanup rules
 
@@ -180,7 +178,7 @@ Run `@bitbucket check` after setup to confirm the connection and see which accou
 | `@bitbucket copy` (or the **Copy for Teams** chip) | Copy the review to the clipboard as plain text, grouped by severity, ready to paste into a Teams chat |
 | `@bitbucket copy #1 #3` | Copy only findings #1 and #3 (without the requirements coverage) |
 | `@bitbucket the goal is actually <text>` | After a ticket check, redo the requirements coverage against your own statement of the goal; the findings stay as they are |
-| `@bitbucket done` (or the **Done** chip) | End the review session. `c` and `cancel` work too; a new PR URL or any `@jira` request also ends it |
+| `@bitbucket done` (or the **Done** chip) | End the review session. `c` and `cancel` work too; a new PR URL also ends it |
 | `@bitbucket #1 #3 add to review` | Preview findings #1 and #3 as comments — reply "post it" to confirm, "(c)" to cancel, or refine |
 | `@bitbucket add #1 #2 #3 to review` | Same — numbers can appear anywhere relative to the keywords |
 | `@bitbucket add all to review` | Preview all findings as PR comments at once |
@@ -207,8 +205,8 @@ See [Settings Reference → Bitbucket](docs/manual/settings-reference.md#bitbuck
 
 ## Troubleshooting
 
-Both `@jira` and `@bitbucket` log diagnostic detail beyond what's shown in
-chat to a shared VS Code output channel: **View → Output → "Ticket
+The Jira tools, the boards and `@bitbucket` log diagnostic detail beyond what's shown in
+chat or on a board to a shared VS Code output channel: **View → Output → "Ticket
 Sidekick"**.
 
 For `@bitbucket` reviews specifically, this includes: the model in use

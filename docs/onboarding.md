@@ -4,7 +4,7 @@ How a first-time user of Ticket Sidekick discovers what the extension can do
 and gets to a working first ticket or PR review without reading the README
 first.
 
-> **Direction.** The Jira tools, the `/ts-jira` skills and the boards are the current product. The `@jira` and `@bitbucket` chat participants described further down (slash commands, chips, the unclassified-prompt fallback) are **deprecated** and documented here for maintenance only. See [`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md).
+> **Direction.** The Jira tools, the `/ts-jira` skills and the boards are the current product. The `@bitbucket` chat participant described further down (slash commands, chips, the unclassified-prompt fallback) is **deprecated** and documented here for maintenance only; `@jira` was removed on 2026-11-16. See [`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md).
 
 ## Jira tools
 
@@ -22,14 +22,14 @@ Tools that only read Jira carry `readOnlyHint` and run without asking. Every oth
 ### Safeguards for agent-supplied input
 
 - **Ticket keys** are checked with `isSafePathSegment()` ([`src/tools/pathSafety.ts`](../src/tools/pathSafety.ts)) before use, since they are put into request URLs and local paths.
-- **Uploads** accept only a file that, with symlinks resolved, lies inside an open workspace folder, with no dotfile or dotfolder segment, up to 25 MB. An agent-supplied path is otherwise a way to send an arbitrary local file to Jira. `@jira upload` keeps its own home-folder rule (`isAllowedUploadPath()`).
+- **Uploads** accept only a file that, with symlinks resolved, lies inside an open workspace folder, with no dotfile or dotfolder segment, up to 25 MB. An agent-supplied path is otherwise a way to send an arbitrary local file to Jira.
 - **Duplicate writes** ([`src/tools/recentCallGuard.ts`](../src/tools/recentCallGuard.ts), through `writeGuard.ts`): create ticket, add comment and upload attachment create something new per call, so the same call repeated within a minute is skipped. The guard lives in the tools' long-lived dependencies, built once at activation. A call that wrote nothing releases its claim at once, so a real retry goes through; a write that timed out keeps it, since Jira may still have made the change, and its answer says so.
 - **Never-guess issue type:** without an issue type or a template that sets one, create ticket lists the project's issue types (`TicketService.getIssueTypes`) and creates nothing. See [`docs/solutions/logic-errors/combined-create-list-silently-guesses-issue-type-and-drops-no-template-fallback.md`](solutions/logic-errors/combined-create-list-silently-guesses-issue-type-and-drops-no-template-fallback.md) for the failure mode this must not repeat.
 - **Moves that stop partway:** each step of a move is a real Jira write, so a failed step leaves the ticket at an intermediate status. Move ticket reports where it landed and never retries. When no path is known, it discovers the workflow once (`discoverAndCacheWorkflow`) and tries again; the chat `transition` operation shares the same `resolveAndApplyTransition()` ([`src/services/WorkflowService.ts`](../src/services/WorkflowService.ts)).
 
 ### No session memory
 
-Unlike `@jira` chat's multi-turn session types (see [`docs/jira-flows.md`](jira-flows.md#jira-sessions)), tools carry no session state between calls. Write tools take a fully specified ticket or project key; only view ticket and load ticket fall back to the key in the current git branch.
+Unlike the chat participants' multi-turn session types, tools carry no session state between calls. Write tools take a fully specified ticket or project key; only view ticket and load ticket fall back to the key in the current git branch.
 
 ## Bitbucket Language Model tools
 
@@ -104,7 +104,7 @@ one comment.
 
 ### No session memory
 
-Like `@jira`'s tools, `bitbucket_*` tools carry no session state between
+Like the Jira tools, `bitbucket_*` tools carry no session state between
 calls (KTD6) — every call takes fully-specified parameters (`project`,
 `repo`, `prId`, …), with no last-PR or in-progress-review context to fall
 back on, unlike `@bitbucket` chat's single `ReviewSession` (see
@@ -123,9 +123,9 @@ participants also declare `disambiguation` metadata (category, description,
 example prompts) there so Copilot can route an ambiguous prompt to the right
 participant without the user typing `@jira`/`@bitbucket` explicitly.
 
-### `@jira`
+### `@jira` (removed)
 
-`@jira` has no slash command since 2026-11-14. Since 2026-11-15 it runs only the email import, which starts from its Command Palette command or a plain request ("create ticket from mail"); its disambiguation entry names emails only. Veracode and Waltz reports are imported on the import board (`Ticket Sidekick: Open import board`, or `jira_open_board` with board `import`). `src/test/jiraCommandsGuard.test.ts` fails if a slash command comes back. The removed commands' replacements are listed in [`docs/jira-flows.md`](jira-flows.md#where-the-removed-flows-went).
+`@jira` was removed on 2026-11-16, with its email import and Command Palette command. Every Jira task runs with the Jira tools, the `/ts-jira` skills and the boards; the email import is a kind of the import board. The removed commands' replacements are listed in [`docs/jira-flows.md`](jira-flows.md#where-the-removed-flows-went).
 
 ### `@bitbucket`
 
@@ -175,29 +175,19 @@ and returns 2-3 `{ prompt, label? }` suggestions phrased as literal next
 prompts.
 
 **Greeting/empty-prompt detection (R9).** `isGreetingOrEmpty(prompt)`
-(`src/participant/sessionState.ts`, shared by both participants) detects an
+(`src/utils/chatPrimitives.ts`) detects an
 empty invocation or an obvious greeting/help-shaped prompt ("hi", "help",
-"what can you do") before it's ever handed to `@jira`'s LLM intent parser or
+"what can you do") before it's ever handed to
 `@bitbucket`'s PR-URL match — checked only *after* every multi-turn
 session-tag branch has had its chance to claim the turn (a session already
 in flight always wins, mirroring the ordering `docs/jira-flows.md`'s
-slash-command dispatch already follows), and, for `@jira`, only when no
-`/command` was used. It matches the WHOLE normalized prompt against a fixed
+slash-command dispatch already follows). It matches the WHOLE normalized prompt against a fixed
 phrase set — never a substring or per-word test — so a real ticket key that
 happens to look like a greeting word (e.g. `HI-1`) or a genuine operation
 prompt ("update HI-1 status") is never misclassified; see
 [`docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md`](solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md)
 for the general specific-before-generic principle this sidesteps by
 construction.
-
-For `@jira`, every phrase in that set prints the same single help screen: the tool name and version (read from
-`context.extension.packageJSON` when the help is shown, `unknown` when missing), the email import and the
-imports-only notice, built from the catalog in `src/participant/session/jiraCommands.ts`.
-
-**Imports-only notice (`@jira` only).** A prompt the intent parse does not read as an email import
-(`createFromEmail`, `addEmailComment`) is `other` and gets
-`JIRA_ONLY_IMPORTS_NOTICE`, which points to the import board for Veracode and Waltz reports, and to `/ts-jira help` and Agent mode; nothing is read from or written to Jira.
-`@bitbucket` has no equivalent, since it has no LLM intent classifier, only a PR-URL match.
 
 **KTD14.** `@bitbucket`'s greeting response delivers its example prompts *only* as follow-up chips, capped at 2-3
 and phrased as literal next prompts a user could send — never duplicated as a bulleted list in the response's own
@@ -220,7 +210,7 @@ setting/command it describes.
 | 3 | `jiraDefaultProject` | `ticketSidekick.jira.defaultProject` setting | `onSettingChanged:ticketSidekick.jira.defaultProject` |
 | 4 | `jiraWorkflow` | `/ts-jira workflow <KEY>`, which shows a ticket's reachable statuses and discovers the workflow the first time | `onContext:ticketSidekick.workflowViewed` — set by `src/tools/registerJiraTools.ts` after a successful `jira_workflow` call (`src/tools/walkthroughProgress.ts`) |
 | 5 | `jiraFirstTicket` | Creating a template from a ticket (`/ts-jira-template`) and a ticket from it, or `/ts-jira-create` directly | `onContext:ticketSidekick.firstTicketCreated` — set after a successful `jira_create_ticket` call, the same way |
-| 6 | `jiraCopilotTools` | The Jira tools, `/ts-jira help` and the boards; says that `@jira` and `@bitbucket` are deprecated | `onCommand:ticket-sidekick.boards.sessions` |
+| 6 | `jiraCopilotTools` | The Jira tools, `/ts-jira help` and the boards; says that `@bitbucket` is deprecated | `onCommand:ticket-sidekick.boards.sessions` |
 
 **First-touch auto-open (KTD11).** `extension.ts`'s `activate()` opens this
 walkthrough automatically once, guarded by the `globalState` flag

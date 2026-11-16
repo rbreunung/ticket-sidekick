@@ -1,6 +1,6 @@
 # Migration status: from chat participants to tools and boards
 
-Last updated: 2026-11-15.
+Last updated: 2026-11-16.
 
 This page says where the migration stands and what is still open. It is the working list; the other documents hold the detail:
 
@@ -19,7 +19,7 @@ Update this page in every change that closes or adds an open point.
 | | |
 | --- | --- |
 | **Build on** | Extension tools (VS Code language model tools), the `/ts-jira` skills, and boards (webviews in editor tabs that show a session the extension owns) |
-| **Deprecated** | The `@jira` and `@bitbucket` chat participants. They run what has no tool or board yet and get bug fixes only |
+| **Deprecated** | The `@bitbucket` chat participant. It runs the pull request review until the review board exists and gets bug fixes only. `@jira` was removed on 2026-11-16 |
 | **Removed, not coming back without a new decision** | The MCP server, the `ticketSidekick.jira.toolsFrom` setting, VS Code canvases, the agent plugin, the local HTTP server and its `http.noProxy` requirement |
 
 ## 2. What is done
@@ -27,12 +27,12 @@ Update this page in every change that closes or adds an open point.
 | Area | State |
 | --- | --- |
 | Single-ticket Jira work | 16 tools: check connection, view, find, list filters, workflow, list templates, list fields, check required fields, load, move, create, comment, update any field (set, add, remove), upload, correct a description, create a template from a ticket |
-| Opening boards | `jira_open_board` tool (with cleanup rules, fix version, sprint, assignee and team narrowing, and the import board with a report kind and path), five Command Palette commands, `/ts-jira search`, `cleanup`, `security-report`, `sessions`, `import` |
+| Opening boards | `jira_open_board` tool (with cleanup rules, fix version, sprint, assignee and team narrowing, and the import board with a report kind and path, or emails with their paths), five Command Palette commands, `/ts-jira search`, `cleanup`, `security-report`, `sessions`, `import` |
 | Skills | `/ts-jira` (typed commands), `/ts-jira-create`, `/ts-jira-brief`, `/ts-jira-spell-check`, `/ts-jira-template` |
-| Removed `@jira` flows | Every Step 1 flow: create, view, summarize, show fields, check required fields, comments, field, move, load, upload, workflow, check, search, filters, bulk transition, bulk field update, cleanup, `/security-report`, the description and comment preview, spell check and template generation. `@jira` has no slash command left. The Veracode and Waltz imports and their two Command Palette commands followed on 2026-11-15; `@jira` runs only the email import, and any other request, a Veracode or Waltz one included, gets a notice pointing to the import board, `/ts-jira` and Agent mode |
+| Removed `@jira` flows | Every Step 1 flow: create, view, summarize, show fields, check required fields, comments, field, move, load, upload, workflow, check, search, filters, bulk transition, bulk field update, cleanup, `/security-report`, the description and comment preview, spell check and template generation. `@jira` has no slash command left. The Veracode and Waltz imports and their two Command Palette commands followed on 2026-11-15. On 2026-11-16 the email import, its Command Palette command, the `ticketSidekick.jira.showConnectionInfo` setting and `@jira` itself were removed ([`../plans/2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md`](../plans/2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md)) |
 | Session model | Sessions stored per workspace, shown from cache and checked in the background, conflicts, single-use write plans, native confirmation for risky writes, expiry and a clear command; on every board a save after each write of an Apply, Apply progress with the controls locked, a rebuild from the stored recipe after an update that changes the stored format (`revalidate`), a `prepare` read before a plan's preview, and `relocate` to give a session a new source |
-| Boards | Security report (filters, sort, CSV and Excel export), ticket list (search, 50 rows a page up to 300, `searchFields`/`cleanupFields` columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules` with nested subtasks, an out-of-date state that offers only Refresh), stored sessions, the import board for Veracode and Waltz reports (start screen with the template settings, tabs New, Already ticketed, Stale and Accepted, the ticket merge tab with its resumable run, per-tab out-of-date marks, Pick the file again, search, CSV and Excel export) |
-| Documentation | README, manual, `CLAUDE.md`, glossary, architecture page and plan describe tools and boards as current and the participants as deprecated |
+| Boards | Security report (filters, sort, CSV and Excel export), ticket list (search, 50 rows a page up to 300, `searchFields`/`cleanupFields` columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules` with nested subtasks, an out-of-date state that offers only Refresh), stored sessions, the import board for Veracode and Waltz reports (start screen with the template settings, tabs New, Already ticketed, Stale and Accepted, the ticket merge tab with its resumable run, per-tab out-of-date marks, Pick the file again, search, CSV and Excel export) and for emails (several `.eml` files, the boilerplate cleanup with the model check as a previewed step, the model pick and check, likely repeats by subject, a ticket or a comment per email with the attachments read from the file at the write). Close discards a board's session and closes its tab |
+| Documentation | README, manual, `CLAUDE.md`, glossary, architecture page and plan describe tools and boards as current, `@jira` as removed and `@bitbucket` as deprecated |
 
 ## 3. Open points
 
@@ -48,19 +48,17 @@ O1, O2 and O5 are closed by [`../plans/2026-11-14-1257-feat-ticket-list-parity-a
 
 ### Step 2: imports
 
-The Veracode and Waltz part of the [manual checklist](manual-checklist.md) is written; the maintainer runs it on the pre-release build of the pull request that adds the import board, against Jira Data Center.
+Done. The Veracode and Waltz kinds are closed by [`../plans/2026-11-14-1641-feat-import-board-veracode-waltz-parity-plan.md`](../plans/2026-11-14-1641-feat-import-board-veracode-waltz-parity-plan.md); O7, O8 and O11, and the email parts of O9 and O10, by [`../plans/2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md`](../plans/2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md). The board's model call outside a chat request was confirmed on the managed machine (Q1). What is left of O9 and O10 belongs to the review board:
 
 | # | Open point | Requirement | Blocks removal of |
 | --- | --- | --- | --- |
-| O7 | Import board, email part. The start screen and the Veracode and Waltz kinds are done, with every Veracode and Waltz "Carry over" row of the [import board parity ledger](#import-board-parity-ledger) below, and their chat imports and two commands are removed ([`../plans/2026-11-14-1641-feat-import-board-veracode-waltz-parity-plan.md`](../plans/2026-11-14-1641-feat-import-board-veracode-waltz-parity-plan.md)). Left: the email kind on the board with the email "Carry over" rows (`email-*`, `afterCreate`) and a drained email import finishing on its own; done together with O8 | R14 to R19 | `@jira` email import, `Ticket Sidekick: Create Jira ticket from email (.eml)` |
-| O8 | Email kind: boilerplate cleanup with consent as a board step; "add one email as a comment"; search for tickets matching an email's subject before creating | R18, R43 | `@jira` email import, email as comment |
-| O9 | Model settings: one for the review passes, one for the email check, with a pick step when empty | R24, R25 | — |
-| O10 | Prompts that belong to a board run happen on the board, before any model call | R45 | — |
-| O11 | Remove the email import, its Command Palette command, `@jira` itself and its help screen | R33, R34 | — |
+| O9 | The review passes read `ticketSidekick.bitbucket.reviewModel` and ask for a model on the review board when it is empty; the setting and the email check's pick already exist | R24 | — |
+| O10 | The review board's prompts (model pick, requirements-pass choice) happen on the board, before any model call; the email consent already does | R45 | — |
+| O21 | Run the email part of the [manual checklist](manual-checklist.md) on the preview build on the managed machine | R35 | — |
 
 #### Import board parity ledger
 
-What the `@jira` import did and what the import board does with it. The list is built from the reply commands (`IMPORT_COMMAND_ENTRIES` in `src/participant/session/importCommands.ts`) and the optional capabilities of `ReportImportDescriptor` and `ImportChangeTracking` (`src/imports/descriptor.ts`); `src/test/importBoardParity.test.ts` fails when one of them is missing here. "Carry over" means the board keeps the behaviour with the same rules and results (R16); "Dropped" means a recorded decision not to. Every Veracode and Waltz "Carry over" row is on the import board: the parity test maps each one to the board action or rule that keeps it and to the board scenario test that proves the result, and fails when a row has no such entry. The email rows (`email-*`, `afterCreate`) stay with `@jira`, which still runs the email import. The behaviour is described in [`docs/report-import.md`](../report-import.md). Why this ledger exists: [`docs/solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md`](../solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md).
+What the `@jira` import did and what the import board does with it. The list is built from the reply commands of the removed chat catalog (kept as a list in `src/test/importBoardParity.test.ts`) and the optional capabilities of `ReportImportDescriptor` and `ImportChangeTracking` (`src/imports/descriptor.ts`); `src/test/importBoardParity.test.ts` fails when one of them is missing here. "Carry over" means the board keeps the behaviour with the same rules and results (R16); "Dropped" means a recorded decision not to. Every "Carry over" row is on the import board, the email rows included: the parity test maps each one to the board action or rule that keeps it and to the board scenario test that proves the result, and fails when a row has no such entry. The behaviour is described in [`docs/report-import.md`](../report-import.md). Why this ledger exists: [`docs/solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md`](../solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md).
 
 **Reply commands**
 
@@ -80,7 +78,7 @@ What the `@jira` import did and what the import board does with it. The list is 
 | `paging` | Dropped | The words go; the board pages or scrolls as it likes. The rule that row actions and `apply` read every row, not only the visible page, carries over |
 | `open`, `exit` | Dropped | Groups are on the board at once; finishing is covered by "a drained import finishes" below |
 | `help` | Dropped | Board controls carry their own labels; the Commands line, help link and help after a refused reply go with it |
-| `email-strip`, `email-keep`, `email-model-check`, `email-rows`, `email-save`, `email-cancel` | Carry over | The email boilerplate cleanup step with its consent (O8, R18) |
+| `email-strip`, `email-keep`, `email-model-check`, `email-rows`, `email-save`, `email-cancel` | Carry over | The email boilerplate cleanup step with its consent; `cancel` is the board's Close |
 
 **Importer capabilities**
 
@@ -128,7 +126,7 @@ What the `@jira` import did and what the import board does with it. The list is 
 | # | Open point | Note |
 | --- | --- | --- |
 | O17 | Keyboard and screen reader check of every board control | R46. The built boards use VS Code Elements and plain tables; not yet checked with a screen reader |
-| O18 | `@bitbucket` is presented in the chat UI without a deprecation mark | `@jira`'s description now says "Deprecated" and names the email import, and the Jira walkthrough teaches the tools and boards. `@bitbucket` and the Bitbucket walkthrough still teach the participant |
+| O18 | `@bitbucket` is presented in the chat UI without a deprecation mark | `@jira` is removed, and the Jira walkthrough teaches the tools and boards. `@bitbucket` and the Bitbucket walkthrough still teach the participant |
 | O19 | The participant checklist in `CLAUDE.md` ("Adding a new Bitbucket operation") still carries participant steps, marked as deprecated | R48. The Jira checklist no longer routes into `@jira`; drop the Bitbucket steps when `@bitbucket` goes |
 | O20 | `docs/onboarding.md`, `docs/jira-flows.md`, `docs/report-import.md` and `docs/review-process.md` describe participant flows, each under a deprecation note | `docs/jira-flows.md` now marks the removed Step 1 flows as removed and keeps their rules as the reference the boards and tools follow, and `docs/report-import.md` does the same for the Veracode and Waltz chat flows, with a section on the import board. Rewrite or delete the rest with the step that removes the flow |
 
@@ -157,8 +155,7 @@ When O5, O11 and O15 are done, none of the following is left:
 
 - `src/participant/` and its tests
 - `contributes.chatParticipants`, their slash commands and disambiguation entries in `package.json`
-- The email import command in the Command Palette (the Veracode and Waltz commands are gone)
-- `workspaceState` keys of the participant sessions (`jira.session.*`, `bitbucket.session.*`)
-- The README sections "Report imports → Emails: `@jira` (deprecated)" and "@bitbucket — Bitbucket PR Reviews" as participant manuals; their setup steps move to the top
+- `workspaceState` keys of the participant sessions (`bitbucket.session.*`; the `jira.session.*` keys are no longer read since `@jira` went and are left in place)
+- The README section "@bitbucket — Bitbucket PR Reviews" as a participant manual; its setup steps move to the top
 - The deprecation notes added on 2026-11-13, since nothing deprecated remains to point at
-- Guard tests tied to the participants (`jiraCommandsGuard.test.ts`, `importCommandsGuard.test.ts`, `importBoardParity.test.ts` with the import board parity ledger, the `@jira` command table in `skillsGuard.test.ts`)
+- Guard tests tied to the participants (`importBoardParity.test.ts` with the import board parity ledger, the `@jira` command table in `skillsGuard.test.ts`; `jiraCommandsGuard.test.ts` and `importCommandsGuard.test.ts` went with `@jira`)
