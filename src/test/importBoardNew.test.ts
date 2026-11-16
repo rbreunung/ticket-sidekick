@@ -301,6 +301,32 @@ describe('creating tickets for New rows', () => {
     expect(refreshed.working.choices.merges).toEqual([]);
   });
 
+  it('fails one odd row alone and still creates the other tickets', async () => {
+    const session = await openVeracode(flaws('101', '102', '103'));
+    // Building the fields of Flaw 102 throws, as an unexpected report value could.
+    const base = deps;
+    const veracode = base.descriptors().veracode;
+    deps = {
+      ...base,
+      descriptors: () => ({
+        ...base.descriptors(),
+        veracode: {
+          ...veracode,
+          buildTicketFields: ((row: { issueIds?: string[] }, ...rest: unknown[]) => {
+            if (row.issueIds?.includes('102')) throw new Error('Unexpected value in the report row');
+            return (veracode.buildTicketFields as (...a: unknown[]) => unknown)(row, ...rest);
+          }) as typeof veracode.buildTicketFields,
+        },
+      }),
+    };
+    const { applied, session: after } = await apply(session, plan(session, { type: 'new-create' }));
+    deps = base;
+
+    expect(applied.results.map(r => r.outcome)).toEqual(['done', 'failed', 'done']);
+    expect(applied.results[1]).toMatchObject({ target: 'Flaw 102', reason: 'Unexpected value in the report row' });
+    expect(after.working.writes.created.map(c => c.dedupKeys)).toEqual([['101'], ['103']]);
+  });
+
   it('puts the rows of an unmerged merge back as their own tickets', async () => {
     let session = await openVeracode(flaws('101', '102'));
     session = act(session, { type: 'new-merge', ids: [rowId(session, '101'), rowId(session, '102')] });

@@ -130,6 +130,8 @@ Preparation: a test project; a `.jira-templates.json` with two templates (one wi
 - [ ] When every tab is handled, the board says there is nothing left to do and offers **Discard**; export still works.
 - [ ] Save a newer scan over the report file and open the same import again: tickets the board wrote for the earlier scan ask for a decision again where the new scan changed them.
 - [ ] Two Already-ticketed rows on one resolved ticket: a new ticket for one row leaves the other row to decide.
+- [ ] Type a filter on Already ticketed, wait for a background update, then press Enter (or click elsewhere): the table is filtered.
+- [ ] On the start screen, make Open fail (for example with the report file removed), switch to another tab and back: the error is still shown.
 
 **`@jira` and the ticket list**
 

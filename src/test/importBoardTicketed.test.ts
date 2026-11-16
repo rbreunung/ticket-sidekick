@@ -412,6 +412,13 @@ describe('applying the Already ticketed actions', () => {
     return onTicketed(await open(recipe('veracode', file)));
   }
 
+  it('refuses to plan while the Already ticketed tab is out of date, whatever the page shows', async () => {
+    const session = await twoRowsOneTicket();
+    expect(plan(session).lines).toHaveLength(1);
+    const outdated = { ...session, working: { ...session.working, outOfDate: ['ticketed' as const] } };
+    expect(importKind.plan!(outdated, { type: 'ticketed-apply' } as never)).toEqual({ ok: false, reason: 'The Already ticketed tab is out of date. Refresh it first.' });
+  });
+
   it('refuses a rewrite that covers only some rows of its ticket and writes nothing', async () => {
     let session = await twoRowsOneTicket();
     const rows = view(session).ticketed!.rows;
@@ -517,6 +524,30 @@ describe('applying the Already ticketed actions', () => {
     // The other row can still get its own new ticket.
     session = act(session, { type: 'ticketed-action', id: second.id, action: 'follow-up' });
     expect(plan(session).lines).toEqual([expect.objectContaining({ target: 'PROJ-1' })]);
+  });
+
+  it('refuses a second write to a ticket whose update time could not be read after the first, without calling it a conflict', async () => {
+    jira.tickets = { 'PROJ-1': veracodeTicket(['101', '201'], { resolved: true, status: 'Done' }) };
+    const file = writeVeracode([
+      { id: '101', file: 'A.java' }, { id: '102', file: 'A.java', line: 20 },
+      { id: '201', file: 'B.java' }, { id: '202', file: 'B.java', line: 20 },
+    ]);
+    let session = onTicketed(await open(recipe('veracode', file)));
+    const [first, second] = view(act(session, { type: 'ticketed-filter', filter: 'all' })).ticketed!.rows;
+    session = act(session, { type: 'ticketed-action', id: first.id, action: 'follow-up' });
+    session = act(session, { type: 'ticketed-action', id: second.id, action: 'follow-up' });
+
+    // The read of the update times after the first write fails.
+    const base = deps;
+    let calls = 0;
+    deps = { ...base, updatedTimes: async keys => { if (++calls === 2) throw new Error('Jira answered 503'); return base.updatedTimes(keys); } };
+    const applied = await apply(session, plan(session));
+    deps = base;
+
+    expect(applied.results.map(r => r.outcome)).toEqual(['done', 'refused']);
+    expect(applied.results[1].reason).toMatch(/written earlier in this Apply/);
+    expect(applied.conflicts).toEqual([]);
+    expect(jira.createIssueCalls).toHaveLength(1);
   });
 
   it('writes after the board\'s own comment on the same ticket, which is not someone else\'s change', async () => {

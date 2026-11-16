@@ -221,6 +221,8 @@ export const ticketedTabHandler: ImportHandler = {
 
   plan: (session, action) => {
     if (action.type !== 'ticketed-apply') return undefined;
+    // The page offers only Refresh on an out-of-date tab; the extension refuses too, so no write is planned from a stale reading.
+    if (session.working.outOfDate.includes('ticketed')) return { ok: false, reason: 'The Already ticketed tab is out of date. Refresh it first.' };
     const { data } = session.derived;
     const rows = boardRows(session);
     const partial = findPartialRewrites(rows);
@@ -267,6 +269,8 @@ export const ticketedTabHandler: ImportHandler = {
     const conflicts: Conflict[] = [];
     /** `updated` after this Apply's own writes, so a second write to the same ticket is not taken for someone else's change. */
     const own: Record<string, string> = {};
+    /** Tickets this Apply wrote whose new `updated` could not be read: a second write cannot tell its own change apart. */
+    const unread = new Set<string>();
     let done = 0;
 
     for (const unit of units) {
@@ -284,6 +288,10 @@ export const ticketedTabHandler: ImportHandler = {
       }
 
       // The truth is Jira: a ticket changed since the board read it is not written to.
+      if (unread.has(unit.ticket)) {
+        await finish({ target: unit.ticket, outcome: 'refused', reason: 'written earlier in this Apply, but its new update time could not be read; Refresh and apply again' });
+        continue;
+      }
       // The board's own earlier writes (a comment add on New, a merge link) are not someone else's change.
       const expected = own[unit.ticket] ?? working.writes.tickets[unit.ticket]?.updated ?? data.updated[unit.ticket];
       if (expected === undefined) {
@@ -361,6 +369,7 @@ export const ticketedTabHandler: ImportHandler = {
             ...(isTarget && !settlesTicket && (working.writes.tickets[key]?.commentOnly ?? true) ? { commentOnly: true } : {}),
           };
           if (times[key] !== undefined) own[key] = times[key];
+          else unread.add(key);
         }
         const rowsDone = settlesTicket ? working.writes.rows : [...new Set([...(working.writes.rows ?? []), ...unit.rowKeys])];
         // A created follow-up is not recorded as a New create: the next reading finds it as the row's ticket.

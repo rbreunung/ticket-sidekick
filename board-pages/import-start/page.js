@@ -12,10 +12,11 @@ let busy = false;
 let typedIssueType = '';
 let typedProject = '';
 
-async function run(op, body) {
+/** Runs one request; `keepMessage` leaves the last error on show, for a re-read the developer did not ask for. */
+async function run(op, body, keepMessage = false) {
   if (busy) return;
   busy = true;
-  message = undefined;
+  if (!keepMessage) message = undefined;
   paint();
   try {
     view = await api(op, body);
@@ -135,5 +136,5 @@ function paint() {
 }
 
 // A settings change made in another tab shows when this tab is looked at again.
-window.addEventListener('focus', () => { if (!busy) void run('view'); });
+window.addEventListener('focus', () => { if (!busy) void run('view', undefined, true); });
 void run('view');

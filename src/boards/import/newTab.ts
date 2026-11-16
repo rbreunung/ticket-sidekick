@@ -286,16 +286,21 @@ async function applyNew(
       if (!group) {
         results.push({ target: payload.groups[n].join(', '), outcome: 'refused', reason: GONE });
       } else {
-        let dropped: string[] | undefined;
-        const outcome = await createTicketForRow(engineRow(group, review, descriptor), review, ticketService, descriptor, baseUrl, undefined, {
-          onDiag: deps.onDiag,
-          onEvent: event => { if (event.kind === 'created') dropped = event.droppedFields; },
-        });
-        if ('key' in outcome) {
-          record(dedupKeysOf(group), outcome.key);
-          results.push({ target: `${groupRef(group)}: ${outcome.key}`, outcome: 'done', ...(dropped?.length ? { reason: droppedFieldsNote(dropped) } : {}) });
-        } else {
-          results.push({ target: groupRef(group), outcome: 'failed', reason: outcome.error });
+        try {
+          let dropped: string[] | undefined;
+          const outcome = await createTicketForRow(engineRow(group, review, descriptor), review, ticketService, descriptor, baseUrl, undefined, {
+            onDiag: deps.onDiag,
+            onEvent: event => { if (event.kind === 'created') dropped = event.droppedFields; },
+          });
+          if ('key' in outcome) {
+            record(dedupKeysOf(group), outcome.key);
+            results.push({ target: `${groupRef(group)}: ${outcome.key}`, outcome: 'done', ...(dropped?.length ? { reason: droppedFieldsNote(dropped) } : {}) });
+          } else {
+            results.push({ target: groupRef(group), outcome: 'failed', reason: outcome.error });
+          }
+        } catch (err) {
+          // One odd target fails alone; the rest of the Apply still runs.
+          results.push({ target: groupRef(group), outcome: 'failed', reason: err instanceof Error ? err.message : String(err) });
         }
       }
       await progress?.({ working, done: n + 1, total: groups.length });

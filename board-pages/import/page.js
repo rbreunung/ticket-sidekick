@@ -345,13 +345,27 @@ function searchBox(view, board, locked) {
     ] : null);
 }
 
+/** The filter text last sent per tab, so Enter and leaving the field do not send it twice. */
+const sentFilter = {};
+
 function filterBox(view, board, tab, off) {
   drafts.filter[tab] ??= view.filter;
+  // Once the board shows the sent text, the next commit compares with the board again.
+  if (sentFilter[tab] === (view.filter ?? '')) delete sentFilter[tab];
+  // Sent on Enter and on leaving the field, not on the browser's change event: a repaint redraws the
+  // field with the typed text, and a redrawn field fires no change event for text typed before it.
+  const commit = () => {
+    const text = drafts.filter[tab] ?? '';
+    if (text === (sentFilter[tab] ?? view.filter ?? '')) return;
+    sentFilter[tab] = text;
+    void board.act({ type: 'filter', tab, text });
+  };
   return h('div', { class: 'bar' },
     h('label', {}, 'Filter', h('input', {
-      id: 'filter-text', type: 'text', size: 20, value: drafts.filter[tab], disabled: off,
+      id: 'filter-text', type: 'text', size: 20, value: drafts.filter[tab] ?? '', disabled: off,
       onInput: e => { drafts.filter[tab] = e.target.value; },
-      onChange: e => board.act({ type: 'filter', tab, text: e.target.value }),
+      onKeydown: e => { if (e.key === 'Enter') commit(); },
+      onBlur: commit,
     })));
 }
 

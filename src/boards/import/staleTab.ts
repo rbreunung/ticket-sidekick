@@ -171,6 +171,8 @@ function reduceStale(session: ImportSession, action: { type: string } & Record<s
 }
 
 function planStale(session: ImportSession): Planned {
+  // The page offers only Refresh on an out-of-date tab; the extension refuses too, so no close is planned from a stale reading.
+  if (session.working.outOfDate.includes('stale')) return { ok: false, reason: 'The Stale tab is out of date. Refresh it first.' };
   const { working } = session;
   const stale = staleOf(session.derived.data);
   if (!stale) return { ok: false, reason: 'The stale tickets are not available.' };
@@ -236,32 +238,37 @@ async function applyStale(
       if (!stale || !group || !group.tickets.some(t => t.key === key) || !isOpen(stale, working, key)) {
         results.push({ target: key, outcome: 'refused', reason: 'It is no longer a stale ticket the board can close.' });
       } else {
-        // One ticket at a time through the shared stale close, so each finished write is saved before the next.
-        const one: ReviewSession<ImportRow> = {
-          ...review,
-          staleTickets: { ...stale, groups: stale.groups.map(g => (g !== group ? g : { ...g, tickets: g.tickets.map(t => ({ ...t, included: t.key === key })) })) },
-        };
-        const result = await runStaleClose<unknown, ImportRow>(one as ReviewSession<ImportRow & ReviewRowBase>, planned.issueType, planned.targetState, planned.resolution, ticketService, descriptor, { onDiag: deps.onDiag });
-        review = { ...review, staleTickets: { ...stale, closedKeys: result!.session.staleTickets!.closedKeys } };
-        const deselect = () => ({ ...working.choices, staleSelected: working.choices.staleSelected.filter(k => k !== key) });
-        if (result!.transitioned.includes(key)) {
-          let updated: string | undefined;
-          try {
-            updated = (await deps.updatedTimes([key]))[key];
-          } catch (err) {
-            deps.onDiag?.('warn', 'Import board: the update time after a stale close could not be read', { issueKey: key, error: err instanceof Error ? err.message : String(err) });
-          }
-          working = { ...working, choices: deselect(), writes: { ...working.writes, tickets: { ...working.writes.tickets, [key]: updated !== undefined ? { updated } : {} } } };
-          results.push({ target: key, outcome: 'done' });
-        } else {
-          const skipped = result!.skipped.find(s => s.key === key);
-          const failure = result!.failures.find(f => f.key === key);
-          if (skipped) {
-            working = { ...working, choices: deselect() };
-            results.push({ target: key, outcome: 'refused', reason: `Not moved: ${skipped.reason}.` });
+        try {
+          // One ticket at a time through the shared stale close, so each finished write is saved before the next.
+          const one: ReviewSession<ImportRow> = {
+            ...review,
+            staleTickets: { ...stale, groups: stale.groups.map(g => (g !== group ? g : { ...g, tickets: g.tickets.map(t => ({ ...t, included: t.key === key })) })) },
+          };
+          const result = await runStaleClose<unknown, ImportRow>(one as ReviewSession<ImportRow & ReviewRowBase>, planned.issueType, planned.targetState, planned.resolution, ticketService, descriptor, { onDiag: deps.onDiag });
+          review = { ...review, staleTickets: { ...stale, closedKeys: result!.session.staleTickets!.closedKeys } };
+          const deselect = () => ({ ...working.choices, staleSelected: working.choices.staleSelected.filter(k => k !== key) });
+          if (result!.transitioned.includes(key)) {
+            let updated: string | undefined;
+            try {
+              updated = (await deps.updatedTimes([key]))[key];
+            } catch (err) {
+              deps.onDiag?.('warn', 'Import board: the update time after a stale close could not be read', { issueKey: key, error: err instanceof Error ? err.message : String(err) });
+            }
+            working = { ...working, choices: deselect(), writes: { ...working.writes, tickets: { ...working.writes.tickets, [key]: updated !== undefined ? { updated } : {} } } };
+            results.push({ target: key, outcome: 'done' });
           } else {
-            results.push({ target: key, outcome: 'failed', reason: failure?.reason ?? 'The transition failed.' });
+            const skipped = result!.skipped.find(s => s.key === key);
+            const failure = result!.failures.find(f => f.key === key);
+            if (skipped) {
+              working = { ...working, choices: deselect() };
+              results.push({ target: key, outcome: 'refused', reason: `Not moved: ${skipped.reason}.` });
+            } else {
+              results.push({ target: key, outcome: 'failed', reason: failure?.reason ?? 'The transition failed.' });
+            }
           }
+        } catch (err) {
+          // One odd target fails alone; the rest of the Apply still runs.
+          results.push({ target: key, outcome: 'failed', reason: err instanceof Error ? err.message : String(err) });
         }
       }
       done += 1;

@@ -272,6 +272,16 @@ describe('closing stale tickets', () => {
     expect(refused(session, { type: 'toggle-stale', keys: ['PROJ-11'] })).toMatch(/PROJ-11/);
   });
 
+  it('refuses a close while the Stale tab is out of date, whatever the page shows', async () => {
+    jira.tickets = { 'PROJ-9': staleTicket('998', 'Bug') };
+    let session = await open();
+    session = act(session, { type: 'toggle-stale', keys: ['PROJ-9'] });
+    session = act(session, { type: 'stale-target', issueType: 'Bug', target: 'rule:Close fixed bugs' });
+    expect(planOf(session).lines).toHaveLength(1);
+    const outdated = { ...session, working: { ...session.working, outOfDate: ['stale' as const] } };
+    expect(importKind.plan!(outdated, { type: 'close-stale' } as never)).toEqual({ ok: false, reason: 'The Stale tab is out of date. Refresh it first.' });
+  });
+
   it('leaves a group without a target out of the plan and says so', async () => {
     jira.tickets = { 'PROJ-9': staleTicket('998', 'Bug'), 'PROJ-10': staleTicket('999', 'Task') };
     let session = await open();
