@@ -1,6 +1,6 @@
 // Pure message builders for the Jira tools: the issue-type list the create ticket tool answers
 // with when it has no issue type, and the template list the list-templates tool answers with.
-// Pure (vscode-free); re-exported through ../sessionState.ts.
+// Pure (vscode-free).
 
 import { CREATE_TICKET_TOOL, LIST_TEMPLATES_TOOL } from './toolNames';
 import type { JiraTemplate, ResolveSpec } from '../../templates/TemplateService';

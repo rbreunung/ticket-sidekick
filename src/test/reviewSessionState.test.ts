@@ -19,7 +19,7 @@ import {
   type ReviewFinding,
   type ReviewSession,
 } from '../participant/reviewSessionState';
-import { isGreetingOrEmpty } from '../participant/sessionState';
+import { isGreetingOrEmpty } from '../utils/chatPrimitives';
 
 describe('buildBitbucketNotConfiguredMessage', () => {
   it('names the base URL setting for Data Center when baseUrl is missing', () => {

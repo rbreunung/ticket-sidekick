@@ -94,16 +94,97 @@ function newRowState(row, ref, ctx, addedTo) {
   return resultCell(...rowOutcome(ctx.pending.has(ref), result?.outcome === 'done' ? undefined : result, false, ''));
 }
 
+// An email whose subject is already a ticket's summary: name the tickets and offer to add the email to the first as a comment.
+function repeatNote(row, ctx) {
+  const [first] = row.repeatOf;
+  return h('div', { class: 'muted' },
+    'Likely a repeat of ', row.repeatOf.map((t, n) => [n > 0 ? ', ' : '', link(t.key, t.url)]), '. ',
+    h('vscode-button', {
+      id: `add-repeat-${row.id}`, secondary: true, disabled: ctx.writeOff,
+      onClick: () => ctx.preview({ type: 'new-add', ids: [row.id], key: first.key, mode: 'comment' }),
+    }, `Add as comment to ${first.key}…`));
+}
+
+// ---- Email cleanup ----------------------------------------------------------------------------
+
+const MODEL_STATUS = {
+  'not-needed': '', 'awaiting-consent': 'Waiting for your answer', declined: 'Not checked (you said no)',
+  checked: 'Checked', failed: 'Check failed', 'too-long': 'Too long for the check',
+};
+const cleanupDrafts = { modelId: '' };
+
+/** The model picker of the check: the model in use, or a pick, plus the reason none can be picked. */
+function modelPicker(cleanup, off) {
+  const model = cleanup.model ?? {};
+  const options = model.options ?? [];
+  return [
+    model.inUse ? h('span', {}, `Model: ${model.inUse.label}. `) : h('span', {}, 'No model is set for the check. '),
+    options.length > 0 ? h('select', {
+      id: 'cleanup-model', 'aria-label': 'Model for the email check', disabled: off, onChange: e => { cleanupDrafts.modelId = e.target.value; },
+    }, h('option', { value: '', selected: !cleanupDrafts.modelId }, model.inUse ? 'Keep this model' : 'Choose a model…'),
+    options.map(o => h('option', { value: o.id, selected: o.id === cleanupDrafts.modelId }, o.label))) : null,
+    model.problem ? h('p', { class: 'banner' }, model.problem) : null,
+  ];
+}
+
+/** The cleanup stage before the New tab: the consent question, then what was found, to strip or keep. */
+function cleanupStage(cleanup, board, ctx) {
+  const { off, writeOff } = ctx;
+  const check = () => ctx.preview({ type: 'cleanup-check', ...(cleanupDrafts.modelId ? { modelId: cleanupDrafts.modelId } : {}) });
+  const rows = cleanup.rows;
+  const table = h('div', { class: 'table-wrap' }, h('table', { 'aria-label': 'Emails and the boilerplate found' },
+    headRow(cleanup.phase === 'preview' ? 'Clean' : '', 'File', 'Subject', 'Found', 'Model check'),
+    h('tbody', {}, rows.map(row => h('tr', { id: `cleanup-${row.id}` },
+      h('td', {}, cleanup.phase === 'preview' ? h('input', {
+        type: 'checkbox', id: `cleanup-include-${row.id}`, checked: !row.excluded, disabled: off, 'aria-label': `Clean ${row.ref}`,
+        onChange: () => board.act({ type: 'cleanup-exclude', id: row.id, excluded: !row.excluded }),
+      }) : ''),
+      h('td', {}, row.ref), h('td', {}, row.subject),
+      h('td', {}, row.blocks.length === 0 ? h('span', { class: 'muted' }, 'Nothing') : h('ul', {}, row.blocks.map(b => h('li', {},
+        `${b.kind} (${b.lines} line(s), ${b.source === 'model' ? 'found by the model' : 'your pattern'}): `, h('q', {}, b.excerpt), ' ',
+        b.savable ? h('vscode-button', { id: `save-${b.id}`, secondary: true, disabled: writeOff, onClick: () => ctx.preview({ type: 'cleanup-save', block: b.id }) }, 'Save as pattern…') : null,
+        b.saved ? h('span', { class: 'muted' }, 'Saved') : null)))),
+      h('td', {}, `${MODEL_STATUS[row.status] ?? row.status}${row.modelId ? ` (${row.modelId})` : ''}`))))));
+
+  if (cleanup.phase === 'consent') {
+    return [
+      h('h2', {}, 'Boilerplate cleanup'),
+      h('p', {}, cleanup.agreed
+        ? `You agreed to the model check by dragging the emails into the chat. Preview the check to see what is sent: ${cleanup.toCheck} email(s) none of your patterns matched.`
+        : `${cleanup.toCheck} email(s) match none of your boilerplate patterns. A language model can look for headers, footers and signatures in them. Nothing is sent until you preview the check and apply it.`),
+      h('div', { class: 'bar' }, modelPicker(cleanup, off)),
+      h('div', { class: 'bar' },
+        h('vscode-button', { id: 'cleanup-check', disabled: writeOff || cleanup.toCheck === 0, onClick: check }, 'Preview model check…'),
+        h('vscode-button', { id: 'cleanup-skip', secondary: true, disabled: off, onClick: () => board.act({ type: 'cleanup-skip' }) }, 'Continue without the model')),
+      ctx.summary,
+      table,
+    ];
+  }
+  return [
+    h('h2', {}, 'Boilerplate cleanup'),
+    h('p', {}, 'This is what was found. Strip removes it from the emails that are ticked, keeping a signature\'s name line; Keep imports every email as it is. The files are never changed.'),
+    ctx.summary,
+    table,
+    h('div', { class: 'bar' },
+      h('vscode-button', { id: 'cleanup-strip', disabled: off, onClick: () => board.act({ type: 'cleanup-strip' }) }, 'Strip and continue'),
+      h('vscode-button', { id: 'cleanup-keep', secondary: true, disabled: off, onClick: () => board.act({ type: 'cleanup-keep' }) }, 'Keep everything and continue')),
+    cleanup.toCheck > 0 ? h('div', { class: 'bar' }, modelPicker(cleanup, off),
+      h('vscode-button', { id: 'cleanup-check', secondary: true, disabled: writeOff, onClick: check }, `Preview model check of ${cleanup.toCheck} more email(s)…`)) : null,
+  ];
+}
+
 function newTab(view, board, ctx) {
+  const cleanup = view.ext['email-cleanup'];
+  if (cleanup && cleanup.phase !== 'done') return cleanupStage(cleanup, board, ctx);
   const rows = view.new?.rows ?? [];
   const ext = view.ext.new ?? { toCreate: 0, perApply: 50, addedTo: {} };
   const addedTo = ext.addedTo ?? {};
   const open = rows.filter(r => !r.created && !addedTo[r.id]);
   const selected = open.filter(r => r.included).map(r => r.id);
-  const { off, writeOff, waltz } = ctx;
+  const { off, writeOff, waltz, email } = ctx;
 
-  const table = h('div', { class: 'table-wrap' }, h('table', { 'aria-label': 'New rows' },
-    headRow('Create', 'Finding', 'Title', waltz ? 'Rating' : 'Severity', 'Merge', 'Result'),
+  const table = h('div', { class: 'table-wrap' }, h('table', { 'aria-label': email ? 'Emails' : 'New rows' },
+    email ? headRow('Create', 'File', 'Subject', 'Result') : headRow('Create', 'Finding', 'Title', waltz ? 'Rating' : 'Severity', 'Merge', 'Result'),
     h('tbody', {}, rows.map(row => {
       const isOpen = !row.created && !addedTo[row.id];
       return h('tr', { id: `row-${row.id}` },
@@ -111,8 +192,8 @@ function newTab(view, board, ctx) {
           type: 'checkbox', id: `include-${row.id}`, checked: row.included, disabled: off, 'aria-label': `Create ${row.ref}`,
           onChange: () => board.act({ type: 'new-include', ids: [row.id], included: !row.included }),
         }) : ''),
-        h('td', {}, row.ref), h('td', {}, row.summary), h('td', {}, row.rating),
-        h('td', {}, row.merge ? [`Merged #${row.merge} `, isOpen ? h('vscode-button', {
+        h('td', {}, row.ref), h('td', {}, row.summary, row.repeatOf && isOpen ? repeatNote(row, ctx) : null), email ? null : h('td', {}, row.rating),
+        email ? null : h('td', {}, row.merge ? [`Merged #${row.merge} `, isOpen ? h('vscode-button', {
           id: `unmerge-${row.id}`, secondary: true, disabled: off, onClick: () => board.act({ type: 'new-unmerge', id: row.id }),
         }, 'Unmerge') : null] : ''),
         // A view without the group reference names a row by its own.
@@ -120,7 +201,8 @@ function newTab(view, board, ctx) {
     }))));
 
   const addKey = h('input', { id: 'add-key', type: 'text', size: 12, value: drafts.addKey, disabled: off, onInput: e => { drafts.addKey = e.target.value; } });
-  const addMode = h('select', { id: 'add-mode', disabled: off, onChange: e => { drafts.addMode = e.target.value; } },
+  // An email is added to a ticket as a comment only.
+  const addMode = email ? h('span', {}, 'as a comment') : h('select', { id: 'add-mode', disabled: off, onChange: e => { drafts.addMode = e.target.value; } },
     h('option', { value: 'comment', selected: drafts.addMode === 'comment' }, 'as a comment'),
     h('option', { value: 'rewrite', selected: drafts.addMode === 'rewrite' }, 'as a rewrite'));
   const reason = h('input', { id: 'accept-reason', type: 'text', size: 24, value: drafts.reason, disabled: off, onInput: e => { drafts.reason = e.target.value; } });
@@ -135,11 +217,11 @@ function newTab(view, board, ctx) {
     ctx.summary,
     rows.length === 0 ? null : table,
     h('div', { class: 'bar' },
-      h('vscode-button', { id: 'merge-selected', secondary: true, disabled: off || selected.length < 2, onClick: () => board.act({ type: 'new-merge', ids: selected }) }, 'Merge selected'),
+      email ? null : h('vscode-button', { id: 'merge-selected', secondary: true, disabled: off || selected.length < 2, onClick: () => board.act({ type: 'new-merge', ids: selected }) }, 'Merge selected'),
       h('vscode-button', { id: 'preview-create', disabled: writeOff || ext.toCreate === 0, onClick: () => ctx.preview({ type: 'new-create' }) }, `Preview create (${ext.toCreate} ticket(s))…`)),
     h('div', { class: 'bar' },
       h('label', {}, 'Add selected to ticket', addKey), addMode,
-      h('vscode-button', { id: 'preview-add', secondary: true, disabled: writeOff || selected.length === 0, onClick: () => ctx.preview({ type: 'new-add', ids: selected, key: drafts.addKey, mode: drafts.addMode }) }, 'Preview add…')),
+      h('vscode-button', { id: 'preview-add', secondary: true, disabled: writeOff || selected.length === 0, onClick: () => ctx.preview({ type: 'new-add', ids: selected, key: drafts.addKey, mode: email ? 'comment' : drafts.addMode }) }, 'Preview add…')),
     waltz ? h('div', { class: 'bar' },
       h('label', {}, 'Reason (optional)', reason),
       h('vscode-button', { id: 'preview-accept-cve', secondary: true, disabled: writeOff || selected.length === 0, onClick: () => ctx.preview(acceptAction('accept-cve')) }, 'Preview accept CVEs of selected…'),
@@ -408,6 +490,7 @@ function render(view, board, locked, state) {
     locked, writesOff, results: resultsHere, pending, summary, frozen, off,
     writeOff: off || writesOff,
     waltz: view.tabs.some(t => t.id === 'accepted'),
+    email: view.reportKind === 'Email',
     preview: action => { previewTab = shown; return board.preview(action); },
   };
 
@@ -448,24 +531,25 @@ function render(view, board, locked, state) {
   ].filter(Boolean).join(' '));
 
   return h('div', {},
-    h('p', { class: 'muted' }, `${view.reportKind} report ${view.reportFile} in ${view.project}. Template "${view.template}", issue type ${view.issueType}.`),
+    h('p', { class: 'muted' }, `${ctx.email ? `Emails: ${view.reportFile}` : `${view.reportKind} report ${view.reportFile}`} in ${view.project}. Template "${view.template}", issue type ${view.issueType}.`),
     reportMissing ? h('section', { class: 'banner error', 'aria-label': 'Report file missing' },
       h('p', {}, 'The report file is missing, so nothing can be written. Your choices are kept. Pick the file at its new place to go on.'),
       h('vscode-button', { id: 'pick-file-again', disabled: locked, onClick: () => board.pickFile() }, 'Pick the file again…')) : null,
     view.finished ? h('section', { class: 'banner', 'aria-label': 'Finished' },
       h('p', {}, view.ext['search-export']?.finishedMessage ?? 'Nothing left to do.'),
-      h('vscode-button', { id: 'discard-finished', secondary: true, disabled: locked, onClick: () => board.discard() }, 'Discard')) : null,
+      h('vscode-button', { id: 'discard-finished', secondary: true, disabled: locked, onClick: () => board.discard() }, 'Close')) : null,
     view.notices.map(n => h('p', { class: 'banner' }, n)),
     view.acceptedHidden ? h('p', { id: 'accepted-hidden', class: 'muted' }, view.acceptedHidden) : null,
     view.dropped.length ? h('section', { class: 'banner', 'aria-label': 'Dropped choices' },
       h('p', {}, 'Refresh could not keep these choices:'),
       h('ul', {}, view.dropped.map(d => h('li', {}, d))),
       h('vscode-button', { id: 'dismiss-dropped', secondary: true, disabled: locked, onClick: () => board.act({ type: 'dismiss-dropped' }) }, 'Dismiss')) : null,
-    h('div', { class: 'bar' },
+    // Reload, the security overview export and the matched-ticket search belong to Veracode and Waltz reports.
+    ctx.email ? null : h('div', { class: 'bar' },
       h('vscode-button', { id: 'reload-report', secondary: true, disabled: locked || writesOff, onClick: () => { previewTab = shown; return board.preview({ type: 'reload-report' }); } }, 'Reload report…'),
       h('vscode-button', { id: 'save-csv', secondary: true, disabled: locked, onClick: () => board.save('csv') }, 'Save overview as CSV…'),
       h('vscode-button', { id: 'save-xlsx', secondary: true, disabled: locked, onClick: () => board.save('xlsx') }, 'Save overview as Excel…')),
-    searchBox(view, board, locked),
+    ctx.email ? null : searchBox(view, board, locked),
     tablist({ label: 'Groups', tabs, selected: shown, onSelect: select }),
     tabpanel(shown, body));
 }

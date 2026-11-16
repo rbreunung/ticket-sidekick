@@ -1,14 +1,11 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
-import { isCancellation } from './session/primitives';
+import { isCancellation } from '../utils/chatPrimitives';
 import { TICKET_ID_PATTERN, findJiraKeyMatch } from '../utils/branchParser';
 import type { RequirementsTicket } from '../utils/requirementsSource';
 import type { RequirementsCoverage } from './bitbucket/requirementsCoverage';
 // Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
 // stays safe for a vscode-free, Vitest-loadable module.
 import type { BitbucketConfig, BitbucketPR, ReviewMode } from '../bitbucket/IBitbucketClient';
-// Type-only — shared with sessionState.ts's Jira tool builders via a neutral module (neither
-// participant's pure-logic file depends on the other's) so `bitbucketTools.ts`'s single write
-// tool can reuse the same confirmation shape rather than declaring an equivalent local interface.
 import type { ToolConfirmation } from '../tools/toolConfirmation';
 // Type-only — PrReviewService.ts imports FileDiff/ReviewFinding from this module, so this stays
 // a type-only (erased) import to avoid a runtime circular dependency.
@@ -209,9 +206,7 @@ export function buildBitbucketNotConfiguredMessage(config: Pick<BitbucketConfig,
  * Builds a raw `[label](command:workbench.action.chat.open?<encoded>)` markdown link that,
  * when clicked, re-submits `replyText` to this participant exactly as if the user had typed it
  * (R5) — reusing VS Code's built-in `workbench.action.chat.open` command rather than a new
- * registered wrapper command (KTD2). Mirrors `buildChatCommandLink` in `sessionState.ts` — this
- * file intentionally does not import from that one (the two participants stay independent), so
- * the helper is duplicated here rather than shared.
+ * registered wrapper command (KTD2).
  *
  * `label` is neutralized (see `neutralizeMarkdownLinks()` below) before being embedded: a label
  * built from externally-influenced text (a PR title, an LLM-generated finding heading, …) that
@@ -227,7 +222,7 @@ export function buildBitbucketNotConfiguredMessage(config: Pick<BitbucketConfig,
  * pattern in `BitbucketParticipant.ts`. Without that, VS Code renders the link as inert plain
  * text instead of a clickable command.
  */
-export function buildChatCommandLink(label: string, participantId: '@jira' | '@bitbucket', replyText: string): string {
+export function buildChatCommandLink(label: string, participantId: '@bitbucket', replyText: string): string {
   const safeLabel = neutralizeMarkdownLinks(label);
   const query = `${participantId} ${replyText}`;
   // encodeURIComponent leaves ( and ) literal; an unbalanced ) would end the markdown link destination early.
@@ -239,9 +234,7 @@ export function buildChatCommandLink(label: string, participantId: '@jira' | '@b
  * `buildChatCommandLink()`'s counterpart on the untrusted side: neutralizes markdown link/image
  * syntax in untrusted, externally-influenced text (a PR title, a finding heading, a diff-derived
  * comment, …) before it is combined into the same string as one or more real command links and the
- * whole thing is trust-gated (`trustedChatMarkdown()`, `src/utils/chatMarkdown.ts`). Mirrors
- * `neutralizeMarkdownLinks` in `sessionState.ts` — duplicated here for the same reason
- * `buildChatCommandLink` is. Replaces `[`/`]` with visually similar full-width brackets rather than
+ * whole thing is trust-gated (`trustedChatMarkdown()`, `src/utils/chatMarkdown.ts`). Replaces `[`/`]` with visually similar full-width brackets rather than
  * stripping them, so the text stays readable.
  */
 export function neutralizeMarkdownLinks(value: string): string {
@@ -407,8 +400,7 @@ export function formatReviewForSharing(
 
 // ---------------------------------------------------------------------------------------------
 // Pure helpers for `bitbucket_*` Language Model tools (`src/tools/bitbucketTools.ts`, U3) —
-// result formatting and confirmation-text building kept here so they stay Vitest-loadable,
-// mirroring U2's `jira_*` tool builders in `sessionState.ts`.
+// result formatting and confirmation-text building kept here so they stay Vitest-loadable.
 // ---------------------------------------------------------------------------------------------
 
 /** Result text for `bitbucket_getPullRequest` — the same PR fields the chat review's header
@@ -1917,9 +1909,7 @@ export function formatContinuationMessage(fileCount: number): string {
 // ---------------------------------------------------------------------------------------------
 // Follow-up suggestion chips (onboarding, U5) — pure logic so it stays Vitest-covered (KTD15).
 // The vscode-coupled `participant.followupProvider` wiring lives in `BitbucketParticipant.ts`.
-// Empty/greeting-prompt detection itself (`isGreetingOrEmpty`) is shared with `@jira` and lives
-// in `sessionState.ts` — `BitbucketParticipant.ts` already imports directly from there, so it
-// is not duplicated or re-exported here.
+// Empty/greeting-prompt detection (`isGreetingOrEmpty`) lives in `src/utils/chatPrimitives.ts`.
 // ---------------------------------------------------------------------------------------------
 
 /** A `vscode.ChatFollowup`-shaped suggestion, without the `vscode` dependency — the participant
@@ -1939,8 +1929,7 @@ export type BitbucketFollowupState =
 
 /**
  * Sibling of `BitbucketFollowupState` on the same `vscode.ChatResult.metadata` channel, but for
- * session-continuity detection instead of follow-up chips — mirrors `JiraSessionContinuity` in
- * `sessionState.ts` (see U4). Replaces matching the last rendered response text against a visible
+ * session-continuity detection instead of follow-up chips. Replaces matching the last rendered response text against a visible
  * `<!-- bitbucket:TAG -->` HTML comment with a check against this metadata read off
  * `chatContext.history` (see `getActiveBitbucketSession` in `BitbucketParticipant.ts`).
  * `workspaceState` still owns the actual session data — `kinds` is only a liveness flag.
@@ -1972,7 +1961,7 @@ const SESSION_KEY_BY_KIND: Record<BitbucketSessionKind, (typeof BITBUCKET_SESSIO
 };
 
 /** True when the data behind at least one of the session kinds is still stored — the chat history
- * can keep a session marker after the stored session was cleared (e.g. by an `@jira` request). */
+ * can keep a session marker after the stored session was cleared. */
 export function hasStoredBitbucketSession(
   kinds: readonly BitbucketSessionKind[] | undefined,
   store: { get(key: string): unknown },
@@ -1982,7 +1971,7 @@ export function hasStoredBitbucketSession(
 
 /**
  * Clears every Bitbucket session. Takes any store with `update` (and `get`, when it has one, so
- * keys that hold nothing are not rewritten on every `@jira` request) to stay free of `vscode`.
+ * keys that hold nothing are not rewritten) to stay free of `vscode`.
  */
 export async function endBitbucketSessions(
   store: { get?(key: string): unknown; update(key: string, value: unknown): PromiseLike<void> | void },
@@ -2026,8 +2015,7 @@ function endSessionChips(kinds: readonly BitbucketSessionKind[] | undefined): Bi
 /**
  * R6/KTD14: 2-3 example prompts, phrased as literal next messages a user could send, for a
  * major `@bitbucket` response. There is no separate R8-equivalent "unrecognized operation"
- * fallback for `@bitbucket` to reroute — unlike `@jira`, it has no LLM intent classifier to
- * bypass, only a PR-URL match, and its existing "Point me at a PR to review" guidance already
+ * fallback for `@bitbucket` to reroute — it has no LLM intent classifier, only a PR-URL match, and its existing "Point me at a PR to review" guidance already
  * covers a non-greeting, non-URL prompt; R9's greeting/empty-prompt case is the one this
  * function's `'greeting'` state covers.
  */

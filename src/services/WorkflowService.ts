@@ -171,9 +171,8 @@ export function findAllPaths(
 
 /** Finds one real ticket currently sitting in `status` for `projectKey`/`issueType` — the
  * "representative ticket" technique `discoverWorkflow` uses to sample each status's live
- * transitions, and reused by the guided single-ticket transition flow (`JiraParticipant.ts`'s
- * `resolveFinalHopResolution`) to read a multi-hop path's final-hop resolution requirement off a
- * ticket that has actually made that transition. Returns `undefined` when no such ticket exists. */
+ * transitions; it also shows a multi-hop path's final-hop resolution requirement on a ticket that
+ * has actually made that transition. Returns `undefined` when no such ticket exists. */
 export async function findRepresentativeTicket(
   client: IJiraClient,
   projectKey: string,
@@ -241,9 +240,8 @@ export type TransitionResolution =
 /**
  * Resolves and applies a Jira ticket transition to `targetStatus`: already-there short-circuit,
  * then a direct transition if one exists, then a cached multi-hop workflow path
- * (`loadWorkflowCache`/`findPath`) as a fallback. Shared by `@jira`'s chat `'transition'`
- * operation and the move ticket tool (`src/tools/jiraTools/moveTicket.ts`), so both resolve a
- * move the same way.
+ * (`loadWorkflowCache`/`findPath`) as a fallback. Used by the move ticket tool
+ * (`src/tools/jiraTools/moveTicket.ts`).
  */
 export async function resolveAndApplyTransition(
   jiraClient: IJiraClient,
@@ -317,9 +315,7 @@ export interface WorkflowDiscoveryResult {
 /**
  * Samples a project/issue type's workflow (`discoverWorkflow`) and — when at least one status
  * was found — merges it into `.jira-workflow-cache.json`, preserving prior transitions for any
- * status this run didn't sample. Shared by `@jira`'s chat `'discoverWorkflow'` operation
- * (`src/participant/jira/workflowHandler.ts`) and the workflow tool
- * (`src/tools/jiraTools/workflow.ts`), so both read, merge and write the cache the same way.
+ * status this run didn't sample. Used by the workflow tool (`src/tools/jiraTools/workflow.ts`).
  */
 export async function discoverAndCacheWorkflow(
   jiraClient: IJiraClient,

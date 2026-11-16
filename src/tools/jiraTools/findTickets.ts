@@ -16,8 +16,8 @@ import type { JiraToolDeps } from './jiraAccess';
 import { runJiraTool } from './runJiraTool';
 import { FIND_TICKETS_TOOL, LIST_MY_FILTERS_TOOL } from './toolNames';
 
-// One search tool over JQL or a saved filter, narrowed the way `@jira` narrows a filter (fix
-// version, sprint, assignee and the team JQL), plus the list of the user's own filters.
+// One search tool over JQL or a saved filter, narrowed by fix version, sprint, assignee and the
+// team JQL, plus the list of the user's own filters.
 
 export const FIND_PAGE_SIZE = 50;
 
@@ -59,7 +59,7 @@ export interface Narrowing {
 }
 
 /**
- * ANDs the narrowing onto a query, the way `@jira` narrowed a filter: the team JQL, then a fix
+ * ANDs the narrowing onto a query: the team JQL, then a fix
  * version, sprint or assignee resolved by name against Jira. The query's own `ORDER BY` stays at
  * the end. A string answer is the reason it could not, e.g. an ambiguous sprint name.
  */
@@ -167,7 +167,7 @@ export const findTicketsTool = defineTool<JiraToolDeps, typeof findShape>({
       const pageToken = page && cloud ? page : undefined;
       const result = await ticketService.searchTicketsRaw(finalJql, FIND_PAGE_SIZE, config.searchFields, startAt, pageToken);
       const fieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
-      const table = ticketService.formatSearchResults(result, finalJql, config.baseUrl, config.searchFields, fieldMeta, { chatActions: false });
+      const table = ticketService.formatSearchResults(result, finalJql, config.baseUrl, config.searchFields, fieldMeta);
 
       let next: string | undefined;
       if (cloud) {

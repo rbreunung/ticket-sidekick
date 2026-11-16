@@ -1,5 +1,4 @@
-// JQL constraint building and resolution, filter listings.
-// Pure (vscode-free); re-exported through ../sessionState.ts.
+// JQL constraint building and resolution, filter listings. Pure (vscode-free).
 
 import type { IJiraClient, JiraFilter, JiraFilterSource } from '../jira/IJiraClient';
 import { formatBulletList } from './chatPrimitives';
@@ -141,8 +140,7 @@ export type ConstraintResolutionResult =
   | { kind: 'noProjectScope'; message: string };
 
 /**
- * U7: extracted from `JiraParticipant.ts`'s `resolveConstraintsAndSearch()` (R3 — one
- * implementation, not two) — resolves any named fixVersion/sprint/assignee constraint against
+ * Resolves any named fixVersion/sprint/assignee constraint against
  * live Jira data via `jiraClient` alone (no `TicketService` needed: `findSprints` is a thin
  * pass-through on `IJiraClient` already). fixVersion and sprint both need a single scoping
  * project key extracted from `baseJql` first; zero matches or no single-project scope is reported
@@ -221,9 +219,7 @@ export async function resolveNamedConstraints(
   return { kind: 'resolved', constraints: resolved };
 }
 
-/** R10: the partial-fetch-failure note shared by the chat "show my filters" flow
- * (`handleListMyFilters` in `JiraParticipant.ts`) and this tool-facing formatter, so the two
- * surfaces can't drift on wording. Empty string when both sources succeeded. */
+/** The partial-fetch-failure note of the filter list. Empty string when both sources succeeded. */
 export function buildFilterFailureNote(failedSources: JiraFilterSource[]): string {
   return failedSources.length > 0
     ? `_Could not fetch your ${failedSources.join(' and ')} filter(s) — showing partial results._\n\n`

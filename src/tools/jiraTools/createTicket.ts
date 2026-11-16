@@ -12,8 +12,7 @@ import { runJiraTool } from './runJiraTool';
 import { CREATE_TICKET_TOOL, LIST_TEMPLATES_TOOL } from './toolNames';
 import { writeOnce } from './writeGuard';
 
-// Creates one ticket, preferably from a workspace template (`.jira-templates.json`, the file
-// `@jira` reads). The issue type is never guessed: without one, and without a template that names
+// Creates one ticket, preferably from a workspace template (`.jira-templates.json`). The issue type is never guessed: without one, and without a template that names
 // one, the answer lists the project's issue types and nothing is created.
 
 const createShape = {

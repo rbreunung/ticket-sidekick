@@ -11,7 +11,7 @@ import {
   buildTicketInfo,
 } from '../utils/reportImport';
 import { deriveWaltzActions } from '../utils/waltzReport';
-import type { ReviewRowBase } from '../participant/sessionState';
+import type { ReviewRowBase } from '../imports/types';
 import { TRIGGER_CHARS } from '../utils/markdownToJiraWiki';
 
 describe('size-limit settings', () => {

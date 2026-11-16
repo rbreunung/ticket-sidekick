@@ -40,6 +40,8 @@ export interface BoardHost {
   pickReportFile?(kind: ReportKind): Promise<string | undefined>;
   /** Points the tab that shows `fromId` at the session it moved to. */
   followSession?(kind: string, fromId: string, toId: string, title: string): Promise<void>;
+  /** Closes the tab that shows this session, after its session was discarded. */
+  closeSession?(kind: string, id: string): void;
 }
 
 export interface BoardRequest {
@@ -130,7 +132,9 @@ async function sessionBoard(manager: SessionManager, target: BoardTarget, op: st
       if (typeof body.format !== 'string') throw new BoardRequestError(400, 'Invalid format.');
       return { outcome: await manager.exportFile(kind, id, body.format) };
     case 'discard':
+      // Close discards the session and closes its tab; nothing in Jira or Bitbucket changes.
       await manager.discard(id);
+      host.closeSession?.(kind, id);
       return { ok: true };
     case 'pick-file':
       return pickReportFileAgain(manager, target, host);

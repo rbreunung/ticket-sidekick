@@ -5,11 +5,16 @@ import { addRowsToTicket, checkAddTarget, type AddTargetCheck } from '../../impo
 import { mergeNewRows } from '../../imports/rows';
 import type { AddMode, ReviewSession } from '../../imports/types';
 import { BATCH_LIMIT, templateLabelsOf } from '../../utils/reportImport';
+import { countedNoun } from '../../utils/chatPrimitives';
 import { descriptorOf, type HandlerPayload, type ImportDescriptor, type ImportHandler, type ImportSession } from './handlers';
 import type { ImportWorking } from './kind';
-import { ISSUE_KEY_PATTERN, newRows, rowKeyOf, ticketedRows, type ImportData, type ImportDeps, type ImportRow } from './read';
+import { ISSUE_KEY_PATTERN, isEmailRow, isLeftOut, newRows, repeatsByRowKey, rowKeyOf, ticketedRows, type ImportData, type ImportDeps, type ImportRow } from './read';
+import { buildEmailCommentWiki, uploadEmailAttachments } from '../../imports/email';
+import { chosenEmailBody, emailRowForWrite } from './emailRows';
+import * as path from 'path';
 
-// The import board's handler for the New tab: selecting, merging and unmerging rows, adding rows to an existing ticket, and creating tickets. vscode-free.
+// The import board's handler for the New tab: selecting, merging and unmerging rows, adding rows to an existing ticket, and creating tickets.
+// An email import's rows are not merged; each email becomes its own ticket or a comment on an existing one. vscode-free.
 
 const NAME = 'new';
 const OUT_OF_DATE = 'The New tab is out of date. Refresh it first.';
@@ -76,14 +81,15 @@ function groupsOf(data: ImportData, working: ImportWorking): Group[] {
   return groups;
 }
 
-function isIncluded(group: Group, working: ImportWorking): boolean {
-  return !group.keys.some(key => working.choices.excluded.includes(key));
+function isIncluded(data: ImportData, group: Group, working: ImportWorking): boolean {
+  return !group.keys.some(key => isLeftOut(data, working.choices, key));
 }
 
-/** How a group is named: its flaw ids, or its components. */
+/** How a group is named: its flaw ids, its components, or its emails' files. */
 function groupRef(group: Group): string {
   const first = group.rows[0];
   if ('issueIds' in first) return `Flaw ${group.rows.flatMap(r => ('issueIds' in r ? r.issueIds : [])).join(', ')}`;
+  if (isEmailRow(first)) return group.rows.map(r => (isEmailRow(r) ? path.basename(r.emlFilePath) : r.id)).join(', ');
   return group.rows.map(r => ('nameVersion' in r ? r.nameVersion : r.id)).join(', ');
 }
 
@@ -139,10 +145,18 @@ function reduceNew(session: ImportSession, action: { type: string } & Record<str
     if (!groups) return { ok: false, reason: 'Pick new rows that have no ticket yet.' };
     const keys = new Set(groups.flatMap(g => g.keys));
     const kept = working.choices.excluded.filter(key => !keys.has(key));
-    return { ok: true, working: withChoices(working, { excluded: action.included ? kept : [...kept, ...keys] }) };
+    // A likely repeat starts left out, so taking it in is a choice of its own.
+    const repeats = repeatsByRowKey(data);
+    const keptIn = (working.choices.included ?? []).filter(key => !keys.has(key));
+    const included = action.included ? [...keptIn, ...[...keys].filter(key => repeats.has(key))] : keptIn;
+    return {
+      ok: true,
+      working: withChoices(working, { excluded: action.included ? kept : [...kept, ...keys], ...(included.length > 0 || working.choices.included ? { included } : {}) }),
+    };
   }
 
   if (action.type === 'new-merge') {
+    if (session.recipe.kind === 'email') return { ok: false, reason: 'Emails are not merged: each one becomes its own ticket or a comment.' };
     const groups = groupsOfIds(session, action.ids);
     if (!groups || groups.length < 2) return { ok: false, reason: 'Pick at least two new rows to merge.' };
     const order = [...openRows(data, working).keys()];
@@ -176,7 +190,7 @@ function planNew(session: ImportSession, action: { type: string } & Record<strin
   const { data } = session.derived;
 
   if (action.type === 'new-create') {
-    const included = groupsOf(data, working).filter(g => isIncluded(g, working));
+    const included = groupsOf(data, working).filter(g => isIncluded(data, g, working));
     if (included.length === 0) return { ok: false, reason: 'Nothing to create: no new row is selected.' };
     const batch = included.slice(0, BATCH_LIMIT);
     const remaining = included.length - batch.length;
@@ -192,6 +206,7 @@ function planNew(session: ImportSession, action: { type: string } & Record<strin
 
   const ticket = typeof action.key === 'string' ? action.key.trim().toUpperCase() : '';
   if (!ISSUE_KEY_PATTERN.test(ticket)) return { ok: false, reason: 'Name the ticket to add the rows to by its ticket key, for example SEC-12.' };
+  if (recipe.kind === 'email') return planEmailComment(session, action, ticket, prepared);
   if (action.mode !== 'comment' && action.mode !== 'rewrite') return { ok: false, reason: 'Add the rows as a comment or as a rewrite.' };
   const groups = groupsOfIds(session, action.ids);
   if (!groups) return { ok: false, reason: 'Pick new rows that have no ticket yet.' };
@@ -224,6 +239,33 @@ function planNew(session: ImportSession, action: { type: string } & Record<strin
 }
 
 
+/** What an email comment's preview reads first: the target ticket, as for a report add. */
+type EmailTargetCheck = { kind: 'ready'; summary: string; status: string | null; resolved: boolean } | { kind: 'read-failed'; error: string };
+
+/** An email added to an existing ticket: always a comment, one email per comment. */
+function planEmailComment(session: ImportSession, action: { type: string } & Record<string, unknown>, ticket: string, prepared?: unknown): Planned {
+  if (action.mode !== undefined && action.mode !== 'comment') return { ok: false, reason: 'An email is added to a ticket as a comment.' };
+  const groups = groupsOfIds(session, action.ids);
+  if (!groups) return { ok: false, reason: 'Pick emails that have no ticket yet.' };
+  const check = prepared as EmailTargetCheck | undefined;
+  if (check?.kind === 'read-failed') return { ok: false, reason: `${ticket} could not be read: ${check.error}` };
+  const lines: Array<{ target: string; change: string }> = [];
+  if (check?.kind === 'ready') {
+    lines.push({ target: ticket, change: `Now: ${check.summary}${check.status ? ` (${check.status})` : ''}` });
+    if (check.resolved) lines.push({ target: ticket, change: 'This ticket is resolved. You can still add to it, but nobody may be watching it.' });
+  }
+  for (const group of groups) {
+    const row = group.rows[0];
+    const attachments = isEmailRow(row) ? row.attachmentNames.length : 0;
+    lines.push({
+      target: `${groupRef(group)}: ${ticket}`,
+      change: `Post the email "${row.summary}" as a comment${attachments > 0 ? ` and upload its ${countedNoun(attachments, 'attachment(s)')}` : ''}`,
+    });
+  }
+  const payload: NewPayload = { handler: NAME, op: 'add', groups: groups.map(g => g.keys), ticket, mode: 'comment' };
+  return { ok: true, plan: { title: `Add ${countedNoun(groups.length, 'email(s)')} to ${ticket} as comments`, lines, risky: false, payload } };
+}
+
 /** The row the engine writes for a group: the row itself, or the merged row the chat builds from its members. */
 function engineRow(group: Group, review: ReviewSession<ImportRow>, descriptor: ImportDescriptor): ImportRow {
   if (group.rows.length === 1) return group.rows[0];
@@ -253,11 +295,24 @@ function addSession(session: ImportSession, groups: Group[], descriptor: ImportD
 }
 
 /** Before an add's preview: reads the target ticket and works out what a rewrite would drop. */
-function prepareNew(session: ImportSession, action: { type: string } & Record<string, unknown>, deps: ImportDeps): Promise<AddTargetCheck> | undefined {
+function prepareNew(session: ImportSession, action: { type: string } & Record<string, unknown>, deps: ImportDeps): Promise<AddTargetCheck | EmailTargetCheck> | undefined {
   if (action.type !== 'new-add' || session.working.outOfDate.includes('new')) return undefined;
   const ticket = typeof action.key === 'string' ? action.key.trim().toUpperCase() : '';
   const groups = groupsOfIds(session, action.ids);
   if (!ISSUE_KEY_PATTERN.test(ticket) || !groups) return undefined;
+  if (session.recipe.kind === 'email') {
+    return (async (): Promise<EmailTargetCheck> => {
+      const { ticketService } = await deps.writeAccess();
+      try {
+        const issue = await ticketService.getIssue(ticket);
+        return { kind: 'ready', summary: issue.fields.summary ?? '', status: issue.fields.status?.name ?? null, resolved: issue.fields.resolution != null };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        deps.onDiag?.('warn', `Could not read the target ticket — ${ticket}`, { issueKey: ticket, error: message });
+        return { kind: 'read-failed', error: message };
+      }
+    })();
+  }
   return (async () => {
     const descriptor = descriptorOf(session, deps);
     const { engineSession, rows } = addSession(session, groups, descriptor);
@@ -288,13 +343,29 @@ async function applyNew(
       } else {
         try {
           let dropped: string[] | undefined;
-          const outcome = await createTicketForRow(engineRow(group, review, descriptor), review, ticketService, descriptor, baseUrl, undefined, {
+          let afterFailed: string | undefined;
+          let row = engineRow(group, review, descriptor);
+          if (isEmailRow(row)) {
+            const fresh = await emailRowForWrite(row, chosenEmailBody(working.ext, row.emlFilePath));
+            if ('refused' in fresh) {
+              results.push({ target: groupRef(group), outcome: 'refused', reason: fresh.refused });
+              await progress?.({ working, done: n + 1, total: groups.length });
+              continue;
+            }
+            row = fresh.row;
+          }
+          const outcome = await createTicketForRow(row, review, ticketService, descriptor, baseUrl, undefined, {
             onDiag: deps.onDiag,
-            onEvent: event => { if (event.kind === 'created') dropped = event.droppedFields; },
+            onEvent: event => {
+              if (event.kind === 'created') dropped = event.droppedFields;
+              else if (event.kind === 'after-create-failed') afterFailed = event.error;
+            },
           });
           if ('key' in outcome) {
             record(dedupKeysOf(group), outcome.key);
-            results.push({ target: `${groupRef(group)}: ${outcome.key}`, outcome: 'done', ...(dropped?.length ? { reason: droppedFieldsNote(dropped) } : {}) });
+            // The ticket exists either way; a failed step after it (an email's attachment upload) is said on its line.
+            const notes = [dropped?.length ? droppedFieldsNote(dropped) : undefined, afterFailed].filter((n): n is string => !!n);
+            results.push({ target: `${groupRef(group)}: ${outcome.key}`, outcome: 'done', ...(notes.length ? { reason: notes.join(' ') } : {}) });
           } else {
             results.push({ target: groupRef(group), outcome: 'failed', reason: outcome.error });
           }
@@ -313,6 +384,7 @@ async function applyNew(
     return { results: [{ target: ticket, outcome: 'refused', reason: GONE }], derived: session.derived, working };
   }
   const live = groups as Group[];
+  if (session.recipe.kind === 'email') return applyEmailComments(session, live, ticket, deps, progress);
   const { engineSession, rows } = addSession(session, live, descriptor);
   const target = `${live.map(groupRef).join('; ')}: ${ticket}`;
   const result = await addRowsToTicket(engineSession, rows.map(r => r.id), ticket, payload.mode, ticketService, descriptor, baseUrl, deps.onDiag);
@@ -344,6 +416,67 @@ async function applyNew(
   return { results, derived: session.derived, working };
 }
 
+/**
+ * Posts each email as a comment on the ticket and uploads its remaining attachments, read from the
+ * file again. One email that fails or whose file is gone does not stop the others. The `.eml` is
+ * kept, as the chat's comment flow keeps it.
+ */
+async function applyEmailComments(
+  session: ImportSession, groups: Group[], ticket: string, deps: ImportDeps, progress?: ApplyProgress<ImportWorking>,
+): Promise<Applied<ImportData, ImportWorking>> {
+  const { ticketService } = await deps.writeAccess();
+  const baseUrl = await deps.baseUrl();
+  const results: ApplyLineResult[] = [];
+  let working = session.working;
+  let written = false;
+  for (const [n, group] of groups.entries()) {
+    const target = `${groupRef(group)}: ${ticket}`;
+    const first = group.rows[0];
+    const fresh = isEmailRow(first) ? await emailRowForWrite(first, chosenEmailBody(working.ext, first.emlFilePath)) : { refused: GONE };
+    if ('refused' in fresh) {
+      results.push({ target, outcome: 'refused', reason: fresh.refused });
+    } else {
+      try {
+        await ticketService.addComment(ticket, buildEmailCommentWiki(fresh.row), baseUrl);
+        const { uploaded, failures } = await uploadEmailAttachments(
+          fresh.row.attachments, ticket, (name, type, bytes) => ticketService.uploadAttachment(ticket, name, type, bytes), deps.onDiag,
+        );
+        // Recorded as an add at once, so an Apply cut short still shows the email as added to the ticket.
+        const ext = extOf(working);
+        working = {
+          ...working,
+          writes: { ...working.writes, created: [...working.writes.created, { dedupKeys: dedupKeysOf(group), key: ticket }] },
+          ext: { ...working.ext, [NAME]: { added: [...new Set([...ext.added, ticket])] } satisfies NewExt },
+        };
+        written = true;
+        const note = failures.length > 0
+          ? `uploaded ${uploaded} of ${fresh.row.attachments.length} attachment(s); failed: ${failures.join('; ')}`
+          : undefined;
+        results.push({ target, outcome: 'done', ...(note ? { reason: note } : {}) });
+      } catch (err) {
+        results.push({ target, outcome: 'failed', reason: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    await progress?.({ working, done: n + 1, total: groups.length });
+  }
+  if (written) {
+    // Read once after the last comment: only the ticket's latest `updated` tells the board's own change apart.
+    let updated: string | undefined;
+    try {
+      updated = (await deps.updatedTimes([ticket]))[ticket];
+    } catch {
+      // Without it a later check sees the ticket as changed by someone else.
+    }
+    const earlier = working.writes.tickets[ticket];
+    const commentOnly = earlier !== undefined && !earlier.commentOnly ? {} : { commentOnly: true };
+    working = {
+      ...working,
+      writes: { ...working.writes, tickets: { ...working.writes.tickets, [ticket]: { ...(updated !== undefined ? { updated } : {}), ...commentOnly } } },
+    };
+  }
+  return { results, derived: session.derived, working };
+}
+
 export const newTabHandler: ImportHandler = {
   name: NAME,
   reduce: reduceNew,
@@ -362,7 +495,7 @@ export const newTabHandler: ImportHandler = {
       if (into) addedTo[row.id] = into.key;
     }
     const view: NewTabView = {
-      toCreate: groupsOf(data, working).filter(g => isIncluded(g, working)).length,
+      toCreate: groupsOf(data, working).filter(g => isIncluded(data, g, working)).length,
       perApply: BATCH_LIMIT,
       addedTo,
     };

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildConstraintJql } from '../participant/sessionState';
-import { parseConstraintMatchSelection, extractProjectKeyFromJql, type ConstraintMatchOption, resolveNamedConstraints, formatMyFiltersList } from '../participant/sessionState';
+import { buildConstraintJql } from '../utils/searchConstraints';
+import { extractProjectKeyFromJql, resolveNamedConstraints, formatMyFiltersList } from '../utils/searchConstraints';
 import { MockJiraClient } from './mocks/MockJiraClient';
 
 describe('buildConstraintJql', () => {

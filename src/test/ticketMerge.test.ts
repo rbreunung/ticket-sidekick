@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mergedSummary, mergedBanner, resolveMergeSides, buildMergePlan, hasUnfinishedChoices, analyzeSourceMoves, buildCloseMergePlan, closeLinkType, survivorItemsLost, itemsOnNoTicket } from '../utils/ticketMerge';
-import type { ReviewRowBase } from '../participant/sessionState';
+import type { ReviewRowBase } from '../imports/types';
 
 describe('mergedSummary', () => {
   it('prefixes a plain summary', () => {

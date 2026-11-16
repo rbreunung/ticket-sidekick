@@ -4,6 +4,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { importKind, type ImportView, type ImportWorking } from '../boards/import/kind';
 import { importJiraDeps } from '../boards/import/jiraDeps';
+import { createEmailDescriptor } from '../imports/email';
 import type { ImportData, ImportDeps } from '../boards/import/read';
 import { importSessionId, withReportPath, type ImportRecipe } from '../boards/import/recipe';
 import { createVeracodeDescriptor } from '../imports/veracode';
@@ -124,7 +125,7 @@ beforeEach(async () => {
   deps = importJiraDeps({
     getJira: async () => ({ configured: true, client: jira, config: { baseUrl: 'https://jira.example.com' } }) as never,
     workspaceFolder: () => dir,
-    descriptors: { veracode, waltz },
+    descriptors: { veracode, waltz, email: createEmailDescriptor({ deleteEmlAfterImport: () => false, maxBatchBytes: () => 1024 * 1024 }) },
     now: () => clock,
   });
 });
@@ -288,7 +289,7 @@ describe('the recipe', () => {
     const file = writeVeracode([{ id: '1', file: 'A.java' }]);
     const checked = await importKind.revalidate!({ ...recipe('veracode', file), templateName: 'Old template', issueType: 'Vulnerability' }, deps);
     expect(checked).toEqual({ ok: true, recipe: { ...recipe('veracode', file), templateName: 'Old template', issueType: 'Vulnerability' } });
-    expect((await importKind.revalidate!({ ...recipe('veracode', file), kind: 'email' }, deps)).ok).toBe(false);
+    expect((await importKind.revalidate!({ ...recipe('veracode', file), kind: 'mail' as never }, deps)).ok).toBe(false);
     expect((await importKind.revalidate!({ ...recipe('veracode', file), reportPath: 'relative.xml' }, deps)).ok).toBe(false);
   });
 

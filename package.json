@@ -25,23 +25,6 @@
   "contributes": {
     "chatParticipants": [
       {
-        "id": "ticket-sidekick.jira",
-        "name": "jira",
-        "fullName": "Ticket Sidekick",
-        "description": "Deprecated: imports emails into Jira. Use /ts-jira or Agent mode for everything else",
-        "isSticky": true,
-        "disambiguation": [
-          {
-            "category": "jira_report_import",
-            "description": "The user wants to import an email (.eml) into a Jira ticket, or add an email to a Jira ticket as a comment.",
-            "examples": [
-              "Create a ticket from this email",
-              "Add this email to PROJ-42 as a comment"
-            ]
-          }
-        ]
-      },
-      {
         "id": "ticket-sidekick.bitbucket",
         "name": "bitbucket",
         "fullName": "Ticket Sidekick — Bitbucket",
@@ -95,10 +78,6 @@
       {
         "command": "ticket-sidekick.configureBitbucketCloud",
         "title": "Ticket Sidekick: Configure Bitbucket Cloud Credentials"
-      },
-      {
-        "command": "ticket-sidekick.importEml",
-        "title": "Ticket Sidekick: Create Jira ticket from email (.eml)"
       },
       {
         "command": "ticket-sidekick.sessions.clear",
@@ -516,7 +495,7 @@
       {
         "name": "jira_add_comment",
         "displayName": "Add a comment to a Jira ticket",
-        "modelDescription": "Adds one comment to a Jira ticket. Write the comment as Markdown (headings, lists, tables, code); it reaches Jira as wiki markup, as from @jira. The same comment on the same ticket within a minute is skipped, so a repeated call does not post it twice.",
+        "modelDescription": "Adds one comment to a Jira ticket. Write the comment as Markdown (headings, lists, tables, code); it reaches Jira as wiki markup. The same comment on the same ticket within a minute is skipped, so a repeated call does not post it twice.",
         "userDescription": "Adds one comment to a Jira ticket.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraAddComment",
@@ -718,7 +697,7 @@
       {
         "name": "jira_open_board",
         "displayName": "Open a Ticket Sidekick board",
-        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, the stored sessions, or the import board for a Veracode or Waltz report. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. For a cleanup by a rule from .jira-templates.json, pass the rule's name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. For a report import, pass board import with kind and path; the user reviews and creates the tickets on the board. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
+        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, the stored sessions, or the import board for a Veracode or Waltz report or for .eml emails. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. For a cleanup by a rule from .jira-templates.json, pass the rule's name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. For a report import, pass board import with kind and path; the user reviews and creates the tickets on the board. For emails, pass kind email with paths, and dragged true when the user dragged them into the chat; the user creates tickets or adds the emails as comments on the board. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
         "userDescription": "Opens a board in its own editor tab.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraOpenBoard",
@@ -737,19 +716,32 @@
                 "sessions",
                 "import"
               ],
-              "description": "security-report: a project's open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, where the user selects tickets and moves them or sets a field, or a cleanup rule's tickets. sessions: the stored board sessions of this workspace. import: imports a Veracode Detailed Report or a Waltz OSS Report into Jira tickets."
+              "description": "security-report: a project's open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, where the user selects tickets and moves them or sets a field, or a cleanup rule's tickets. sessions: the stored board sessions of this workspace. import: imports a Veracode Detailed Report, a Waltz OSS Report or .eml emails into Jira tickets."
             },
             "kind": {
-              "description": "import: the report kind, veracode (Detailed Report XML) or waltz (OSS Report .xlsx).",
+              "description": "import: the report kind, veracode (Detailed Report XML), waltz (OSS Report .xlsx) or email (.eml files).",
               "type": "string",
               "enum": [
                 "veracode",
-                "waltz"
+                "waltz",
+                "email"
               ]
             },
             "path": {
               "description": "import: the report file, a path in the workspace or an absolute path or file URI, e.g. a file dragged into the chat.",
               "type": "string"
+            },
+            "paths": {
+              "description": "import with kind email: the .eml files, in place of path, each like path.",
+              "maxItems": 50,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "dragged": {
+              "description": "import with kind email: true when the user dragged the emails into the chat, which counts as agreeing to the model check of their text.",
+              "type": "boolean"
             },
             "project": {
               "description": "security-report: the Jira project key, e.g. PROJ. Leave out to use the default project.",
@@ -901,11 +893,6 @@
             "default": [],
             "description": "Jira field names that must be set for ticket validation (e.g. [\"assignee\", \"priority\"])"
           },
-          "ticketSidekick.jira.showConnectionInfo": {
-            "type": "boolean",
-            "default": false,
-            "description": "When enabled, each @jira import response starts with an italic line showing the active base URL, API version, and auth type."
-          },
           "ticketSidekick.jira.additionalDisplayFields": {
             "type": "array",
             "items": {
@@ -1031,6 +1018,12 @@
             "default": false,
             "description": "When enabled, each review additionally emits a single fenced structured run record to the \"Ticket Sidekick\" output channel — run configuration, per-call records, and the findings funnel with drop reasons — copy-pasteable as one block for comparing runs or filing a provider bug report."
           },
+          "ticketSidekick.bitbucket.reviewModel": {
+            "type": "string",
+            "scope": "application",
+            "default": "",
+            "description": "The id of the language model the pull request review uses once reviews run on a board. Today the email boilerplate check falls back to it when ticketSidekick.email.checkModel is empty; @bitbucket still reviews with the model picked in the chat."
+          },
           "ticketSidekick.bitbucket.showTokenUsage": {
             "type": "boolean",
             "default": false,
@@ -1046,6 +1039,17 @@
             "type": "boolean",
             "default": false,
             "description": "Delete the .eml file automatically after the Jira ticket is created."
+          },
+          "ticketSidekick.email.template": {
+            "type": "string",
+            "default": "",
+            "description": "Name of the template in .jira-templates.json that an email import on the import board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the import board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
+          },
+          "ticketSidekick.email.checkModel": {
+            "type": "string",
+            "scope": "application",
+            "default": "",
+            "description": "The id of the language model the email boilerplate check uses, after you agree to it for an email on the import board. When empty, the model in ticketSidekick.bitbucket.reviewModel is used; when both are empty, the import board asks you to pick one and saves it here."
           },
           "ticketSidekick.email.maxBatchSizeMB": {
             "type": "number",
@@ -1221,7 +1225,7 @@
       {
         "id": "ticket-sidekick.jiraGettingStarted",
         "title": "Ticket Sidekick: Jira",
-        "description": "Set up @jira and create your first ticket.",
+        "description": "Set up Jira and create your first ticket from a Copilot chat.",
         "steps": [
           {
             "id": "jiraBaseUrl",

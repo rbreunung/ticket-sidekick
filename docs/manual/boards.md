@@ -67,15 +67,16 @@ A cleanup is the ticket list loaded from a rule in the `cleanupRules` of `.jira-
 
 ## Import board
 
-The import board turns a Veracode Detailed Report (`.xml`) or a Waltz OSS Report (`.xlsx`) into Jira tickets. It replaces the `@jira` Veracode and Waltz imports and their two Command Palette commands. The import rules are the same as before: which findings fold into one ticket, the labels, the Due Dates, rewrite, the ticket merge and the accepted list. They are described in [Report Imports](report-imports.md). Emails are still imported with `@jira`.
+The import board turns a Veracode Detailed Report (`.xml`), a Waltz OSS Report (`.xlsx`) or one or more `.eml` emails into Jira tickets. It replaces the `@jira` imports and their Command Palette commands. The import rules are the same as before: which findings fold into one ticket, the labels, the Due Dates, rewrite, the ticket merge, the accepted list, and for emails the boilerplate cleanup with its consent. They are described in [Report Imports](report-imports.md).
 
 ### Opening an import
 
-- **Command Palette.** `Ticket Sidekick: Open import board` opens the start screen. Pick **Veracode** or **Waltz OSS**, then **Choose file…**. The start screen reads the report at once and says how many items pass your filter settings. A file that is too large, cannot be read or has no matching item is named with the reason, and the import cannot be opened.
-- **Template.** The template comes from `ticketSidekick.veracode.template` or `ticketSidekick.waltz.template`. When the setting is empty, or names a template that is no longer in `.jira-templates.json`, the start screen asks for a template and saves your choice to the setting. The next import of that kind does not ask again. The issue type comes from the template. When the template names none, pick one of the project's issue types; when Jira cannot list them, type it.
+- **Command Palette.** `Ticket Sidekick: Open import board` opens the start screen. Pick **Veracode**, **Waltz OSS** or **Email**, then **Choose file…** (for emails, **Choose emails…**, which takes several `.eml` files). The start screen reads the report at once and says how many items pass your filter settings. A file that is too large, cannot be read or has no matching item is named with the reason, and the import cannot be opened.
+- **Template.** The template comes from `ticketSidekick.veracode.template`, `ticketSidekick.waltz.template` or `ticketSidekick.email.template`. When the setting is empty, or names a template that is no longer in `.jira-templates.json`, the start screen asks for a template and saves your choice to the setting. The next import of that kind does not ask again. The issue type comes from the template. When the template names none, pick one of the project's issue types; when Jira cannot list them, type it.
 - **Project.** The project is `ticketSidekick.jira.defaultProject`. When it is empty, is not a project key, or Jira does not know it, the start screen asks for it: type the project key, or start typing and choose from the projects Jira shows you. A typed key is checked with Jira, so it works even when the list is long or cut short. The project is saved to the setting, so the next import does not ask, and the tools and other boards use it too. When Jira's project list cannot be read, the start screen says so and you type the key; **Open Setting** is always there too.
 - **Jira not set up.** The start screen shows how to set up Jira instead of **Open**.
-- **From Copilot.** In Agent mode, ask for the import with the report's path, or drag the file into the chat ("import this Veracode report"), or type `/ts-jira import veracode reports/scan.xml`. The board opens with the report loaded when the file reads and the template and project settings are complete. Otherwise the start screen opens with the kind and the file filled in. Copilot learns only whether the board opened.
+- **Email: the model of the check.** For an email import the start screen shows the model the boilerplate check uses, lets you pick one (saved to `ticketSidekick.email.checkModel`) and confirms with one short call, without email text, that the model answers.
+- **From Copilot.** In Agent mode, ask for the import with the report's path, or drag the file into the chat ("import this Veracode report"), or type `/ts-jira import veracode reports/scan.xml` (for emails, `/ts-jira import email` with the `.eml` paths or the emails attached; attaching them counts as agreeing to the model check). The board opens with the report loaded when the file reads and the template and project settings are complete. Otherwise the start screen opens with the kind and the file filled in. Copilot learns only whether the board opened.
 - **The same file again.** The same report file in the same project opens the stored import, with the template it was started with. The start screen then offers **Open stored import** and **Start over**. Start over discards the stored import and starts again with the template now in the setting. When a new scan was saved over that file, the stored import reads it and asks again for a decision on every row, also on tickets it wrote for the earlier scan.
 
 ### The tabs
@@ -149,7 +150,7 @@ The board checks the report file and Jira when it opens, after a restart and whe
 
 ### Finished
 
-When no tab has work left, the board says there is nothing left to do and offers **Discard**. The import stays, with export and **Reload report**, until you discard it or it expires after `ticketSidekick.sessions.retentionDays`.
+When no tab has work left, the board says there is nothing left to do and offers **Close**. The import stays, with export and **Reload report**, until you close it or it expires after `ticketSidekick.sessions.retentionDays`.
 
 ## How a board keeps its data
 
@@ -160,7 +161,7 @@ Every board shows a **session**: the data it read and what you set on the board.
 - **After a restart.** VS Code brings a board's tab back with the window, and the board shows its stored session, marked "restored session", then checks the source.
 - **If the check fails.** The stored data stays on show, with a line saying the check failed and when the data is from. A board that writes applies nothing until a check passes: it offers paging and **Refresh** only.
 - **While Apply runs** the board shows its progress and disables every control except its tabs. Each finished write is saved at once, so a board brought back after VS Code closed in the middle of an Apply shows the finished tickets as done, and the next preview covers only the rest.
-- **Discard session** on a board deletes its session.
+- **Close** on a board deletes its session and closes its tab. Closing the tab with its × keeps the session, so the board opens again where you left it.
 
 ## Stored sessions
 
@@ -175,5 +176,5 @@ Sessions are kept in VS Code's storage for the workspace, outside your repositor
 ## Limits
 
 - A board belongs to the VS Code window that opened it and shows that window's workspace sessions.
-- The email import and the pull request review have no board yet. Until they do, they run in the deprecated `@jira` and `@bitbucket` chat participants.
+- The pull request review has no board yet. Until it does, it runs in the deprecated `@bitbucket` chat participant.
 - The same import open in two VS Code windows is not locked. The search for tickets that already exist, the check of each ticket before it is written and the out-of-date mark catch most collisions, but not all: work on one import in one window.

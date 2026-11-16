@@ -1,106 +1,76 @@
 # Report Imports (Email, Veracode, Waltz)
 
-> **Where each import runs.** Veracode and OSS (Waltz) reports are imported on the [import board](boards.md#import-board), which replaced their `@jira` imports. Emails are still imported with the deprecated `@jira` chat participant, until the import board has an email kind.
+> **Where each import runs.** All three imports run on the [import board](boards.md#import-board). Open it with **Ticket Sidekick: Open import board**, `/ts-jira import <veracode, waltz or email> [PATH ...]`, or by asking Copilot with the files' paths. The `@jira` chat participant and its import commands are gone.
 
-Turns a `.eml` email, a Veracode Detailed Report, or a Waltz OSS Report into Jira tickets. See the main [README](../../README.md) for setup and core commands first.
+Turns `.eml` emails, a Veracode Detailed Report, or a Waltz OSS Report into Jira tickets. See the main [README](../../README.md) for setup and core commands first.
 
-## Create Jira ticket from email (.eml)
+## Emails (.eml)
 
 Download the email from OWA using **More actions → Download message** to save a `.eml` file, then:
 
-1. Run **Command Palette → Ticket Sidekick: Create Jira ticket from email (.eml)**
-2. Select the `.eml` file from your Downloads folder
-3. If boilerplate was found, or an email needs your OK for a model check, that step comes first — see [Removing confidentiality headers, footers and signatures](#removing-confidentiality-headers-footers-and-signatures)
-4. A preview appears in the `@jira` chat with subject, sender, date, body, and attachments
-5. Reply with a template number, an issue type number, or **post it** to create the ticket
+1. Open the import board and pick **Email** as the kind, or type `/ts-jira import email` in a Copilot chat. You can also attach the `.eml` files to the message, or name them: `/ts-jira import email mails/escalation.eml`
+2. Choose one or more `.eml` files (at most 50, and at most `ticketSidekick.email.maxBatchSizeMB` in total). A file that is not an email is named and left out
+3. Check the project and the template. The template comes from `ticketSidekick.email.template`; when it is empty the start screen asks for one once and saves it. One template and issue type apply to all emails of the import
+4. **Open**. If boilerplate was found, or an email can be checked by the model, the [cleanup step](#removing-confidentiality-headers-footers-and-signatures) comes first
+5. Each email is a row on the **New** tab. Create tickets for the selected emails, or add emails to an existing ticket as comments, each after a preview and **Apply**. Creating more than one ticket asks you to confirm in a VS Code dialog
 
-You can also trigger the import from the chat directly:
+Each ticket gets the email's subject as its summary and its body as the description. Tables in the email body (including those written in desktop Outlook or Word) arrive as Jira tables with a header row, and empty cells stay empty. A table that only lays out a signature or logo is flattened into plain lines. Inline images are uploaded as Jira attachments and embedded as thumbnails at their position; file attachments are uploaded to the ticket. A failed upload is named on that email's result line and does not fail the ticket; the `.eml` file is then kept, even with `ticketSidekick.email.deleteEmlAfterImport` on, so the attachment is not lost. Individual attachments larger than 25 MB are rejected with a clear message.
 
-```text
-@jira create ticket from mail
-@jira import email
-```
+The board does not keep the attachments themselves: it reads them from the `.eml` file again when it writes. If a file was moved or deleted in the meantime, or another email was saved under the same name, that email is not written and the result says so; the other emails are written. After **Refresh** a changed email is read again, and if the cleanup had already stripped or kept its boilerplate, the cleanup asks again.
 
-A file picker opens, the preview appears, and you proceed as above.
+When the board deleted every `.eml` file after creating its tickets, it stays finished and offers **Close**.
 
-Tables in the email body (including those written in desktop Outlook or Word) arrive as Jira tables with a header row, and empty cells stay empty. A table that only lays out a signature or logo is still flattened into plain lines.
+### Likely repeats
 
-Inline images are uploaded as Jira attachments and embedded as thumbnails at their position in the description. File attachments are uploaded to the ticket. Individual attachments larger than 25 MB are rejected with a clear message rather than failing mid-upload.
+Before anything is created, the board searches the project for tickets whose summary is an email's subject, ignoring `RE:`, `AW:`, `FW:` and `WG:` prefixes, spacing and case. Such an email is marked **Likely a repeat of PROJ-42**, starts unselected, and offers **Add as comment to PROJ-42**. You can still select it to create a new ticket. When the search fails, the tab says so and marks nothing.
+
+### Adding an email as a comment
+
+Select one or more emails, type the ticket key next to **Add selected to ticket** and preview. Each email becomes one comment with the sender and received date as a header, followed by the body in Jira markup, and its attachments are uploaded to that ticket. After the cleanup's strip, only the attachments that remain are uploaded. The `.eml` file is kept, whatever `ticketSidekick.email.deleteEmlAfterImport` says.
 
 ## Removing confidentiality headers, footers and signatures
 
-Before an email becomes a ticket or a comment, `@jira` looks for boilerplate in every message of the thread, including quoted and forwarded ones: confidentiality headers at the top, legal footers and disclaimers at the bottom, and signature blocks with their logos. Nothing is removed until you say so.
+Before the emails become tickets or comments, the board looks for boilerplate in every message of each thread, including quoted and forwarded ones: confidentiality headers at the top, legal footers and disclaimers at the bottom, and signature blocks with their logos. Nothing is removed until you say so, and the `.eml` files are never changed.
 
 **Your patterns first.** List the texts your company repeats in the `ticketSidekick.email.boilerplatePatterns` user setting (see [Settings Reference](settings-reference.md#report-import-settings) for the format). Every email is checked against them. Without an end phrase, a header covers the line(s) its start phrase is on — add an end phrase for multi-line headers.
 
-**The model only with your yes.** If an email matches none of your patterns, `@jira` asks once for the whole import whether the Copilot model may look at those emails:
+**The model only with your yes.** If an email matches none of your patterns, the board asks whether a language model may look at those emails:
 
-| Reply | What happens |
+| Control | What happens |
 |---|---|
-| `model check` (or `yes`) | Only the emails listed on that screen are sent to the model, one at a time. On this screen, emails that matched a pattern are not sent; you can still send them later with `model check` on the preview. An email longer than 30,000 characters is never sent and shows *too long for model check* |
-| `skip model` (or `no`) | Nothing is sent. Those emails show *nothing detected* and import unchanged |
-| `cancel` | Stops the import |
+| **Preview model check…** | Shows exactly which emails would be sent, to which model. Nothing is sent until you **Apply**. Emails are sent one at a time; an email longer than 30,000 characters is never sent and shows *Too long for the check* |
+| **Continue without the model** | Nothing is sent. Those emails show *Not checked* and import unchanged |
 
-No email content goes to the model without this reply, and the answer is not remembered for the next import. If you stop the chat response while the model check runs, the import pauses at this question: emails already checked keep their result, the rest are not sent, and you reply **model check** or **skip model** to continue. With no patterns configured you see this question on every import. If nothing was found and you skip the model, the import continues straight to the template pick.
+The model is `ticketSidekick.email.checkModel`, or `ticketSidekick.bitbucket.reviewModel` when that one is empty. When both are empty, pick a model in the list on the board: the preview then also says it saves your pick to `ticketSidekick.email.checkModel`. The start screen shows the same model and lets you check that it answers. Dragging the emails into a Copilot chat counts as your yes for those emails; the board still shows the preview before anything is sent.
 
-**The preview.** One screen lists, per email, its row id, subject, which blocks were found (for example *3 footers, 1 signature*) with a short excerpt and line count of each, and how many images would be dropped. A block marked *capped* hit the 40-line limit before a natural end. Reply:
+A check that fails is marked *Check failed*, keeps what your patterns found, and can be repeated. If VS Code closes during a check, the emails already checked keep their result and the others wait for your answer again.
 
-| Reply | What happens |
+**What was found.** The table lists, per email, the blocks found (header, footer or signature, with the first line and the line count, and whether your pattern or the model found it) and the model check's state. Then:
+
+| Control | What happens |
 |---|---|
-| `strip` | Removes the listed blocks, then continues to the template pick (or the comment preview) |
-| `model check` | Sends every email the model has not looked at yet to the model, one at a time, to find boilerplate your patterns missed — including emails your patterns already matched. Excluded emails, empty emails and emails over 30,000 characters are not sent. New blocks appear in the same preview next to the pattern blocks. Shown only while at least one email can still be checked; nothing is sent unless you reply |
-| `keep` | Imports every email unchanged |
-| a row id, e.g. `3` (or `2, 4`) | Excludes that email from stripping and from `model check`; reply it again to include it. Excluded emails import unchanged. Emails with nothing detected show the same Exclude chip |
-| `save <n>` | For a block the model found (numbered `#n`): saves it as a pattern in your user settings, so the next import finds it without the model. The preview shows the exact start and end phrases it will store before you save. Blocks your patterns found are already saved and cannot be saved again |
-| `cancel` | Stops the import |
+| **Strip and continue** | Removes the blocks from the ticked emails and opens the New tab |
+| **Keep everything and continue** | Imports every email unchanged |
+| the tick box of an email | Leaves that email out of stripping and out of a later model check; it imports unchanged |
+| **Save as pattern…** | For a block the model found: saves it to your patterns in your user settings after a preview of the start and end phrases, so the next import finds it without the model |
+| **Preview model check of N more email(s)…** | Sends the emails the model has not looked at yet, including ones your patterns matched. Shown only while one can still be checked |
 
-The preview ends with a `Commands:` line for the replies that still apply (`model check` disappears once every email is checked, `save` once no model-found block is left to save). Reply `help` to see them explained; a reply the preview cannot read prints the same help.
-
-**What stripping keeps.** A stripped signature keeps the author's name line when it can be recognized (the sender's name, or a name right after a closing such as "Best regards"); a signature with no recognizable name, such as "BR" and a logo, is removed completely. An inline image that appears only inside stripped blocks is removed from the text and not uploaded; an image also used in the kept text stays. With `ticketSidekick.email.deleteEmlAfterImport` on, the stripped text is gone for good.
-
-## Add an email as a comment to an existing ticket
-
-Log a customer follow-up, escalation, or partner communication on a ticket that already exists — without leaving VS Code.
-
-**From the chat (fastest):**
-
-```text
-@jira add email to PROJ-42
-@jira add comment from mail to PROJ-42
-```
-
-A file picker opens. Select the `.eml` file. The email is posted as a comment on `PROJ-42` with all attachments uploaded.
-
-**Via preview (to review before posting):**
-
-```text
-@jira add email
-```
-
-The email preview appears. Reply with a ticket key (e.g. `PROJ-42`) to add as a comment, or select a template / issue type to create a new ticket instead.
-
-**Via command palette:** Use **Command Palette → Ticket Sidekick: Create Jira ticket from email (.eml)**, then reply with a ticket key in the preview.
-
-The comment includes the sender name and received date as a header, followed by the email body in Jira markup. The same [boilerplate step](#removing-confidentiality-headers-footers-and-signatures) runs first for the one email; after `strip`, only the attachments that remain are uploaded, otherwise all of them are.
+**What stripping keeps.** A stripped signature keeps the author's name line when it can be recognized (the sender's name, or a name right after a closing such as "Best regards"); a signature with no recognizable name, such as "BR" and a logo, is removed completely. An inline image that appears only inside stripped blocks is removed from the text and not uploaded; an image also used in the kept text stays.
 
 **Settings:**
 
 | Setting | Default | Description |
 |---|---|---|
-| `ticketSidekick.email.deleteEmlAfterImport` | `false` | Delete the `.eml` file automatically after the ticket is created |
-| `ticketSidekick.jira.defaultProject` | — | Project key used when creating tickets (required for new ticket flow) |
-| `ticketSidekick.email.maxBatchSizeMB` | `150` | Largest total size (1–500 MB) of the `.eml` files selected for one batch; a larger batch is rejected before any file is read |
-| `ticketSidekick.email.boilerplatePatterns` | `[]` | Your known confidentiality headers, legal footers and signatures, found and offered for removal before import (see above) |
-
-## Reviewing an email batch
-
-An email batch has only new tickets, so `@jira` opens its review screen directly. Toggle rows by replying their numbers (or `include all` / `exclude all`, `next` / `prev` for more pages of 50), then reply **Create N tickets** (or **ok**). Each **Create N tickets** creates at most 50 tickets. The batch finishes by itself once every ticket is created: the summary appears right after the results and you do not need to reply **Done**. It stays open, with **Done**, while an email failed to create or you excluded it, so you can retry or end it yourself.
-
-The screen keeps its buttons and ends with one `Commands:` line listing the typed commands it understands. Reply `help` (or click **help**) to see every command with its syntax and what it does. A reply the screen cannot use prints the same help, after one line saying what was not understood or why it was refused.
+| `ticketSidekick.email.template` | `""` | The template an email import uses; asked for once on the start screen when empty |
+| `ticketSidekick.email.deleteEmlAfterImport` | `false` | Delete the `.eml` file after its ticket is created (not after a comment) |
+| `ticketSidekick.jira.defaultProject` | — | Project the tickets go to; asked for on the start screen when empty |
+| `ticketSidekick.email.maxBatchSizeMB` | `150` | Largest total size (1–500 MB) of the `.eml` files of one import; a larger selection is refused before any file is read |
+| `ticketSidekick.email.boilerplatePatterns` | `[]` | Your known confidentiality headers, legal footers and signatures (see above) |
+| `ticketSidekick.email.checkModel` | `""` | The model of the email check; picked on the board when empty |
 
 ## Create Jira tickets from a Veracode report (.xml)
 
-Veracode reports are imported on the **import board**. The `@jira import veracode report` request and the "Create Jira tickets from Veracode report (.xml)" command are gone; `@jira` now answers such a request with a pointer to the board.
+Veracode reports are imported on the **import board**.
 
 Export a Detailed Report XML from Veracode, then:
 
@@ -212,7 +182,7 @@ After a merge the tabs show the new reading from Jira, except a tab where you ha
 
 ## Create Jira tickets from an OSS report (.xlsx)
 
-OSS reports are imported on the **import board**. The `@jira import oss report` request and the "Create Jira tickets from OSS report (.xlsx)" command are gone; `@jira` now answers such a request with a pointer to the board.
+OSS reports are imported on the **import board**.
 
 Export an "OSS Report" from Waltz (or a compatible SCA tool) as `.xlsx`, then:
 

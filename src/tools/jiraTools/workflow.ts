@@ -13,7 +13,7 @@ import { runJiraTool } from './runJiraTool';
 import { WORKFLOW_TOOL } from './toolNames';
 
 // The statuses a ticket can reach, read from the workflow cache in the first workspace folder
-// (`.jira-workflow-cache.json`, the same cache `@jira` uses). When the cache has no workflow for
+// (`.jira-workflow-cache.json`). When the cache has no workflow for
 // the ticket's project and issue type, or not its current status, or a refresh is asked for, the
 // workflow is discovered from Jira and the cache rewritten first.
 

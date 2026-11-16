@@ -36,7 +36,7 @@ Usage: /ts-jira <command> [arguments]
   check                       check the Jira connection
   security-report [PROJECT]   open the security report in its own tab
   sessions                    open the stored sessions in their own tab
-  import <kind> [PATH]        import a veracode or waltz report in its own tab
+  import <kind> [PATH ...]    import a veracode or waltz report, or emails, in its own tab
 ------------------------------------------------------------------
 Without KEY, load and view use the ticket of the git branch.
 A brief, a guided create, a spell check or a template: help brief, help create, help spell-check, help template
@@ -61,7 +61,7 @@ A brief, a guided create, a spell check or a template: help brief, help create, 
 | check | `jira_check_connection` |
 | security-report [PROJECT] | `jira_open_board` with board `security-report`, and the project as `project` when one is typed |
 | sessions | `jira_open_board` with board `sessions` |
-| import <kind> [PATH] | `jira_open_board` with board `import`, the kind (`veracode` or `waltz`) as `kind`, and the path as `path` when one is typed |
+| import <kind> [PATH ...] | `jira_open_board` with board `import` and the kind (`veracode`, `waltz` or `email`) as `kind`. For `veracode` or `waltz`, the path as `path` when one is typed. For `email`, every typed or attached `.eml` path as `paths`, and `dragged` true when the user attached the emails to the message |
 
 For a `jira_open_board` row, reply with only the status the tool returns; never build the report or the list yourself from other tools.
 

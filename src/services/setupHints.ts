@@ -6,8 +6,7 @@ import type { JiraConfig } from './ConfigService';
 
 /**
  * Plain-text "Jira isn't configured" message naming the specific missing setting or setup
- * command — the same information @jira's chat handler's own not-configured messages give,
- * but without a trusted `MarkdownString` command link (a `LanguageModelToolResult`, unlike a
+ * command, without a trusted `MarkdownString` command link (a `LanguageModelToolResult`, unlike a
  * chat stream, can't carry one), so this doubles as both a tool result and plain chat text.
  */
 export function buildJiraNotConfiguredMessage(config: Pick<JiraConfig, 'baseUrl' | 'token' | 'authType'>): string {

@@ -33,6 +33,13 @@ let discarded: string[];
 let opened: ImportRecipe[];
 let openedSettings: string[];
 let readers: Partial<Record<ReportKind, ReportReader>>;
+let nextEmails: string[] | undefined;
+let unreadable: Set<string>;
+let capProblem: string | null;
+let modelSettings: { email: string; review: string };
+let available: Array<{ id: string; name: string; vendor: string; family: string }>;
+let modelFails: Error | undefined;
+let modelCalls: string[];
 
 const fakeReader = (items = 3): ReportReader => ({
   read: async () => ({ items: Array.from({ length: items }, (_, i) => i), rawItems: [] }),
@@ -63,6 +70,20 @@ function deps(): ImportStartDeps {
     templates: () => templates,
     reportReader: kind => readers[kind] ?? fakeReader(),
     pickReportFile: async (_kind, filter) => { pickedFilters.push(filter.label); return nextFile; },
+    pickEmailFiles: async () => nextEmails,
+    emailFiles: {
+      checkCaps: async () => capProblem,
+      read: async filePath => { if (unreadable.has(path.basename(filePath))) throw new Error('not an email'); return {}; },
+    },
+    models: {
+      list: async () => available,
+      send: async id => { modelCalls.push(id); if (modelFails) throw modelFails; return 'ready'; },
+    },
+    modelSettings: {
+      emailModel: () => modelSettings.email,
+      reviewModel: () => modelSettings.review,
+      writeEmailModel: async id => { modelSettings.email = id; },
+    },
     openSetting: async key => { openedSettings.push(key); },
     hasSession: async id => stored.has(id),
     discardSession: async id => { discarded.push(id); stored.delete(id); },
@@ -86,9 +107,16 @@ async function screenWithFile(kind: ReportKind = 'waltz', file = report()): Prom
 
 beforeEach(async () => {
   dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ts-import-start-'));
-  settings = { veracode: '', waltz: '' };
+  settings = { veracode: '', waltz: '', email: '' };
+  nextEmails = undefined;
+  unreadable = new Set();
+  capProblem = null;
+  modelSettings = { email: '', review: '' };
+  available = [{ id: 'm1', name: 'Model One', vendor: 'copilot', family: 'one' }];
+  modelFails = undefined;
+  modelCalls = [];
   writes = [];
-  templates = [{ name: 'OSS finding', issueType: 'Vulnerability' }, { name: 'Plain', issueType: undefined } as JiraTemplate];
+  templates = [{ name: 'OSS finding', issueType: 'Vulnerability', defaultFields: {} }, { name: 'Plain', issueType: undefined } as JiraTemplate];
   defaultProject = 'PROJ';
   configured = true;
   projectFails = undefined;
@@ -271,7 +299,7 @@ describe('the report file', () => {
     const view = await screen.handle('kind', { kind: 'veracode' }) as StartScreenView;
     expect(view.kind).toBe('veracode');
     expect(view.report.path).toBeUndefined();
-    await expect(screen.handle('kind', { kind: 'email' })).rejects.toMatchObject({ status: 400 });
+    await expect(screen.handle('kind', { kind: 'mail' })).rejects.toMatchObject({ status: 400 });
   });
 });
 
@@ -401,5 +429,105 @@ describe('what is missing around the import', () => {
     expect(view).toMatchObject({ kind: 'waltz', report: { path: file, items: 3 } });
     screen.prefill({ kind: 'nonsense', reportPath: 'relative/path.xlsx' });
     expect((await screen.view()).report.path).toBe(file);
+  });
+});
+
+describe('an email import', () => {
+  async function emailScreen(names: string[]): Promise<{ screen: ImportStartScreen; view: StartScreenView }> {
+    settings.email = 'OSS finding';
+    const screen = new ImportStartScreen(deps());
+    await screen.handle('kind', { kind: 'email' });
+    nextEmails = names.map(n => report(n));
+    const view = await screen.handle('pick-file', {}) as StartScreenView;
+    return { screen, view };
+  }
+
+  it('takes several files and leaves out the ones that do not read', async () => {
+    unreadable.add('b.eml');
+    const { screen, view } = await emailScreen(['c.eml', 'a.eml', 'b.eml']);
+    expect(view.report.fileName).toBe('3 emails');
+    expect(view.report.items).toBe(2);
+    expect(view.report.skipped).toEqual(['b.eml: not an email']);
+    expect(view.canOpen).toBe(true);
+    await screen.handle('open', {});
+    expect(opened[0].kind).toBe('email');
+    expect(opened[0].reportPaths!.map(p => path.basename(p))).toEqual(['a.eml', 'b.eml', 'c.eml']);
+  });
+
+  it('shows the batch caps\' refusal and cannot open, reading no email', async () => {
+    capProblem = 'CAP-PROBLEM';
+    unreadable.add('a.eml'); // would be named as unreadable if it were read
+    const { view } = await emailScreen(['a.eml', 'b.eml']);
+    expect(view.report.problem).toBe('CAP-PROBLEM');
+    expect(view.report.skipped).toBeUndefined();
+    expect(view.canOpen).toBe(false);
+  });
+
+  it('continues the same import when the same files are chosen in another order', async () => {
+    const { screen } = await emailScreen(['a.eml', 'b.eml']);
+    await screen.handle('open', {});
+    nextEmails = [path.join(dir, 'b.eml'), path.join(dir, 'a.eml')];
+    const again = await screen.handle('pick-file', {}) as StartScreenView;
+    expect(again.stored).toBe(true);
+  });
+
+  it('asks for the email template once and saves it', async () => {
+    const screen = new ImportStartScreen(deps());
+    await screen.handle('kind', { kind: 'email' });
+    nextEmails = [report('a.eml')];
+    const view = await screen.handle('pick-file', {}) as StartScreenView;
+    expect(view.template.askReason).toMatch(/ticketSidekick\.email\.template is empty/);
+    await screen.handle('template', { name: 'OSS finding' });
+    expect(writes).toEqual([['email', 'OSS finding']]);
+  });
+});
+
+describe('the model for the email check', () => {
+  async function emailView(): Promise<{ screen: ImportStartScreen; view: StartScreenView }> {
+    const screen = new ImportStartScreen(deps());
+    const view = await screen.handle('kind', { kind: 'email' }) as StartScreenView;
+    return { screen, view };
+  }
+
+  it('offers the available models when no model is set, without calling one', async () => {
+    const { view } = await emailView();
+    expect(view.emailModel).toEqual({ settingKey: 'ticketSidekick.email.checkModel', options: [{ id: 'm1', label: 'Model One (copilot)' }] });
+    expect(modelCalls).toEqual([]);
+  });
+
+  it('shows the review model as in use when the email setting is empty', async () => {
+    modelSettings.review = 'm1';
+    const { view } = await emailView();
+    expect(view.emailModel!.inUse).toEqual({ id: 'm1', label: 'Model One (copilot)', source: 'review' });
+  });
+
+  it('saves a picked model and shows that it answered', async () => {
+    const { screen } = await emailView();
+    const view = await screen.handle('model', { id: 'm1' }) as StartScreenView;
+    expect(modelSettings.email).toBe('m1');
+    expect(modelCalls).toEqual(['m1']);
+    expect(view.emailModel!.check).toEqual({ ok: true, message: 'The model answered.' });
+  });
+
+  it('keeps the pick and shows why the model did not answer', async () => {
+    modelFails = new Error('Extension is not allowed to use language models');
+    const { screen } = await emailView();
+    const view = await screen.handle('model', { id: 'm1' }) as StartScreenView;
+    expect(modelSettings.email).toBe('m1');
+    expect(view.emailModel!.check).toEqual({ ok: false, message: 'The model did not answer: Extension is not allowed to use language models' });
+  });
+
+  it('says so when no model is available', async () => {
+    available = [];
+    const { view } = await emailView();
+    expect(view.emailModel!.problem).toMatch(/No language model is available/);
+    expect(view.emailModel!.options).toBeUndefined();
+  });
+
+  it('refuses a model that is not available and is not shown for the other kinds', async () => {
+    const { screen } = await emailView();
+    await expect(screen.handle('model', { id: 'other' })).rejects.toMatchObject({ status: 400 });
+    const veracode = await screen.handle('kind', { kind: 'veracode' }) as StartScreenView;
+    expect(veracode.emailModel).toBeUndefined();
   });
 });

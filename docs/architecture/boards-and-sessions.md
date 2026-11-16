@@ -13,11 +13,12 @@ This page describes how Ticket Sidekick is built once the chat participants are 
 - **Tools:** the Jira tool catalog (`src/tools/jiraTools/`) is registered with VS Code as language model tools by `src/tools/registerJiraTools.ts`. That is the only route; no setting chooses one. Decision D21.
 - **Host:** a board is a webview in an editor tab the extension opens (`src/boards/boardPanels.ts`). The tab loads the page from the extension's own files and the page talks to the extension with `postMessage`. Decisions D18 and D20.
 - **Removed on 2026-11-13:** the MCP server with its lifecycle, keys, request guard and diagnostics command; the `ticketSidekick.jira.toolsFrom` setting; the local HTTP server and the `http.noProxy` requirement; the canvas program, the agent plugin and the `@github/copilot-sdk` and `@modelcontextprotocol/sdk` dependencies. Why: an organisation's Copilot policy blocked the MCP server while extension tools got through, VS Code 1.146 did not register an extension's canvas, and two routes for the same tools was a switch nobody wanted to operate.
-- **Built:** the session core, the board message handling, the security report board, the ticket list board (search with narrowing, paging, configurable columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules`, the out-of-date state), the sessions board, the import board for Veracode and Waltz reports with its start screen (`src/boards/import/`, over the shared import engine in `src/imports/`), and of the plan's step 1 tools R40 to R42, plus spell check (R28) and template from a ticket (R29) as `/ts-jira-spell-check` and `/ts-jira-template` with their tools.
+- **Built:** the session core, the board message handling, the security report board, the ticket list board (search with narrowing, paging, configurable columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules`, the out-of-date state), the sessions board, the import board for Veracode and Waltz reports and for emails (with the boilerplate cleanup stage and the consented model check) with its start screen (`src/boards/import/`, over the shared import engine in `src/imports/`), and of the plan's step 1 tools R40 to R42, plus spell check (R28) and template from a ticket (R29) as `/ts-jira-spell-check` and `/ts-jira-template` with their tools.
 - **Open points:** the full list, with the requirement each belongs to and the participant flow it blocks, is in [`migration-status.md`](migration-status.md).
 - **Removed on 2026-11-14:** every Step 1 flow of `@jira`.
-- **Removed on 2026-11-15:** `@jira`'s Veracode and Waltz imports and their two Command Palette commands; `@jira` runs only the email import now.
-- **Not built:** the email kind of the import board, the PR review board with its Bitbucket tool additions, and the removal of `@jira` (its email import) and `@bitbucket`.
+- **Removed on 2026-11-15:** `@jira`'s Veracode and Waltz imports and their two Command Palette commands.
+- **Removed on 2026-11-16:** `@jira` itself, with its email import, its help screen, its sessions and the "Create Jira ticket from email (.eml)" command.
+- **Not built:** the PR review board with its Bitbucket tool additions, and the removal of `@bitbucket`.
 
 ## 1. The idea in one paragraph
 
@@ -224,7 +225,7 @@ sequenceDiagram
 | Contents | Never credentials. Vulnerability rows, ticket text and PR findings are stored, as decided; the manual says so and names the clear command. |
 | Format | Each board kind has a `formatVersion`. A file whose version differs is rebuilt from its stored recipe when the kind's `revalidate` accepts that recipe: the board is built again and says it was rebuilt after an update, and the earlier working state is not kept. A kind without `revalidate`, or a recipe that fails it, deletes the file and the board says the stored session was discarded. No migration code. |
 | Expiry | At start and once a day, sessions not used for `ticketSidekick.sessions.retentionDays` (default 14) are deleted. |
-| Removal | Finish or Discard on the board, Delete on the sessions board, and the command "Ticket Sidekick: Clear stored sessions". |
+| Removal | Finish or Close on the board (which also closes its tab), Delete on the sessions board, and the command "Ticket Sidekick: Clear stored sessions". |
 | Size | A session over a fixed limit is kept in memory only, and the board says it will not survive a restart. |
 
 ### 4.5 Restart
@@ -280,7 +281,7 @@ extension → page    { id, ok: true, data }  or  { id, ok: false, status, error
 | `preview` with `revision`, `action` | Returns a write plan and its plan ID |
 | `apply` with `planId` | Redeems a plan ID |
 | `save` with `format` | For boards that export: writes a file through VS Code's save dialog |
-| `discard` | Deletes the session |
+| `discard` | Deletes the session and closes its tab (the page's Close) |
 | `pick-file` | The import board only: "Pick the file again". The path comes from VS Code's native open dialog, never from the page; the session moves with `relocate` and the tab follows it to the new id |
 | `list`, `delete`, `delete-all`, `open` | The sessions board only: list stored sessions, delete one or all, reopen one in its own tab |
 | `view`, `kind`, `pick-file`, `template`, `issue-type`, `open`, `start-over`, `open-setting` | The import start screen only (`ImportStartScreen.handle`): the native file dialog, the template setting write and the Settings screen are supplied by the host, so the page names no path, setting key or session |
@@ -346,9 +347,9 @@ src/
     jiraToolManifest.ts      the package.json entries, generated from the catalog
     registerJiraTools.ts     registers the catalog with vscode.lm and builds the tool dependencies (imports vscode)
     bitbucketTools.ts        the Bitbucket language model tools
-  imports/             the shared report import engine and the Veracode and Waltz descriptors (vscode-free)
+  imports/             the shared report import engine and the Veracode, Waltz and email descriptors (vscode-free)
   services/, jira/, bitbucket/, utils/, templates/   unchanged; services/importSettings.ts reads the import settings
-  participant/         deprecated: @jira and @bitbucket, removed step by step
+  participant/         deprecated: @bitbucket only (@jira was removed on 2026-11-16)
 board-pages/           page sources: shared client and style, one folder per board; copied to out/board-pages
 skills/                /ts-jira, /ts-jira-create, /ts-jira-brief
 ```

@@ -39,10 +39,14 @@ function kindPicker() {
 
 function reportCell() {
   const { report } = view;
+  const email = view.kind === 'email';
+  const noun = email ? 'email(s) to review' : 'item(s) to review';
   return [
-    report.fileName ? h('span', { title: report.path }, report.fileName) : h('span', { class: 'muted' }, 'No file chosen.'),
-    report.items !== undefined ? h('span', { class: 'muted' }, ` ${report.items} item(s) to review.`) : null,
-    ' ', h('vscode-button', { id: 'pick-file', secondary: true, disabled: busy, onClick: () => run('pick-file') }, report.fileName ? 'Choose another file…' : 'Choose file…'),
+    report.fileName ? h('span', { title: (report.paths ?? [report.path]).join('\n') }, report.fileName) : h('span', { class: 'muted' }, email ? 'No emails chosen.' : 'No file chosen.'),
+    report.items !== undefined ? h('span', { class: 'muted' }, ` ${report.items} ${noun}.`) : null,
+    ' ', h('vscode-button', { id: 'pick-file', secondary: true, disabled: busy, onClick: () => run('pick-file') },
+      email ? (report.fileName ? 'Choose other emails…' : 'Choose emails…') : (report.fileName ? 'Choose another file…' : 'Choose file…')),
+    report.skipped?.length ? h('p', { class: 'banner warning' }, `Left out because they could not be read: ${report.skipped.join('; ')}`) : null,
   ];
 }
 
@@ -75,6 +79,23 @@ function issueTypeCell() {
     ];
   }
   return h('span', { class: 'muted' }, 'Read from the project once Jira and the project are set.');
+}
+
+// The model of the email boilerplate check: picking one saves it and asks the model once, so the
+// developer sees at once whether a model answers from a board.
+function modelCell() {
+  const model = view.emailModel;
+  const source = { email: `from ${model.settingKey}`, review: 'from ticketSidekick.bitbucket.reviewModel' };
+  return [
+    model.inUse ? [h('span', {}, model.inUse.label), h('span', { class: 'muted' }, ` (${source[model.inUse.source]})`), ' ']
+      : h('p', { class: 'muted' }, 'No model is set. Pick one; it is only used when you agree to the model check of an email.'),
+    model.options ? h('select', { id: 'email-model', 'aria-label': 'Model for the email check', disabled: busy, onChange: e => { if (e.target.value) void run('model', { id: e.target.value }); } },
+      h('option', { value: '', selected: true }, model.inUse ? 'Pick another model…' : 'Choose a model…'),
+      model.options.map(m => h('option', { value: m.id }, m.label))) : null,
+    model.inUse ? [' ', h('vscode-button', { id: 'email-model-check', secondary: true, disabled: busy, onClick: () => run('model-check') }, 'Check the model')] : null,
+    model.problem ? h('p', { class: 'banner' }, model.problem) : null,
+    model.check ? h('p', { class: model.check.ok ? 'banner' : 'banner error', role: 'status' }, model.check.message) : null,
+  ];
 }
 
 function projectCell() {
@@ -118,11 +139,12 @@ function paint() {
   const content = view ? [
     h('div', { class: 'bar' }, kindPicker()),
     h('table', {}, h('tbody', {},
-      row('Report file', reportCell()),
+      row(view.kind === 'email' ? 'Email files' : 'Report file', reportCell()),
       view.report.problem ? row('', h('p', { class: 'banner error', role: 'alert' }, view.report.problem)) : null,
       row('Project', projectCell()),
       row('Template', templateCell()),
-      row('Issue type', issueTypeCell()))),
+      row('Issue type', issueTypeCell()),
+      view.emailModel ? row('Model for the email check', modelCell()) : null)),
     view.stored ? h('p', { class: 'banner' }, 'An import of this file in this project is stored. Open shows it as it is, with the template it was started with; Start over discards it and starts again with the template above.') : null,
     actions(),
   ] : [h('p', { class: 'muted' }, 'Reading the settings…')];

@@ -33,12 +33,7 @@ Preparation: a test project with a few open bugs in two fix versions, one of the
 - [ ] Apply on page 1 changes only page 1's tickets.
 - [ ] `/ts-jira cleanup "<rule>" in <version>` uses that version in place of the rule's.
 
-**`@jira`**
-
-- [ ] `@jira` and `@jira help` show only the email import and the notice.
-- [ ] `@jira move PROJ-1 Done` answers with the notice and changes nothing.
-- [ ] `@jira create from email` still starts its import. (Since the import board, `@jira import veracode report` and `@jira import oss report` answer with the notice; see Step 2.)
-- [ ] Typing `@jira /` offers no slash command.
+**`@jira`** (removed in the email step; see "Step 2: Email import" below)
 
 **Stable channel**
 
@@ -127,7 +122,7 @@ Preparation: a test project; a `.jira-templates.json` with two templates (one wi
 - [ ] Install a build that changes the import board's stored format over a stored import: the board says it was rebuilt after an update, with the same file, template and issue type, and no earlier choices.
 - [ ] Move the report file, then restore the board: writes are refused and **Pick the file again…** is offered; after picking it at its new place, the choices are still there and writes work.
 - [ ] Turn Jira off (wrong base URL) and **Refresh**: the board keeps what it showed and refuses writes until a check passes.
-- [ ] When every tab is handled, the board says there is nothing left to do and offers **Discard**; export still works.
+- [ ] When every tab is handled, the board says there is nothing left to do and offers **Close**; export still works. **Close** closes the tab, and the import is no longer listed on the sessions board.
 - [ ] Save a newer scan over the report file and open the same import again: tickets the board wrote for the earlier scan ask for a decision again where the new scan changed them.
 - [ ] Two Already-ticketed rows on one resolved ticket: a new ticket for one row leaves the other row to decide.
 - [ ] Type a filter on Already ticketed, wait for a background update, then press Enter (or click elsewhere): the table is filtered.
@@ -135,7 +130,43 @@ Preparation: a test project; a `.jira-templates.json` with two templates (one wi
 
 **`@jira` and the ticket list**
 
-- [ ] `@jira import veracode report` and `@jira import oss report` answer with the notice pointing to the import board and start nothing.
-- [ ] `@jira create from email` and `Ticket Sidekick: Create Jira ticket from email (.eml)` still import an email.
 - [ ] The Command Palette has no "Create Jira tickets from Veracode report" or "… from OSS report" command.
 - [ ] Ticket list board: close VS Code during an Apply that moves several tickets; after the restart the moved tickets show as done and a new preview covers only the rest.
+
+## Step 2: Email import and `@jira` removed
+
+Run on the preview build on the managed machine, against Jira Data Center, with a few real `.eml` files (one with an attachment, one with a known disclaimer, one whose subject is already a ticket's summary).
+
+**Start screen and model**
+
+- [ ] `Ticket Sidekick: Open import board`, kind **Email**, **Choose emails…** with three files: the screen says how many emails it will import; a file that is not an email is named and left out.
+- [ ] With `ticketSidekick.email.template` empty, the start screen asks for a template once; the next email import does not ask.
+- [ ] "Model for the email check" lists your models; picking one saves it to `ticketSidekick.email.checkModel` and says "The model answered."
+- [ ] With the Local harness hidden (`chat.editor.localAgent.enabled: false`), the model still answers.
+
+**Cleanup**
+
+- [ ] An email with a pattern match opens on the cleanup with the block shown; **Strip and continue** creates a ticket without it, and the `.eml` file is unchanged.
+- [ ] An email without a match asks first; **Continue without the model** sends nothing (the Output channel has no model call).
+- [ ] **Preview model check…** names each email and the model; only **Apply** sends them. A block the model found can be saved as a pattern, and the next import finds it without the model.
+- [ ] Close VS Code during a model check of several emails: after the restart the checked ones keep their result and the others ask again.
+
+**New tab**
+
+- [ ] The email whose subject is a ticket's summary is marked as a likely repeat, starts unselected, and **Add as comment to KEY** posts it there with sender, date and attachments.
+- [ ] Creating two emails asks for the VS Code confirmation; each ticket has the subject, the body and the attachments.
+- [ ] Delete one `.eml` after the board loaded, then create: that email is refused with "pick the file again", the other is created.
+- [ ] With `ticketSidekick.email.deleteEmlAfterImport` on, a created email's file is deleted; a comment's file is kept.
+- [ ] The email board shows no Reload report, no CSV or Excel export and no ticket search.
+
+**From chat**
+
+- [ ] `/ts-jira import email` opens the start screen; with `.eml` files attached, it opens loaded and says you agreed to the model check by attaching them.
+- [ ] "Import these emails" in Agent mode with the files attached opens the board; Copilot says only that it opened.
+
+**`@jira` is gone**
+
+- [ ] Typing `@jira` in a chat offers no participant.
+- [ ] The Command Palette has no "Create Jira ticket from email (.eml)" command.
+- [ ] `ticketSidekick.jira.showConnectionInfo` is no longer in the Settings screen; `/ts-jira check` shows the connection.
+- [ ] `@bitbucket` still reviews a pull request.

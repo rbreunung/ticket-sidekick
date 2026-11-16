@@ -53,10 +53,8 @@ export async function parseEml(buffer: Buffer): Promise<ParsedEml> {
   return { subject, senderName, receivedDateTime, htmlBody, plainBody, inlineImageMap, attachments };
 }
 
-// One already-parsed, ready-to-review .eml file — the shape batch email import's ReportImportDescriptor
-// works with (TItem). Colocated with parseEml() rather than in sessionState.ts so it can be shared by
-// sessionState.ts (session/row type aliases) and emailHandler.ts (vscode-dependent handler code)
-// without a type-only circular import — same reasoning as VeracodeReviewRow living in veracodeReport.ts.
+// One already-parsed, ready-to-review .eml file — the item the email import's ReportImportDescriptor
+// works with (TItem).
 export interface EmailImportItem {
   subject: string;
   senderName?: string;
@@ -75,6 +73,7 @@ export interface EmailReviewRow {
   included: boolean;
   subject: string;
   senderName?: string;
+  receivedDateTime?: string;
   attachmentNames: string[]; // non-inline attachment names, for the review table's Attachments column
   markdownBody: string;
   inlineImageMap: Record<string, string>;
@@ -82,12 +81,13 @@ export interface EmailReviewRow {
   emlFilePath: string;
 }
 
-// Reads and parses one .eml file into the shape a batch review row builds from. Replaces the three
-// duplicated read-file/parseEml/build-markdown-body/build-attachments blocks that used to live
-// inline in emailHandler.ts's openEmailFilePicker/handleAddEmailFromChat and extension.ts's
-// ticket-sidekick.importEml command.
+// Reads and parses one .eml file into the item an email row is built from.
 export async function parseEmlFile(filePath: string): Promise<EmailImportItem> {
-  const buffer = await fs.promises.readFile(filePath);
+  return parseEmlBuffer(await fs.promises.readFile(filePath), filePath);
+}
+
+/** An `.eml` file's content, already read, as the item `parseEmlFile` returns for that file. */
+export async function parseEmlBuffer(buffer: Buffer, filePath: string): Promise<EmailImportItem> {
   const parsed = await parseEml(buffer);
   const markdownBody = parsed.htmlBody
     ? htmlToMarkdown(parsed.htmlBody, parsed.inlineImageMap)

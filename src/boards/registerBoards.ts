@@ -6,7 +6,11 @@ import { TicketService } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
 import { createVeracodeDescriptor } from '../imports/veracode';
 import { createWaltzDescriptor } from '../imports/waltz';
-import { veracodeSettings, waltzSettings } from '../services/importSettings';
+import { checkEmailBatchCaps, createEmailDescriptor } from '../imports/email';
+import { parseEmlFile } from '../utils/emlParser';
+import { resolveBoilerplatePatterns } from '../utils/emailBoilerplate';
+import { EMAIL_MODEL_SETTING, REVIEW_MODEL_SETTING, type BoardModels, type ModelSettings } from './boardModels';
+import { emailSettings, veracodeSettings, waltzSettings } from '../services/importSettings';
 import { registerKind } from '../sessions/boardKind';
 import { SessionManager } from '../sessions/sessionManager';
 import { SessionStore } from '../sessions/sessionStore';
@@ -47,11 +51,46 @@ export function retentionDays(): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 365 ? value : DEFAULT_RETENTION_DAYS;
 }
 
-/** The Veracode and Waltz descriptors over the settings, shared by the start screen and the import board. */
+/** The Veracode, Waltz and email descriptors over the settings, shared by the start screen and the import board. */
 function importDescriptors(workspaceFolder: () => string | undefined, log: (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void): ImportDescriptors {
   return {
     veracode: createVeracodeDescriptor(veracodeSettings, { reviewColumns: [], onDiag: log }),
     waltz: createWaltzDescriptor(waltzSettings(workspaceFolder), { reviewColumns: [], onDiag: log }),
+    email: createEmailDescriptor(emailSettings, { onDiag: log }),
+  };
+}
+
+/** The models a board calls, over VS Code's language model API: no chat request is needed. */
+export function vscodeBoardModels(justification: string): BoardModels {
+  return {
+    list: async () => (await vscode.lm.selectChatModels()).map(m => ({ id: m.id, name: m.name, vendor: m.vendor, family: m.family })),
+    send: async (id, prompt) => {
+      const [model] = await vscode.lm.selectChatModels({ id });
+      if (!model) throw new Error(`The model ${id} is not available.`);
+      // No caller cancels a board's call; the token is only required by the API.
+      const source = new vscode.CancellationTokenSource();
+      try {
+        const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], { justification }, source.token);
+        let text = '';
+        for await (const chunk of response.text) text += chunk;
+        return text;
+      } finally {
+        source.dispose();
+      }
+    },
+  };
+}
+
+/** The email check's and the review's model settings; a pick is saved for the user, since models belong to the user, not the workspace. */
+export function vscodeModelSettings(): ModelSettings {
+  const read = (key: string) => {
+    const value = vscode.workspace.getConfiguration().get<unknown>(key);
+    return typeof value === 'string' ? value : '';
+  };
+  return {
+    emailModel: () => read(EMAIL_MODEL_SETTING),
+    reviewModel: () => read(REVIEW_MODEL_SETTING),
+    writeEmailModel: async id => { await vscode.workspace.getConfiguration().update(EMAIL_MODEL_SETTING, id, vscode.ConfigurationTarget.Global); },
   };
 }
 
@@ -86,6 +125,9 @@ export function registerBoards(
     now: () => Date.now(),
     onDiag: log,
   });
+  // One binding of the models and their settings, shared by the start screen and the email cleanup.
+  const emailModels = vscodeBoardModels('Ticket Sidekick checks imported emails for boilerplate such as signatures and legal footers.');
+  const modelSettings = vscodeModelSettings();
   const descriptors = importDescriptors(workspaceFolder, (level, message, details) => logDiag('boards.import', level, message, details));
   const importDeps = importJiraDeps({
     getJira,
@@ -93,6 +135,29 @@ export function registerBoards(
     descriptors,
     now: () => Date.now(),
     csvDelimiter: () => resolveCsvDelimiter(vscode.workspace.getConfiguration('ticketSidekick').get('jira.overviewCsvDelimiter')),
+    email: {
+      boilerplatePatterns: () => resolveBoilerplatePatterns(
+        vscode.workspace.getConfiguration('ticketSidekick').get<unknown>('email.boilerplatePatterns'),
+        // An entry's phrases are email text: only the reason and the kind are logged.
+        (reason, entry) => logDiag('boards.import', 'warn', `Ignored an invalid ticketSidekick.email.boilerplatePatterns entry — ${reason}`, {
+          reason, kind: typeof entry === 'object' && entry !== null && typeof (entry as { kind?: unknown }).kind === 'string' ? (entry as { kind: string }).kind.slice(0, 20) : undefined,
+        }),
+      ),
+      savePattern: async pattern => {
+        const cfg = vscode.workspace.getConfiguration('ticketSidekick');
+        const current = cfg.inspect<unknown>('email.boilerplatePatterns')?.globalValue;
+        try {
+          await cfg.update('email.boilerplatePatterns', [...(Array.isArray(current) ? current : []), pattern], vscode.ConfigurationTarget.Global);
+        } catch (err) {
+          // An error may echo the written value, whose phrases are email text.
+          const message = err instanceof Error ? err.message : String(err);
+          const phrases = [pattern.start, pattern.end].filter((p): p is string => !!p);
+          throw new Error(phrases.reduce((m, p) => m.split(p).join('<pattern text>'), message));
+        }
+      },
+      models: emailModels,
+      modelSettings,
+    },
     onDiag: (level, message, details) => logDiag('boards.import', level, message, details),
   });
   const kinds = [
@@ -139,7 +204,16 @@ export function registerBoards(
   // The pages are plain files shipped with the extension and loaded by the tab itself.
   const pagesRoot = vscode.Uri.joinPath(context.extensionUri, 'out', 'board-pages');
   const configService = new ConfigService(context);
-  const readers: Record<ReportKind, ReportReader> = { veracode: reportReaderOf(descriptors.veracode), waltz: reportReaderOf(descriptors.waltz) };
+  const readers: Record<ReportKind, ReportReader> = {
+    veracode: reportReaderOf(descriptors.veracode),
+    waltz: reportReaderOf(descriptors.waltz),
+    // The start screen reads email selections through `emailFiles`; this reader serves "Pick the file again".
+    email: {
+      read: async filePath => { const item = await parseEmlFile(filePath); return { items: [item], rawItems: [item] }; },
+      noMatchMessage: 'No email could be read.',
+      fileFilter: { label: 'Email', extensions: ['eml'] },
+    },
+  };
   /** VS Code's open dialog for a report of this kind, starting in Downloads. */
   const pickReportFile = async (filter: ReportReader['fileFilter']) => {
     const uris = await vscode.window.showOpenDialog({
@@ -162,6 +236,21 @@ export function registerBoards(
     },
     reportReader: kind => readers[kind],
     pickReportFile: (_kind, filter) => pickReportFile(filter),
+    pickEmailFiles: async () => {
+      const uris = await vscode.window.showOpenDialog({
+        canSelectMany: true,
+        filters: { Email: ['eml'] },
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), 'Downloads')),
+        title: 'Select .eml file(s) to import',
+      });
+      return uris?.map(uri => uri.fsPath);
+    },
+    emailFiles: {
+      checkCaps: filePaths => checkEmailBatchCaps(filePaths, emailSettings.maxBatchBytes()),
+      read: filePath => parseEmlFile(filePath),
+    },
+    models: emailModels,
+    modelSettings,
     openSetting: async key => { await vscode.commands.executeCommand('workbench.action.openSettings', key); },
     // The stored list, not a lookup: looking a session up would start its background check.
     hasSession: async id => (await manager.list()).some(s => s.kind === IMPORT_KIND && s.id === id),

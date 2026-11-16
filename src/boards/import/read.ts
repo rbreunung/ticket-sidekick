@@ -10,21 +10,43 @@ import type { ReviewRowBase, ReviewSession } from '../../imports/types';
 import type { DiagLogger } from '../../utils/diagTypes';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../../utils/waltzReport';
+import { parseEmlBuffer, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
+import { emailContentHash } from './emailRows';
+import { matchRepeats, subjectSearchTerm } from '../../imports/email';
+import { detectPatternBlocks, type BoilerplatePattern, type DetectedBlock } from '../../utils/emailBoilerplate';
+import { describeEmailModels, type BoardModels, type EmailModelChoice, type ModelSettings } from '../boardModels';
 import { ACCEPTED_FILE_NAME, type AcceptedEntry } from '../../utils/waltzAccepted';
-import type { ImportRecipe } from './recipe';
+import { recipePaths, type ImportRecipe } from './recipe';
 
 // Reading an import: the report file through its kind's descriptor, the review build of the shared
 // engine (dedup, stale tickets, the accepted list), and what the export needs from Jira, so the
 // export is built from the reading the board shows. Each tab's slice gets its own fingerprint, so a
-// later check can tell which tabs changed. vscode-free.
+// later check can tell which tabs changed. An email import reads its `.eml` files instead, one New
+// row per email, and keeps no attachment content: a write reads the file again. vscode-free.
 
 export type ImportTab = 'new' | 'ticketed' | 'stale' | 'accepted';
 
-export type ImportRow = (VeracodeReviewRow | WaltzReviewRow) & ReviewRowBase;
+/** A ticket whose summary is an email's subject: the email is likely a repeat. */
+export interface RepeatTicket {
+  key: string;
+  summary: string;
+}
+
+/** An email's row on the board: the chat's email row with its subject as the summary every tab shows, and the tickets it likely repeats. */
+/** An email's New row; `contentHash` is the file as the board read it, so a write can tell the file changed since. */
+export type EmailBoardRow = EmailReviewRow & { summary: string; contentHash?: string; repeatOf?: RepeatTicket[]; patternBlocks?: DetectedBlock[] };
+
+export type ImportRow = (VeracodeReviewRow | WaltzReviewRow | EmailBoardRow) & ReviewRowBase;
+
+/** Whether a row is an email's. */
+export function isEmailRow(row: ImportRow): row is EmailBoardRow & ReviewRowBase {
+  return 'emlFilePath' in row;
+}
 
 export interface ImportDescriptors {
   veracode: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewRow>;
   waltz: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow>;
+  email: ReportImportDescriptor<EmailImportItem, EmailReviewRow>;
 }
 
 /** What the import board needs around it; `jiraDeps.ts` builds it over the Jira services. */
@@ -44,6 +66,15 @@ export interface ImportDeps {
   /** Jira's `updated` time of each named ticket; throws with a worded reason. */
   updatedTimes(keys: string[]): Promise<Record<string, string>>;
   projectVersions(projectKey: string): Promise<ProjectVersionInfo[]>;
+  /** The project's tickets whose summary matches one of these text search terms; candidates only, compared exactly by the caller. Throws with a worded reason. */
+  summarySearch?(projectKey: string, terms: string[]): Promise<RepeatTicket[]>;
+  /** The email cleanup's patterns (`ticketSidekick.email.boilerplatePatterns`), invalid entries dropped. */
+  boilerplatePatterns?(): BoilerplatePattern[];
+  /** Appends a pattern to `ticketSidekick.email.boilerplatePatterns`. */
+  savePattern?(pattern: BoilerplatePattern): Promise<void>;
+  /** The language models a board may call, and the model settings; without them an email import offers no model check. */
+  models?: BoardModels;
+  modelSettings?: ModelSettings;
   /** The descriptions of the named tickets; a ticket that cannot be read is null. */
   descriptions(keys: string[]): Promise<Record<string, string | null>>;
   /** The Jira services the write actions run through; throws when Jira is not set up. */
@@ -83,6 +114,10 @@ export interface ImportData {
   /** How many target descriptions could not be read; those rows get no date comparison. */
   descriptionsUnread: number;
   notices: string[];
+  /** An email import's files that were not there at this reading. */
+  missingFiles?: string[];
+  /** An email import's model for the boilerplate check: the one in use, the ones to pick from, or why none can be listed. */
+  emailModels?: EmailModelChoice;
   export: ImportExportData;
   baseUrl?: string;
 }
@@ -292,9 +327,139 @@ async function readWith<TItem, TRow extends ReviewRowBase & ImportRow>(
   return { readAt: deps.now(), fingerprints: fingerprintsOf(data, reportHash, await acceptedFingerprint(deps.workspaceRoot())), data };
 }
 
+/** An email without its attachments' content, which a session does not keep. */
+function withoutAttachmentContent(item: EmailImportItem): EmailImportItem {
+  return { ...item, attachments: item.attachments.map(a => ({ ...a, contentBytes: '' })) };
+}
+
+/**
+ * Reads an email import: every file that is there is parsed into one New row; a file that fails to
+ * parse is named in a notice, and a file that is gone is listed so the board can tell it apart from
+ * one it deleted itself after creating its ticket. Only when no file is there at all is the import
+ * not found.
+ */
+async function readEmails(recipe: ImportRecipe, deps: ImportDeps): Promise<DerivedPart<ImportData>> {
+  const descriptor = deps.descriptors().email;
+  const paths = recipePaths(recipe);
+  const missingFiles: string[] = [];
+  const failed: string[] = [];
+  const hashes: string[] = [];
+  const contentHashes = new Map<string, string>();
+  const items: EmailImportItem[] = [];
+  for (const filePath of paths) {
+    let content: Buffer;
+    try {
+      content = await fs.promises.readFile(filePath);
+      contentHashes.set(filePath, emailContentHash(content));
+      hashes.push(`${filePath}\n${hash(content)}`);
+    } catch (err) {
+      if (isMissing(err)) missingFiles.push(filePath);
+      else failed.push(`${path.basename(filePath)}: ${messageOf(err)}`);
+      continue;
+    }
+    try {
+      items.push(withoutAttachmentContent(await parseEmlBuffer(content, filePath)));
+    } catch (err) {
+      deps.onDiag?.('warn', 'Import board: an email could not be read', { fileName: path.basename(filePath), error: messageOf(err) });
+      failed.push(`${path.basename(filePath)}: ${messageOf(err)}`);
+    }
+  }
+  // Every file gone is not an error here: the board deletes each file whose ticket it created when
+  // ticketSidekick.email.deleteEmlAfterImport is on, so a finished import reads as no emails. The
+  // kind's reconcile, which knows the board's writes, decides whether the import is not found.
+  const notices: string[] = [];
+  if (failed.length > 0) notices.push(`Could not read ${failed.length} email file(s): ${failed.join('; ')}`);
+  const template = await deps.templateFields(recipe, descriptor);
+  if (template.problem) notices.push(template.problem);
+  const { session } = await deps.buildReview({
+    projectKey: recipe.projectKey, items, rawItems: items, reportFilePath: recipe.reportPath,
+    issueType: recipe.issueType, templateName: recipe.templateName, additionalFields: template.additionalFields,
+  }, descriptor, () => undefined);
+
+  const repeats = await findRepeats(recipe, session.allRows, deps, notices);
+  const patterns = deps.boilerplatePatterns?.() ?? [];
+  const asBoardRow = (row: EmailReviewRow & ReviewRowBase) => {
+    const patternBlocks = row.markdownBody.trim() ? detectPatternBlocks(row.markdownBody, patterns, row.senderName) : [];
+    const contentHash = contentHashes.get(row.emlFilePath);
+    return { ...row, summary: row.subject, ...(contentHash ? { contentHash } : {}), ...(repeats[row.id] ? { repeatOf: repeats[row.id] } : {}), ...(patternBlocks.length > 0 ? { patternBlocks } : {}) };
+  };
+  const allRows = session.allRows.map(asBoardRow) as ImportRow[];
+  const review = { ...session, allRows, rows: session.rows.map(asBoardRow) } as unknown as ReviewSession<ImportRow>;
+  const rowKeys: Record<string, string[]> = {};
+  for (const row of allRows) rowKeys[row.id] = [(row as EmailBoardRow).emlFilePath];
+  const data: ImportData = {
+    reportFileName: paths.length === 1 ? path.basename(paths[0]) : `${paths.length} emails`,
+    review, rowKeys, updated: {}, accepted: null, staleFailed: false, descriptionsUnread: 0, notices,
+    ...(missingFiles.length > 0 ? { missingFiles } : {}),
+    export: { tickets: [], versions: [], versionsFailed: false, descriptions: {} },
+  };
+  const emailModels = await listEmailModels(deps);
+  if (emailModels) data.emailModels = emailModels;
+  data.baseUrl = await deps.baseUrl();
+  return { readAt: deps.now(), fingerprints: fingerprintsOf(data, hash([...hashes, ...missingFiles].join('\n')), 'none'), data };
+}
+
+/** The model of the email check as the board shows it; undefined where no model can be called. */
+async function listEmailModels(deps: ImportDeps): Promise<ImportData['emailModels']> {
+  if (!deps.models || !deps.modelSettings) return undefined;
+  let listed: { models: Awaited<ReturnType<BoardModels['list']>> } | { problem: string };
+  try {
+    listed = { models: await deps.models.list() };
+  } catch (err) {
+    listed = { problem: messageOf(err) };
+  }
+  return describeEmailModels(listed, deps.modelSettings);
+}
+
+/** How many subjects one text search asks Jira for. */
+const SUBJECT_CHUNK = 10;
+
+/**
+ * The tickets in the project whose summary is an email's subject, by row id. A failed search
+ * marks no email and says so in a notice; creating is still possible.
+ */
+async function findRepeats(
+  recipe: ImportRecipe, rows: Array<EmailReviewRow & ReviewRowBase>, deps: ImportDeps, notices: string[],
+): Promise<Record<string, RepeatTicket[]>> {
+  if (!deps.summarySearch || rows.length === 0) return {};
+  const terms = [...new Set(rows.map(r => subjectSearchTerm(r.subject)).filter(t => t !== ''))];
+  if (terms.length === 0) return {};
+  try {
+    const chunks: string[][] = [];
+    for (let i = 0; i < terms.length; i += SUBJECT_CHUNK) chunks.push(terms.slice(i, i + SUBJECT_CHUNK));
+    const found = (await Promise.all(chunks.map(chunk => deps.summarySearch!(recipe.projectKey, chunk)))).flat();
+    const unique = [...new Map(found.map(t => [t.key, t])).values()];
+    return matchRepeats(Object.fromEntries(rows.map(r => [r.id, r.subject])), unique);
+  } catch (err) {
+    deps.onDiag?.('warn', 'Import board: the search for tickets with the same subject failed', { projectKey: recipe.projectKey, error: messageOf(err) });
+    notices.push('The search for tickets with the same subject failed, so no email is marked as a likely repeat. Refresh to search again.');
+    return {};
+  }
+}
+
+/** The tickets each New email likely repeats, by row key; empty for the other kinds. */
+const repeatsCache = new WeakMap<ImportData, Map<string, RepeatTicket[]>>();
+
+export function repeatsByRowKey(data: ImportData): Map<string, RepeatTicket[]> {
+  // A reading is never changed in place, so its map is built once and every row's check reads it.
+  const cached = repeatsCache.get(data);
+  if (cached) return cached;
+  const repeats = new Map<string, RepeatTicket[]>();
+  for (const row of newRows(data)) if (isEmailRow(row) && row.repeatOf?.length) repeats.set(rowKeyOf(data, row), row.repeatOf);
+  repeatsCache.set(data, repeats);
+  return repeats;
+}
+
+/** Whether a New row is left out of the create: the developer left it out, or it is a likely repeat the developer did not take in. */
+export function isLeftOut(data: ImportData, choices: { excluded: string[]; included?: string[] }, key: string): boolean {
+  if (choices.excluded.includes(key)) return true;
+  return repeatsByRowKey(data).has(key) && !(choices.included ?? []).includes(key);
+}
+
 /** Reads the report and Jira for an import. A missing report file and a failed dedup search throw; a failed stale search does not. */
 export async function readImport(recipe: ImportRecipe, deps: ImportDeps): Promise<DerivedPart<ImportData>> {
   const descriptors = deps.descriptors();
+  if (recipe.kind === 'email') return readEmails(recipe, deps);
   return recipe.kind === 'waltz'
     ? readWith(recipe, descriptors.waltz as ReportImportDescriptor<WaltzComponent[], WaltzReviewRow & ImportRow>, deps)
     : readWith(recipe, descriptors.veracode as ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewRow & ImportRow>, deps);

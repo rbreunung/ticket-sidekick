@@ -13,7 +13,8 @@ import type { ImportDeps } from './read';
 const NAME = 'search-export';
 const MAX_QUERY = 200;
 
-const FINISHED_MESSAGE = 'Nothing left to do: every tab of this import is handled. You can still save the overview, or discard the import.';
+const FINISHED_MESSAGE = 'Nothing left to do: every tab of this import is handled. You can still save the overview, or close the import.';
+const EMAIL_FINISHED_MESSAGE = 'Nothing left to do: every email of this import has a ticket or a comment, or is left out. Close the import when you are done.';
 
 interface SearchState {
   query: string;
@@ -150,6 +151,6 @@ export const searchExportHandler: ImportHandler = {
 
   view: (session): SearchExportView => {
     const state = stateOf(session);
-    return { search: state ? searchView(session, state.query) : null, finishedMessage: FINISHED_MESSAGE };
+    return { search: state ? searchView(session, state.query) : null, finishedMessage: session.recipe.kind === 'email' ? EMAIL_FINISHED_MESSAGE : FINISHED_MESSAGE };
   },
 };

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { type ReviewRowBase } from '../participant/sessionState';
+import { type ReviewRowBase } from '../imports/types';
 import { findTicketsBySummary, SEARCH_RESULT_LIMIT } from '../imports/rows';
 import type { TicketInfo as TicketInfoMap } from '../utils/reportImport';
 

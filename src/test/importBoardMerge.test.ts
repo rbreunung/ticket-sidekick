@@ -4,6 +4,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { importKind, type ImportView, type ImportWorking } from '../boards/import/kind';
 import { importJiraDeps } from '../boards/import/jiraDeps';
+import { createEmailDescriptor } from '../imports/email';
 import type { MergeTabView } from '../boards/import/mergeTab';
 import type { ImportData, ImportDeps } from '../boards/import/read';
 import { importSessionId, type ImportRecipe } from '../boards/import/recipe';
@@ -181,7 +182,7 @@ beforeEach(async () => {
   deps = importJiraDeps({
     getJira: async () => ({ configured: true, client: jira, config: { baseUrl: 'https://jira.example.com' } }) as never,
     workspaceFolder: () => dir,
-    descriptors: { veracode, waltz },
+    descriptors: { veracode, waltz, email: createEmailDescriptor({ deleteEmlAfterImport: () => false, maxBatchBytes: () => 1024 * 1024 }) },
     now: () => 1_000,
   });
   // Bug: Open → Closed. Task: Open → Done.

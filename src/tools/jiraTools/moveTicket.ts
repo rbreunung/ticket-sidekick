@@ -9,7 +9,7 @@ import { MOVE_TICKET_TOOL, VIEW_TICKET_TOOL } from './toolNames';
 import { writeOnce } from './writeGuard';
 
 // Moves a ticket to a status, directly or along the workflow cached in the first workspace
-// folder (`.jira-workflow-cache.json`, the cache `@jira` uses). When no path to the status is
+// folder (`.jira-workflow-cache.json`). When no path to the status is
 // found, the workflow is discovered from Jira once and the move tried again.
 
 const moveShape = {

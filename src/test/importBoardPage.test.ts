@@ -87,7 +87,7 @@ function installCanned(c: Canned): void {
 }
 
 function newRow(n: number, extra: Partial<NewRowView> = {}): NewRowView {
-  return { id: `N${n}`, ref: `Flaw ${100 + n}`, summary: `${100 + n} - File${n}.java:1${n} - Hard-coded password`, rating: 'High', included: true, ...extra };
+  return { id: `N${n}`, ref: `Flaw ${100 + n}`, summary: `${100 + n} - File${n}.java:1${n} - Hard-coded password`, rating: 'High', included: true, group: `Flaw ${100 + n}`, ...extra };
 }
 
 function ticketedRow(n: number, extra: Partial<TicketedRowView> = {}): TicketedRowView {
@@ -110,7 +110,7 @@ function baseView(extra: Partial<ImportView> = {}): ImportView {
     tab: 'new', openingTab: 'new', finished: false, filter: '',
     new: { rows: [1, 2, 3, 4, 5, 6, 7].map(n => newRow(n)) },
     dropped: [], notices: [],
-    ext: { new: { toCreate: 7, perApply: 50, addedTo: {} }, 'search-export': { search: null, finishedMessage: 'Nothing left to do: every tab of this import is handled. You can still save the overview, or discard the import.' } },
+    ext: { new: { toCreate: 7, perApply: 50, addedTo: {} }, 'search-export': { search: null, finishedMessage: 'Nothing left to do: every tab of this import is handled. You can still save the overview, or close the import.' } },
     ...extra,
   };
 }
@@ -400,7 +400,7 @@ describe('the import board page', () => {
     expect(must('accepted-hidden').textContent).toBe('2 accepted CVEs hidden · 1 accepted component hidden');
   });
 
-  it('says there is nothing left to do and offers Discard on a finished import', async () => {
+  it('says there is nothing left to do and offers Close on a finished import', async () => {
     installCanned({ state: boardState(baseView({ finished: true, new: { rows: [] } })), answer: async () => ({ ok: true }) });
     await loadPage();
     expect(page.root.textContent).toContain('Nothing left to do');

@@ -30,7 +30,7 @@ vi.mock('vscode', () => ({
   commands: { executeCommand: async (...args: unknown[]) => { h.executed.push(args); } },
 }));
 
-import { registerDefaultProjectCheck, DEFAULT_PROJECT_CHECK_DELAY_MS } from '../participant/jira/defaultProjectNotice';
+import { registerDefaultProjectCheck, DEFAULT_PROJECT_CHECK_DELAY_MS } from '../services/defaultProjectNotice';
 
 // Jira is not set up in these tests, so only the key's shape is checked and no request is made.
 const configService = {

@@ -51,6 +51,11 @@ export class BoardPanels implements BoardHost {
     this.show(panel, { kind, id: toId, title });
   }
 
+  /** Closes the tab of a session that was discarded. */
+  closeSession(kind: string, id: string): void {
+    this.panels.get(this.key({ kind, id, title: '' }))?.dispose();
+  }
+
   stats(): BoardStats {
     return { openTabs: this.panels.size, requestsAnswered: this.requestsAnswered };
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatIssueTypeOptionsMessage } from '../participant/sessionState';
+import { formatIssueTypeOptionsMessage } from '../tools/jiraTools/toolMessages';
 import { CREATE_TICKET_TOOL, LIST_TEMPLATES_TOOL } from '../tools/jiraTools/catalog';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';

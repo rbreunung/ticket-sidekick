@@ -75,7 +75,7 @@ _by Jane Smith → main · 3 files changed_
 
 ### Checking a PR against its Jira ticket
 
-In `smart` and `deep` reviews the review can read the Jira ticket behind the PR and tell you whether the change does what the ticket asked for, and what it changes beyond that. This needs Jira set up for `@jira`; `@bitbucket` works without it.
+In `smart` and `deep` reviews the review can read the Jira ticket behind the PR and tell you whether the change does what the ticket asked for, and what it changes beyond that. This needs Jira set up (see the main [README](../../README.md)); `@bitbucket` works without it.
 
 - **From the PR title.** If the title contains a Jira key (for example `PROJ-123 add retry`), the review asks once before it starts: **Use PROJ-123** or **Skip**.
 - **From your command.** Write the key anywhere in the command to skip the question: `@bitbucket review smart <url> PROJ-123`. A key you write wins over the one in the title. Keys inside your question or the URL are ignored.
@@ -132,7 +132,6 @@ The session also ends on its own when you move on:
 
 - A message with a PR URL always starts a fresh review, whatever mode word or question comes with it.
 - `/review` or a bare `quick`, `smart` or `deep` without a PR URL ends the session and shows the usual "point me at a PR" help instead of being answered as a question about the old review.
-- Any `@jira` request ends it, so a later `@bitbucket` message is not answered as a follow-up to the old review.
 
 `@bitbucket check` and `@bitbucket usage` do not end it: you can run either in the middle of a review and keep asking follow-up questions.
 

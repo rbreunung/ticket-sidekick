@@ -6,7 +6,7 @@ import { refusedFieldsOf } from '../utils/jiraFieldErrors';
 import { buildRequirementsSource, type RequirementsSource } from '../utils/requirementsSource';
 import { formatFileSize } from '../utils/attachmentEligibility';
 import { mergedBanner, mergedSummary } from '../utils/ticketMerge';
-import { renderReviewTable, neutralizeMarkdownLinks, buildChatCommandLink, type ReviewTableColumn } from '../utils/chatPrimitives';
+import { renderReviewTable, neutralizeMarkdownLinks, type ReviewTableColumn } from '../utils/chatPrimitives';
 import { fetchAllPages } from '../utils/reportImport';
 
 export type FieldResolutionResult =
@@ -269,9 +269,7 @@ export function buildExtraFieldColumns<TRow>(
       header: meta?.name ?? id,
       accessor: (row: TRow) => {
         const rendered = meta ? renderFieldValue(valueOf(row, id), meta) : '_Not set_';
-        // Custom field values are untrusted, externally-influenced content — see
-        // neutralizeMarkdownLinks()'s own doc comment (sessionState.ts) for why this table's
-        // trust-gated footer (KTD5) requires it here.
+        // Custom field values are untrusted, externally-influenced content.
         return neutralizeMarkdownLinks(rendered.replace(/\|/g, '\\|'));
       },
     };
@@ -694,44 +692,23 @@ export class TicketService {
     return this.formatSearchResults(result, jql, baseUrl, extraFields, fieldMeta);
   }
 
-  /**
-   * The search result table `searchTickets` shows, for a result already read. `chatActions: false`
-   * leaves out the Actions column, whose view/load links only work in `@jira`'s chat.
-   */
+  /** The search result table `searchTickets` shows, for a result already read. */
   formatSearchResults(
     result: JiraSearchResult,
     jql: string,
     baseUrl?: string,
     extraFields: string[] = [],
     fieldMeta: JiraFieldMeta[] = [],
-    options: { chatActions?: boolean } = {},
   ): string {
     if (result.issues.length === 0) return 'No tickets found.';
-    const chatActions = options.chatActions ?? true;
 
     const columns: ReviewTableColumn<JiraIssue>[] = [
       { header: 'Key', accessor: (issue) => issue.key },
-      // KTD3: summary/assignee are ticket-derived (untrusted) text that lands in a response wrapped
-      // in trustedChatMarkdown() (JiraParticipant.ts's searchJql case) alongside the real command
-      // links below — neutralize before assembly so a crafted `[x](command:...)` summary can't
-      // become a live, auto-firing link once the whole table is trust-gated. Mirrors buildReviewTable().
+      // Summary and assignee come from the ticket (untrusted): links in them are neutralized so
+      // the table can never carry a working command link.
       { header: 'Summary', accessor: (issue) => neutralizeMarkdownLinks(issue.fields.summary) },
       { header: 'Status', accessor: (issue) => issue.fields.status.name },
       { header: 'Assignee', accessor: (issue) => neutralizeMarkdownLinks(issue.fields.assignee ? issue.fields.assignee.displayName : 'Unassigned') },
-      // R9/F3/AE4: per-row view/load/browse actions, each icon paired with a short visible word
-      // (never icon-only — a chat markdown table has no reliable hover-tooltip rendering). View
-      // and load are clickable command links scoped to that row's own key; browse is a plain
-      // markdown link to the real Jira URL, omitted when no baseUrl is configured (matching
-      // formatKeyLink's existing no-baseUrl behavior) rather than a command link, since it needs
-      // no chat round-trip.
-      ...(chatActions ? [{
-        header: 'Actions', accessor: (issue: JiraIssue) => {
-          const view = buildChatCommandLink('👁 view', '@jira', `show me ${issue.key}`);
-          const load = buildChatCommandLink('⤓ load', '@jira', `load ${issue.key}`);
-          const open = baseUrl ? `[🌐 open](${baseUrl}/browse/${issue.key})` : '';
-          return [view, load, open].filter(Boolean).join(' · ');
-        },
-      }] : []),
       ...buildExtraFieldColumns<JiraIssue>(
         extraFields,
         fieldMeta,

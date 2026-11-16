@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
-import { ConfigService } from '../../services/ConfigService';
-import { JiraApiClient } from '../../jira/JiraApiClient';
-import { checkDefaultProject, defaultProjectWarning } from '../../services/defaultProjectCheck';
-import { logDiag } from '../../utils/diagLog';
+import { ConfigService } from './ConfigService';
+import { JiraApiClient } from '../jira/JiraApiClient';
+import { checkDefaultProject, defaultProjectWarning } from './defaultProjectCheck';
+import { logDiag } from '../utils/diagLog';
 
 // Warns at start, and again after the setting changes, when ticketSidekick.jira.defaultProject is
 // not a project key or names a project Jira does not have. The extension never changes the setting;

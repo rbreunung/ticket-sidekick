@@ -51,7 +51,9 @@ const host: BoardHost = {
     reopened.push(`${kind}:${id}`);
     return { ok: true };
   },
+  closeSession: (kind, id) => { closed.push(`${kind}:${id}`); },
 };
+let closed: string[] = [];
 
 let nextId = 1;
 
@@ -103,6 +105,14 @@ describe('a board page and the extension', () => {
     expect(asBoardRequest({ op: 'state' })).toBeUndefined();
     expect(asBoardRequest({ id: 1, op: 'state', body: [] })).toBeUndefined();
     expect(asBoardRequest({ id: 1, op: 'state' })).toEqual({ id: 1, op: 'state', body: {} });
+  });
+
+  it('closes the tab when the page closes the board, and the session is gone', async () => {
+    closed = [];
+    const state = await openReady();
+    expect((await ask(report(state.id), 'discard')).status).toBe(200);
+    expect(closed).toEqual([`security-report:${state.id}`]);
+    expect((await ask(SESSIONS, 'list')).body.sessions).toEqual([]);
   });
 
   it('shows the session, applies a filter, and waits for changes', async () => {
@@ -209,9 +219,12 @@ describe('the import start screen', () => {
       defaultProject: () => 'PROJ',
       templateSetting: () => '',
       writeTemplateSetting: async (_kind, name) => { written.push(name); },
-      templates: () => [{ name: 'OSS finding', issueType: 'Vulnerability' }],
+      templates: () => [{ name: 'OSS finding', issueType: 'Vulnerability', defaultFields: {} }],
       reportReader: () => ({ read: async () => ({ items: [1], rawItems: [] }), noMatchMessage: 'none', fileFilter: { label: 'OSS report', extensions: ['xlsx'] } }),
       pickReportFile: async () => picked,
+      writeDefaultProject: async () => undefined,
+      pickEmailFiles: async () => undefined,
+      emailFiles: { checkCaps: async () => null, read: async () => ({}) },
       openSetting: async () => undefined,
       hasSession: async () => false,
       discardSession: async () => undefined,

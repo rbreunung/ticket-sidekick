@@ -166,7 +166,7 @@ export function startBoard({ root, render, loading }) {
       await run(async () => {
         await api('discard');
         stopped = true;
-        message = 'This session was discarded. Ask for the board again to start a new one.';
+        message = 'This board was closed and its session discarded. Ask for the board again to start a new one.';
         state = undefined;
       });
     },
@@ -257,7 +257,10 @@ export function startBoard({ root, render, loading }) {
       applying ? h('progress', { id: 'apply-progress', max: applying.total, value: applying.done, 'aria-label': 'Apply progress' }) : null,
       state && !stopped ? h('div', { class: 'bar' },
         h('vscode-button', { id: 'refresh', secondary: true, disabled: locked() || state.status !== 'ready' && state.status !== 'failed', onClick: () => board.refresh() }, 'Refresh'),
-        h('vscode-button', { id: 'discard', secondary: true, disabled: locked(), onClick: () => board.discard() }, 'Discard session')) : null);
+        h('vscode-button', {
+          id: 'discard', secondary: true, disabled: locked(), title: 'Closes this tab and forgets the choices not applied yet. Nothing in Jira changes.',
+          onClick: () => board.discard(),
+        }, 'Close')) : null);
     const content = state?.view !== undefined && !stopped ? render(state.view, board, locked(), state)
       : state && !stopped && loading ? loading(state) : null;
     root.replaceChildren(header, ...banners(), content ?? '');

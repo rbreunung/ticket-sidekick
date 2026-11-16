@@ -1,6 +1,6 @@
 # Settings Reference
 
-Full `ticketSidekick.*` settings. The Jira connection and display settings apply to the Copilot tools and boards as well as to the deprecated `@jira` chat participant; the Bitbucket review settings apply to the deprecated `@bitbucket` participant until the review board exists. See the main [README](../../README.md) for setup and core commands first.
+Full `ticketSidekick.*` settings. The Jira connection and display settings apply to the Copilot tools and boards; the Bitbucket review settings apply to the deprecated `@bitbucket` participant until the review board exists. See the main [README](../../README.md) for setup and core commands first.
 
 ## Jira settings reference
 
@@ -17,7 +17,6 @@ Full `ticketSidekick.*` settings. The Jira connection and display settings apply
 | Cleanup review columns | `ticketSidekick.jira.cleanupFields` | `[]` |
 | Team JQL | `ticketSidekick.jira.myTeamJql` | _(empty)_ |
 | Hidden fields | `ticketSidekick.jira.hiddenDisplayFields` | _(see below)_ |
-| Connection info banner | `ticketSidekick.jira.showConnectionInfo` | `false` |
 
 Settings for email, Veracode and OSS report imports are listed under [Report import settings](#report-import-settings) below.
 
@@ -94,14 +93,6 @@ By default viewing a ticket already omits several noisy system fields (e.g. `sta
 "ticketSidekick.jira.hiddenDisplayFields": ["customfield_10900", "workratio"]
 ```
 
-**Optional: Jira connection info banner**
-
-```json
-"ticketSidekick.jira.showConnectionInfo": true
-```
-
-When enabled, every `@jira` import response starts with an italic line showing the active base URL, API version, and auth type. Useful during initial setup or when switching between instances. Off by default. `/ts-jira check` shows the same and more at any time.
-
 ## Board session settings
 
 | Setting | Key | Default |
@@ -117,6 +108,8 @@ A board (the security report, a ticket list, an import, and later reviews) keeps
 | Delete .eml after import | `ticketSidekick.email.deleteEmlAfterImport` | `false` |
 | Email batch size limit (MB) | `ticketSidekick.email.maxBatchSizeMB` | `150` |
 | Email boilerplate patterns | `ticketSidekick.email.boilerplatePatterns` | `[]` |
+| Email import template | `ticketSidekick.email.template` | `""` |
+| Email check model | `ticketSidekick.email.checkModel` | `""` |
 | Veracode min severity | `ticketSidekick.veracode.minSeverity` | `4` |
 | Veracode included statuses | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` |
 | Veracode report size limit (MB) | `ticketSidekick.veracode.maxReportSizeMB` | `50` |
@@ -129,7 +122,7 @@ A board (the security report, a ticket list, an import, and later reviews) keeps
 
 What the filter settings do is described with each import in [Report Imports](report-imports.md).
 
-The two template settings name the template in `.jira-templates.json` that an import on the import board (`Ticket Sidekick: Open import board`) uses; the issue type comes from that template. When a template setting is empty, or names a template that is no longer in `.jira-templates.json`, the import board's start screen asks for one and saves your choice to the setting. See [Boards](boards.md).
+The three template settings name the template in `.jira-templates.json` that an import on the import board (`Ticket Sidekick: Open import board`) uses; the issue type comes from that template. When a template setting is empty, or names a template that is no longer in `.jira-templates.json`, the import board's start screen asks for one and saves your choice to the setting. See [Boards](boards.md).
 
 **Veracode SLA days**
 
@@ -182,6 +175,7 @@ Known confidentiality headers, legal footers and signatures to remove from impor
 | Diff context lines | `ticketSidekick.bitbucket.reviewContextLines` | `12` |
 | Confidence threshold | `ticketSidekick.bitbucket.confidenceThreshold` | `0.7` |
 | Detailed diagnostics | `ticketSidekick.bitbucket.detailedDiagnostics` | `false` |
+| Review model | `ticketSidekick.bitbucket.reviewModel` | `""` |
 | Show token usage | `ticketSidekick.bitbucket.showTokenUsage` | `false` |
 
 **Optional: Bitbucket connection info banner**

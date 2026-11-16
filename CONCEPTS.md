@@ -38,7 +38,7 @@ An open Jira ticket carrying an importer's marker label whose findings are all g
 ## Copilot Chat Surfaces
 
 ### Chat participant (deprecated)
-`@jira` and `@bitbucket`: the chat entry points the extension started with. Deprecated; replaced by extension tools, `/ts-jira` commands and boards, and removed once the email import and the pull request review have a board. `@jira` runs only the email import; Veracode and Waltz reports are imported on the import board. Nothing new is built on them.
+`@jira` and `@bitbucket`: the chat entry points the extension started with, replaced by extension tools, `/ts-jira` commands and boards. `@jira` was removed on 2026-11-16, once the email import moved to the import board. `@bitbucket` is deprecated and removed once the pull request review has a board. Nothing new is built on it.
 
 ### Security report
 A project's unresolved Veracode and Waltz tickets grouped by Fix Version, with Due Date flags (overdue, due before release), shown by the security report board and saved as CSV or Excel; the import board saves the same overview for one report. Code and developer docs call the same thing the "security overview".
@@ -63,7 +63,7 @@ A page in an editor tab (a VS Code webview) that shows a session and sends the d
 A ticket list board loaded from a `cleanupRules` rule, or opened with a proposed transition (an ad-hoc bulk close). It shows the `cleanupFields` columns, lists each parent's open subtasks beneath it (they follow the parent's selection), and applies only the selected rows of the page being viewed.
 
 ### Import board
-The board that imports a Veracode or Waltz report into Jira, one session per report file. It shows the review's groups as tabs (New, Already ticketed, Stale, and Accepted for Waltz), each with its own Preview and Apply, and gives a running ticket merge a tab of its own. A tab whose rows changed while it holds unfinished choices is marked out of date and offers only Refresh, which keeps every choice whose rows still exist. It replaced the `@jira` Veracode and Waltz imports with the same rules and results; the email kind comes later.
+The board that imports a Veracode or Waltz report, or a batch of `.eml` emails, into Jira, one session per report file or per set of email files. It shows the review's groups as tabs (New, Already ticketed, Stale, and Accepted for Waltz), each with its own Preview and Apply, and gives a running ticket merge a tab of its own. A tab whose rows changed while it holds unfinished choices is marked out of date and offers only Refresh, which keeps every choice whose rows still exist. An email import has only the New tab, after a boilerplate cleanup stage whose model check runs only as a previewed, applied step. It replaced the `@jira` imports with the same rules and results.
 
 ### Session
 The extension's record of one piece of board work: the recipe (what was asked for), the data derived from Jira, Bitbucket, a report file or a model run, and the developer's working state. There is one per source, it is cached on disk so a restart continues it, and it is never the truth: the sources are. Not the same as the old `@jira`/`@bitbucket` multi-turn session kept in `workspaceState`.

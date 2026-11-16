@@ -1,5 +1,6 @@
 import * as path from 'path';
 import type { BoardKind, CheckMode, Validated } from '../../sessions/boardKind';
+import { forgetChangedEmails } from './cleanupStage';
 import { handlerOf } from './handlers';
 import { IMPORT_HANDLERS } from './registry';
 import { newGroupRefs } from './newTab';
@@ -11,13 +12,15 @@ import type { AcceptedHidden, TicketedAction } from '../../imports/types';
 import { countedNoun } from '../../utils/chatPrimitives';
 import type { DateKind } from '../../utils/waltzDates';
 import {
-  newRows, readImport, rowKeyOf, slicesOf, staleTickets, ticketedRows,
+  ReportNotFoundError, isEmailRow, isLeftOut, newRows, readImport, rowKeyOf, slicesOf, staleTickets, ticketedRows,
   type ImportData, type ImportDeps, type ImportRow, type ImportTab, type SliceEntry,
 } from './read';
-import { IMPORT_KIND, REPORT_KIND_LABELS, importSourceKey, isReportKind, normaliseReportPath, type ImportRecipe } from './recipe';
+import {
+  IMPORT_KIND, REPORT_KIND_LABELS, emailRecipe, importSourceKey, isReportKind, normaliseReportPath, recipePaths, type ImportRecipe,
+} from './recipe';
 
 // The import board: a Veracode or Waltz report against Jira, one tab per group (New, Already
-// ticketed, Stale, and Accepted for Waltz). A check after a restart or another change keeps a tab
+// ticketed, Stale, and Accepted for Waltz), or a batch of emails, which has the New tab only. A check after a restart or another change keeps a tab
 // with unfinished choices as the developer saw it and marks it out of date; Refresh then takes the
 // fresh reading and keeps every choice whose rows still exist. The board's own recorded writes
 // never count as a change. vscode-free.
@@ -28,6 +31,8 @@ export type { ImportTab } from './read';
 export interface ImportChoices {
   /** New rows left out of the create. */
   excluded: string[];
+  /** Likely repeats (emails) the developer took into the create; a likely repeat starts left out. */
+  included?: string[];
   /** New rows merged into one ticket, each by its members' row keys in order. */
   merges: string[][];
   /** Already-ticketed actions the developer chose in place of the default. */
@@ -113,6 +118,8 @@ export interface NewRowView {
   created?: string;
   /** That ticket's page in Jira. */
   createdUrl?: string;
+  /** An email whose subject is already these tickets' summary; it starts left out of the create. */
+  repeatOf?: Array<{ key: string; summary: string; url: string | null }>;
 }
 
 export interface TicketedRowView {
@@ -193,8 +200,20 @@ const STALE_UNAVAILABLE = 'The search for stale tickets failed, so this tab is n
 const MAX_TEXT = 255;
 const MAX_FILTER = 200;
 
+const EMAIL_EMPTY = 'No emails to import: none of the files could be read.';
+/** How many email files one import takes at most. */
+const MAX_EMAIL_FILES = 50;
+
 function tabsOf(recipe: ImportRecipe): ImportTab[] {
+  if (recipe.kind === 'email') return ['new'];
   return recipe.kind === 'waltz' ? ['new', 'ticketed', 'stale', 'accepted'] : ['new', 'ticketed', 'stale'];
+}
+
+/** An import's title: the report file, or the one email or the number of emails. */
+function importTitle(recipe: ImportRecipe): string {
+  const files = recipePaths(recipe);
+  const source = recipe.kind === 'email' && files.length > 1 ? `${files.length} emails` : path.basename(recipe.reportPath);
+  return `${REPORT_KIND_LABELS[recipe.kind]} import: ${source}`;
 }
 
 function text(value: unknown, max = MAX_TEXT): string | undefined {
@@ -206,27 +225,66 @@ function text(value: unknown, max = MAX_TEXT): string | undefined {
 /** A recipe in its accepted shape: a known kind, a project key, an absolute report path, a template and an issue type. */
 function recipeOf(value: unknown): Validated<ImportRecipe> {
   const v = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>;
-  if (!isReportKind(v.kind)) return { ok: false, reason: 'the import names no report kind the board knows (veracode or waltz).' };
+  if (!isReportKind(v.kind)) return { ok: false, reason: 'the import names no report kind the board knows (veracode, waltz or email).' };
   const projectKey = typeof v.projectKey === 'string' ? normalizeProjectKey(v.projectKey) : undefined;
   if (!projectKey) return { ok: false, reason: 'the import names no valid Jira project key.' };
-  if (typeof v.reportPath !== 'string' || !path.isAbsolute(v.reportPath) || v.reportPath.length > 4096) {
-    return { ok: false, reason: 'the import names no report file by its full path.' };
-  }
+  const fullPath = (p: unknown): p is string => typeof p === 'string' && path.isAbsolute(p) && p.length <= 4096;
   const templateName = text(v.templateName);
   const issueType = text(v.issueType);
+  if (v.kind === 'email') {
+    const files = Array.isArray(v.reportPaths) ? v.reportPaths : fullPath(v.reportPath) ? [v.reportPath] : [];
+    if (files.length === 0 || files.length > MAX_EMAIL_FILES || !files.every(fullPath)) {
+      return { ok: false, reason: `the import names no email files by their full paths (at most ${MAX_EMAIL_FILES}).` };
+    }
+    if (!templateName) return { ok: false, reason: 'the import names no template.' };
+    if (!issueType) return { ok: false, reason: 'the import names no issue type.' };
+    return { ok: true, recipe: emailRecipe({ projectKey, templateName, issueType, ...(v.emailConsent === true ? { emailConsent: true } : {}) }, files) };
+  }
+  if (!fullPath(v.reportPath)) {
+    return { ok: false, reason: 'the import names no report file by its full path.' };
+  }
   if (!templateName) return { ok: false, reason: 'the import names no template.' };
   if (!issueType) return { ok: false, reason: 'the import names no issue type.' };
   return { ok: true, recipe: { kind: v.kind, projectKey, reportPath: normaliseReportPath(v.reportPath), templateName, issueType } };
 }
 
-/** How a row is named to the developer: its flaw ids, or its component. */
+/** How a row is named to the developer: its flaw ids, its component, or its email's file. */
 export function rowRef(row: ImportRow): string {
   if ('issueIds' in row) return `Flaw ${row.issueIds.join(', ')}`;
+  if (isEmailRow(row)) return path.basename(row.emlFilePath);
   return row.nameVersion;
 }
 
 function rowRating(row: ImportRow): string {
-  return 'issueIds' in row ? row.severityLabelText : row.maxVulnRating;
+  if ('issueIds' in row) return row.severityLabelText;
+  return isEmailRow(row) ? '' : row.maxVulnRating;
+}
+
+/** The notice naming an email import's files that are gone, leaving out the ones the board deleted after creating their tickets. */
+function missingFilesNotice(data: ImportData, writes: ImportWrites): string | undefined {
+  const created = createdKeySet(writes);
+  const missing = (data.missingFiles ?? []).filter(f => !created.has(f));
+  if (missing.length === 0) return undefined;
+  return `${countedNoun(missing.length, 'email file(s)')} no longer there: ${missing.map(f => path.basename(f)).join(', ')}. Their emails are not on the board.`;
+}
+
+/**
+ * An email import whose files are all gone is not found, unless the board deleted them itself after
+ * creating their tickets: then the import is finished. Answers the first file the board did not
+ * delete, or undefined.
+ */
+function lostEmailFile(session: ImportSession, data: ImportData): string | undefined {
+  const paths = recipePaths(session.recipe);
+  if (session.recipe.kind !== 'email' || (data.missingFiles ?? []).length < paths.length) return undefined;
+  const created = createdKeySet(session.working.writes);
+  return paths.find(p => !created.has(p));
+}
+
+/** The row keys of the emails whose file content differs between two readings. */
+function changedEmailKeys(before: ImportData, after: ImportData): string[] {
+  const hashes = (data: ImportData) => new Map(newRows(data).filter(isEmailRow).map(r => [rowKeyOf(data, r), r.contentHash]));
+  const was = hashes(before);
+  return [...hashes(after)].filter(([key, h]) => was.has(key) && was.get(key) !== h).map(([key]) => key);
 }
 
 const DATE_LABELS: Record<DateKind, string> = { policy: 'Policy date', planned: 'Planned date', attestation: 'Attestation date', due: 'Due Date' };
@@ -293,7 +351,7 @@ function hasWork(data: ImportData, writes: ImportWrites, choices: ImportChoices,
     const created = createdKeySet(writes);
     return newRows(data).some(r => {
       const key = rowKeyOf(data, r);
-      return !isCreated(created, key) && !choices.excluded.includes(key);
+      return !isCreated(created, key) && !isLeftOut(data, choices, key);
     });
   }
   if (tab === 'ticketed') return ticketedRows(data).some(r => needsDecision(data, r, writes));
@@ -319,7 +377,7 @@ function hasUnfinishedChoices(data: ImportData, working: ImportWorking, tab: Imp
     const keys = new Set(newRows(data).map(r => rowKeyOf(data, r)));
     const created = createdKeySet(writes);
     const open = (key: string) => keys.has(key) && !isCreated(created, key);
-    return choices.excluded.some(open) || choices.merges.some(m => m.some(open));
+    return choices.excluded.some(open) || (choices.included ?? []).some(open) || choices.merges.some(m => m.some(open));
   }
   if (tab === 'ticketed') {
     const rows = new Map(ticketedRows(data).map(r => [rowKeyOf(data, r), r]));
@@ -488,7 +546,8 @@ function keepChoices(session: ImportSession, fresh: ImportData): { choices: Impo
     dropped.push(`${key}: its selection for closing was dropped, because it is no longer a stale ticket the board can close.`);
     return false;
   });
-  return { choices: { excluded, merges, actions, staleSelected }, dropped };
+  const included = (choices.included ?? []).filter(key => freshNew.has(key));
+  return { choices: { excluded, ...(included.length > 0 ? { included } : {}), merges, actions, staleSelected }, dropped };
 }
 
 function matches(filter: string | undefined, ...fields: Array<string | null | undefined>): boolean {
@@ -501,7 +560,7 @@ function matches(filter: string | undefined, ...fields: Array<string | null | un
 export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, ImportAction, ImportView, ImportDeps> = {
   kind: IMPORT_KIND,
   formatVersion: 1,
-  title: recipe => `${REPORT_KIND_LABELS[recipe.kind]} import: ${path.basename(recipe.reportPath)}`,
+  title: recipe => importTitle(recipe),
 
   validate: async (input, deps) => {
     const checked = recipeOf(input);
@@ -515,7 +574,9 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
   revalidate: async stored => recipeOf(stored),
 
   sourceKey: recipe => importSourceKey(recipe),
-  sourceLabel: recipe => `${REPORT_KIND_LABELS[recipe.kind]} report ${recipe.reportPath} in ${recipe.projectKey}`,
+  sourceLabel: recipe => (recipe.kind === 'email'
+    ? `${countedNoun(recipePaths(recipe).length, 'email file(s)')} (${recipePaths(recipe).map(f => path.basename(f)).join(', ')}) in ${recipe.projectKey}`
+    : `${REPORT_KIND_LABELS[recipe.kind]} report ${recipe.reportPath} in ${recipe.projectKey}`),
 
   initialWorking: () => ({
     tab: null, filters: {}, ticketedShow: null, outOfDate: [], dropped: [],
@@ -527,8 +588,11 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
   read: (recipe, deps) => readImport(recipe, deps),
 
   reconcile: (current, fresh, mode: CheckMode) => {
+    const lost = lostEmailFile(current, fresh.data);
+    if (lost) throw new ReportNotFoundError(lost);
     const tabs = tabsOf(current.recipe);
-    const session: ImportSession = { ...current, working: { ...current.working, writes: writesFor(current, fresh) } };
+    const working = forgetChangedEmails(current.working, changedEmailKeys(current.derived.data, fresh.data));
+    const session: ImportSession = { ...current, working: { ...working, writes: writesFor(current, fresh) } };
     if (mode === 'refresh') {
       // A running ticket merge works from the Already-ticketed reading it started from: a Refresh
       // takes every other tab and leaves that one marked until the merge ends.
@@ -646,7 +710,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
         id, label: TAB_LABELS[id], count: counts[id], outOfDate: working.outOfDate.includes(id),
         hasWork: tabHasWork(session, id),
         ...(unavailable ? { unavailable } : {}),
-        ...(counts[id] === 0 && !unavailable ? { empty: EMPTY[id] } : {}),
+        ...(counts[id] === 0 && !unavailable ? { empty: recipe.kind === 'email' && id === 'new' ? EMAIL_EMPTY : EMPTY[id] } : {}),
         ...(warning ? { warning } : {}),
       };
     });
@@ -665,7 +729,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
       finished: tabViews.every(t => !t.hasWork),
       filter: filter ?? '',
       dropped: working.dropped,
-      notices: data.notices,
+      notices: [...data.notices, ...[missingFilesNotice(data, writes)].filter((n): n is string => n !== undefined)],
       ext: {},
     };
     const hidden = describeAcceptedHidden(data.review.acceptedHidden);
@@ -684,7 +748,8 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
           const createdKey = isCreated(created, key) ? createdFor(writes, key) : undefined;
           const merge = mergeOf.get(key);
           return {
-            id: r.id, ref: rowRef(r), group: groupRefs.get(r.id)!, summary: r.summary, rating: rowRating(r), included: !choices.excluded.includes(key),
+            id: r.id, ref: rowRef(r), group: groupRefs.get(r.id)!, summary: r.summary, rating: rowRating(r), included: !isLeftOut(data, choices, key),
+            ...(isEmailRow(r) && r.repeatOf?.length ? { repeatOf: r.repeatOf.map(t => ({ key: t.key, summary: t.summary, url: browseUrl(data.baseUrl, t.key) })) } : {}),
             ...(merge ? { merge } : {}), ...(createdKey ? { created: createdKey, ...(browseUrl(data.baseUrl, createdKey) ? { createdUrl: browseUrl(data.baseUrl, createdKey)! } : {}) } : {}),
           };
         }),
