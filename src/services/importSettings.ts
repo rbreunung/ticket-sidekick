@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { VeracodeSettings } from '../imports/veracode';
 import type { WaltzSettings } from '../imports/waltz';
+import type { EmailSettings } from '../imports/email';
 import { resolveSizeLimitSetting } from '../utils/reportImport';
 
 // The Veracode and Waltz import settings as VS Code holds them, read each time they are needed so a
@@ -41,3 +42,9 @@ export function waltzSettings(workspaceRoot: () => string | undefined): WaltzSet
     workspaceRoot,
   };
 }
+
+/** The email import's delete-after-import and batch-size settings. */
+export const emailSettings: EmailSettings = {
+  deleteEmlAfterImport: () => cfg().get<boolean>('email.deleteEmlAfterImport', false),
+  maxBatchBytes: () => resolveSizeLimitSetting('email.maxBatchSizeMB', key => cfg().get(key)),
+};

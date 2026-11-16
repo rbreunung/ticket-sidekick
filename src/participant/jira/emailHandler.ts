@@ -5,11 +5,11 @@ import * as fs from 'fs';
 import type { TicketService } from '../../services/TicketService';
 import type { ConfigService } from '../../services/ConfigService';
 import type { IJiraClient } from '../../jira/IJiraClient';
-import { markdownToJiraWiki } from '../../utils/markdownToJiraWiki';
-import { sanitizeCellText, BATCH_LIMIT, resolveSizeLimitSetting } from '../../utils/reportImport';
 import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
+import { checkEmailBatchCaps as checkBatchCaps, createEmailDescriptor, buildEmailCommentWiki, EMAIL_TEMPLATE_SESSION_KEY } from '../../imports/email';
+import { emailSettings } from '../../services/importSettings';
 import type {
-  EmailContentSession, AwaitIssueTypeResume, EmailTemplateSelectionSession, EmailReviewSession, ReviewTableColumn,
+  EmailContentSession, AwaitIssueTypeResume, EmailTemplateSelectionSession, EmailReviewSession,
   EmailCleanupSession, EmailCleanupTarget, EmailCleanupDecision, EmailCleanupRow,
 } from '../sessionState';
 import {
@@ -31,87 +31,17 @@ import {
   continueAfterImportIssueType, handleImportReviewReply, type ReportImportDescriptor,
 } from './reportImportHandler';
 
-// KTD1: batch email import is a third ReportImportDescriptor kind, reusing the shared
-// parse -> template-pick -> review -> batch-create flow Veracode/Waltz already share in
-// reportImportHandler.ts (see that file's KTD1/KTD2/KTD3/KTD4) rather than a parallel session type.
-// The dedup fields are omitted — email has no per-item dedup concept (KTD2) — and buildTicketFields/
-// afterCreate supply email's own ticket-field-building and attachment-upload step.
-// Subject/attachment filenames are untrusted, email-derived content — this table's whole output is
-// trust-gated (KTD5, U6) once it carries the per-row toggle links (buildNewGroupScreen), so both
-// go through neutralizeMarkdownLinks() (see its own doc comment in sessionState.ts).
-const EMAIL_REVIEW_COLUMNS: ReviewTableColumn<EmailReviewRow>[] = [
-  { header: 'Subject', accessor: row => neutralizeMarkdownLinks(row.subject) },
-  { header: 'Attachments', accessor: row => (row.attachmentNames.length > 0 ? neutralizeMarkdownLinks(row.attachmentNames.join(', ')) : '—') },
-];
-
-// Exported so extension.ts's Command Palette command writes the session under exactly the key this
-// module reads it back from, instead of duplicating the string literal.
-export const EMAIL_TEMPLATE_SESSION_KEY = 'jira.session.emailTemplateSelection';
-
+// Batch email import is a third ReportImportDescriptor kind (src/imports/email.ts), driven through
+// the shared parse -> template-pick -> review -> batch-create flow in reportImportHandler.ts.
+// Subject and attachment names are email-derived and this table's output is trust-gated once it
+// carries the per-row toggle links, so both go through neutralizeMarkdownLinks().
 const emailDescriptor: ReportImportDescriptor<EmailImportItem, EmailReviewRow> = {
-  descriptorKind: 'email',
-  scope: 'jira.email',
-  importLabel: 'Email',
-  itemNoun: 'email(s)',
-  filterKindLabel: 'selection',
-  noMatchMessage: '_No emails were selected._',
-  // fileFilter/filePickerTitle/parseAndFilter omitted (optional on ReportImportDescriptor, see its
-  // doc comment) — email's entry points below build `items` themselves via a multi-select picker and
-  // call buildImportTemplateSession() directly, never through the single-file
-  // openReportFilePicker()/handleImportReport() those three fields exist for.
-  sessionKeys: {
-    templateSelection: EMAIL_TEMPLATE_SESSION_KEY,
-    review: 'jira.session.emailReview',
-  },
-  buildRowFields: item => ({
-    subject: item.subject,
-    senderName: item.senderName,
-    attachmentNames: item.attachments.filter(a => !a.isInline).map(a => a.name),
-    markdownBody: item.markdownBody,
-    inlineImageMap: item.inlineImageMap,
-    attachments: item.attachments,
-    emlFilePath: item.emlFilePath,
+  ...createEmailDescriptor(emailSettings, {
+    onDiag: (level, message, details) => logDiag('jira.email', level, message, details),
+    neutralize: neutralizeMarkdownLinks,
   }),
-  reviewColumns: EMAIL_REVIEW_COLUMNS,
-  itemRefFor: row => row.subject,
-  buildTicketFields: (row, additionalFields) => ({
-    summary: row.subject,
-    fields: { ...additionalFields, description: buildEmailJiraWiki(row.markdownBody) },
-  }),
-  // KTD4: uploads the row's attachments after ticket creation, then honors the existing
-  // email.deleteEmlAfterImport setting — same two steps finishEmailTicket() used to run inline,
-  // now driven through the shared per-row creation hook (createNewRows). A thrown error here is caught by
-  // that shared creation step and shown as a warning; the ticket itself is already created by that point.
-  afterCreate: async (row, issueKey, ticketService) => {
-    let uploaded = 0;
-    const failures: string[] = [];
-    if (row.attachments.length > 0) {
-      await Promise.all(row.attachments.map(att =>
-        ticketService.uploadAttachment(issueKey, att.name, att.contentType, att.contentBytes)
-          .then(() => { uploaded++; })
-          .catch(err => {
-            const message = err instanceof Error ? err.message : String(err);
-            logDiag('jira.email', 'warn', `Attachment upload failed — ${att.name}`, { issueKey, fileName: att.name, error: message });
-            failures.push(`${att.name}: ${message}`);
-          }),
-      ));
-    }
-    const deleteAfter = vscode.workspace.getConfiguration('ticketSidekick').get<boolean>('email.deleteEmlAfterImport', false);
-    if (deleteAfter) {
-      await fs.promises.unlink(row.emlFilePath).catch((err: unknown) => {
-        logDiag('jira.email', 'warn', `Could not delete .eml after import — ${row.emlFilePath}`, {
-          emlFilePath: row.emlFilePath, error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    }
-    if (failures.length > 0) {
-      throw new Error(`Uploaded ${uploaded} of ${row.attachments.length} attachment(s); failed: ${failures.join('; ')}`);
-    }
-  },
-  // The same warning the import board's start screen shows (issueTypeFetchWarning) — this is the one warning that
-  // always surfaces as a native pop-up regardless of entry point (chat or Command Palette), so the
-  // Command Palette's ticket-sidekick.importEml command doesn't silently lose the warning it used to
-  // show inline before this consolidation.
+  // The same warning the import board's start screen shows; a native pop-up in chat and from the
+  // Command Palette alike.
   onIssueTypeFetchFailed: (message, projectKey) => {
     vscode.window.showWarningMessage(
       `Ticket Sidekick: Could not fetch issue types for ${projectKey} — you'll be asked to type it. ${message}`,
@@ -119,32 +49,10 @@ const emailDescriptor: ReportImportDescriptor<EmailImportItem, EmailReviewRow> =
   },
 };
 
-function getEmailMaxBatchBytes(): number {
-  const cfg = vscode.workspace.getConfiguration('ticketSidekick');
-  return resolveSizeLimitSetting('email.maxBatchSizeMB', (key) => cfg.get(key));
-}
-
-// Checks the file-count cap (KTD6) and the aggregate attachment-byte cap (KTD7) for a set of
-// selected .eml files, before any file is read. Returns an error message to show the user, or null
-// when both caps are satisfied. Shared by every entry point's file picker (chat and Command Palette)
-// so the two caps are enforced identically everywhere.
+// Checks both batch caps for a set of selected .eml files, before any file is read. Shared by every
+// entry point's file picker (chat and Command Palette).
 export async function checkEmailBatchCaps(uris: vscode.Uri[]): Promise<string | null> {
-  if (uris.length > BATCH_LIMIT) {
-    return `Selected ${uris.length} files — the batch limit is ${BATCH_LIMIT}. Select ${BATCH_LIMIT} or fewer and try again.`;
-  }
-
-  // Independent stats — run concurrently rather than one file at a time.
-  const sizes = await Promise.all(uris.map(uri =>
-    fs.promises.stat(uri.fsPath).then(stat => stat.size).catch(() => 0), // a stat failure surfaces properly below, when the file is actually read and parsed
-  ));
-  const totalBytes = sizes.reduce((sum, size) => sum + size, 0);
-  const maxBatchBytes = getEmailMaxBatchBytes();
-  if (totalBytes > maxBatchBytes) {
-    const totalMb = (totalBytes / (1024 * 1024)).toFixed(1);
-    const capMb = maxBatchBytes / (1024 * 1024);
-    return `Selected files total ${totalMb} MB — the batch limit is ${capMb} MB. Select fewer or smaller files and try again.`;
-  }
-  return null;
+  return checkBatchCaps(uris.map(uri => uri.fsPath), emailSettings.maxBatchBytes());
 }
 
 // Parses every selected file (concurrently — each file's parse is independent). A file that fails to
@@ -664,27 +572,6 @@ export async function handleEmailReviewReply(
   return handleImportReviewReply(reply, session, ticketService, stream, ws, emailDescriptor, baseUrl);
 }
 
-// Pure helper — converts markdown email body to Jira Wiki markup with inline-image placeholders resolved.
-// The captured filename is attacker-controlled (email-derived) and is interpolated directly into
-// literal Jira image-embed syntax OUTSIDE markdownToJiraWiki() — sanitize the captured value alone
-// (not the whole !name|thumbnail! template, whose own "!"/"|" delimiters must survive).
-export function buildEmailJiraWiki(markdownBody: string): string {
-  let jiraWiki = markdownToJiraWiki(markdownBody);
-  jiraWiki = jiraWiki.replace(/\n{3,}/g, '\n\n');
-  return jiraWiki.replace(/\[📎 ([^\]]+)\]/g, (_match, name: string) => `!${sanitizeCellText(name)}|thumbnail!`);
-}
-
-// Pure helper — builds the From/Date comment header. senderName is the email's attacker-controlled
-// "From" display name, interpolated directly into live Jira wiki markup outside markdownToJiraWiki()
-// — sanitize the value alone (not the whole "*From:* ..." string, whose intentional "*" bold markers
-// must survive).
-export function buildEmailCommentHeader(senderName?: string, receivedDateTime?: string): string {
-  const parts: string[] = [];
-  if (senderName) parts.push(`*From:* ${sanitizeCellText(senderName)}`);
-  if (receivedDateTime) parts.push(`*Date:* ${receivedDateTime.slice(0, 10)}`);
-  return parts.length > 0 ? parts.join('  ·  ') + '\n\n' : '';
-}
-
 // R13: the referenced ticket key is carried on metadata by the caller (handleEmailContentSession)
 // instead of a visible marker. The attachment-upload summary is streamed here; the ticket-key marker
 // that used to ride along in that string is gone.
@@ -695,9 +582,7 @@ export async function addEmailAsComment(
   stream: vscode.ChatResponseStream,
   baseUrl: string,
 ): Promise<void> {
-  const jiraWiki = buildEmailJiraWiki(session.markdownBody);
-  const header = buildEmailCommentHeader(session.senderName, session.receivedDateTime);
-  const commentBody = `${header}${jiraWiki}`;
+  const commentBody = buildEmailCommentWiki(session);
 
   const result = await ticketService.addComment(ticketKey, commentBody, baseUrl);
   stream.markdown(result);
@@ -780,3 +665,5 @@ export async function handleEmailContentSession(
   }
   return streamEmailCommentPreview(session, stream, ws);
 }
+
+export { EMAIL_TEMPLATE_SESSION_KEY, buildEmailJiraWiki, buildEmailCommentHeader } from '../../imports/email';
