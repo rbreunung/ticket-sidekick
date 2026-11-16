@@ -18,7 +18,7 @@ export const addCommentTool = defineTool<JiraToolDeps, typeof addCommentShape>({
   title: 'Add a comment to a Jira ticket',
   description:
     'Adds one comment to a Jira ticket. Write the comment as Markdown (headings, lists, tables, code); it reaches Jira as '
-    + 'wiki markup, as from @jira. The same comment on the same ticket within a minute is skipped, so a repeated call does not post it twice.',
+    + 'wiki markup. The same comment on the same ticket within a minute is skipped, so a repeated call does not post it twice.',
   inputSchema: addCommentShape,
   annotations: { destructiveHint: true },
   handler: async (args, deps) => {

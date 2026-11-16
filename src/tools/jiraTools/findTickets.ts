@@ -167,7 +167,7 @@ export const findTicketsTool = defineTool<JiraToolDeps, typeof findShape>({
       const pageToken = page && cloud ? page : undefined;
       const result = await ticketService.searchTicketsRaw(finalJql, FIND_PAGE_SIZE, config.searchFields, startAt, pageToken);
       const fieldMeta = config.searchFields.length > 0 ? await ticketService.getFieldMeta() : [];
-      const table = ticketService.formatSearchResults(result, finalJql, config.baseUrl, config.searchFields, fieldMeta, { chatActions: false });
+      const table = ticketService.formatSearchResults(result, finalJql, config.baseUrl, config.searchFields, fieldMeta);
 
       let next: string | undefined;
       if (cloud) {

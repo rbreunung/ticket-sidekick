@@ -17,7 +17,6 @@ Full `ticketSidekick.*` settings. The Jira connection and display settings apply
 | Cleanup review columns | `ticketSidekick.jira.cleanupFields` | `[]` |
 | Team JQL | `ticketSidekick.jira.myTeamJql` | _(empty)_ |
 | Hidden fields | `ticketSidekick.jira.hiddenDisplayFields` | _(see below)_ |
-| Connection info banner | `ticketSidekick.jira.showConnectionInfo` | `false` |
 
 Settings for email, Veracode and OSS report imports are listed under [Report import settings](#report-import-settings) below.
 
@@ -93,14 +92,6 @@ By default viewing a ticket already omits several noisy system fields (e.g. `sta
 ```json
 "ticketSidekick.jira.hiddenDisplayFields": ["customfield_10900", "workratio"]
 ```
-
-**Optional: Jira connection info banner**
-
-```json
-"ticketSidekick.jira.showConnectionInfo": true
-```
-
-When enabled, every `@jira` import response starts with an italic line showing the active base URL, API version, and auth type. Useful during initial setup or when switching between instances. Off by default. `/ts-jira check` shows the same and more at any time.
 
 ## Board session settings
 

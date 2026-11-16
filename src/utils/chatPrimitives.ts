@@ -68,7 +68,7 @@ export const TICKET_KEY_TOKEN = new RegExp(`^${TICKET_ID_PATTERN.source}$`, 'i')
  * trust-gate pattern in `JiraParticipant.ts` (and `notConfigured` in `BitbucketParticipant.ts`).
  * Without that, VS Code renders the link as inert plain text instead of a clickable command.
  */
-export function buildChatCommandLink(label: string, participantId: '@jira' | '@bitbucket', replyText: string): string {
+export function buildChatCommandLink(label: string, participantId: '@bitbucket', replyText: string): string {
   const safeLabel = neutralizeMarkdownLinks(label);
   const query = `${participantId} ${replyText}`;
   // encodeURIComponent leaves ( and ) literal, and an unbalanced ) would end the markdown link destination
@@ -125,9 +125,6 @@ export function countedNoun(count: number, itemNoun: string): string {
   return `${count} ${count === 1 ? itemNoun.replace('(s)', '') : pluralNoun(itemNoun)}`;
 }
 
-export function cmdLink(label: string, command: string): string {
-  return buildChatCommandLink(label, '@jira', command);
-}
 
 /** Makes untrusted text safe inside one trusted markdown table cell: no links, no cell breaks. */
 export function safeCellText(value: string): string {
@@ -143,4 +140,29 @@ export function normalizeReply(reply: string): string {
  * ambiguous-match text results use the same shape instead of a second hand-rolled join. */
 export function formatBulletList(items: string[]): string {
   return items.map(item => `- ${item}`).join('\n');
+}
+
+/**
+ * Exact-match (not substring/word-list) detection of an empty invocation or an obvious
+ * greeting/help-shaped prompt — mirrors `isConfirmation()`/`isCancellation()`'s own
+ * whole-normalized-string `Set` membership above, for the same reason: a substring or
+ * per-word test on "hi" would misfire on legitimate operation text like "update HI-1
+ * status", but an exact-string `Set` membership check never can, since the normalized whole
+ * prompt "update hi-1 status" is never equal to "hi". See the specific-before-generic ordering
+ * principle in
+ * docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md
+ * — this function sidesteps that hazard entirely by never doing substring matching in the first
+ * place, rather than needing a live-domain-value check ordered ahead of it.
+ */
+const GREETING_OR_HELP_PHRASES = new Set<string>([
+  '', 'hi', 'hello', 'hey', 'hiya', 'yo', 'howdy',
+  'help', 'help me', '?', "what's up", 'whats up',
+  'what can you do', 'what do you do', 'what can you help with', 'what can you help me with',
+  'how does this work', 'how do i use this', 'how do i use you',
+  'getting started', 'get started', 'what is this', 'who are you',
+]);
+
+export function isGreetingOrEmpty(prompt: string): boolean {
+  const normalized = prompt.trim().toLowerCase().replace(/[!?.]+$/g, '').replace(/\s+/g, ' ').trim();
+  return GREETING_OR_HELP_PHRASES.has(normalized);
 }

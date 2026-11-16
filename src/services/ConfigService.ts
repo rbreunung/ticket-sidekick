@@ -9,7 +9,6 @@ export type ImportTemplateKind = 'veracode' | 'waltz' | 'email';
 export interface JiraConfig {
   baseUrl: string | undefined;
   authType: AuthType;
-  showConnectionInfo: boolean;
   requiredFields: string[];
   additionalDisplayFields: string[];
   hiddenDisplayFields: string[];
@@ -31,7 +30,6 @@ export class ConfigService {
     return {
       baseUrl: config.get<string>('jira.baseUrl'),
       authType: config.get<AuthType>('jira.authType') ?? 'datacenter',
-      showConnectionInfo: config.get<boolean>('jira.showConnectionInfo') ?? false,
       requiredFields: config.get<string[]>('jira.requiredFields') ?? [],
       additionalDisplayFields: config.get<string[]>('jira.additionalDisplayFields') ?? [],
       hiddenDisplayFields: config.get<string[]>('jira.hiddenDisplayFields') ?? [],

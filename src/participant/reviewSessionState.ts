@@ -1,5 +1,5 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
-import { isCancellation } from './session/primitives';
+import { isCancellation } from '../utils/chatPrimitives';
 import { TICKET_ID_PATTERN, findJiraKeyMatch } from '../utils/branchParser';
 import type { RequirementsTicket } from '../utils/requirementsSource';
 import type { RequirementsCoverage } from './bitbucket/requirementsCoverage';

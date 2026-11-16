@@ -59,8 +59,8 @@ import {
   type ReviewPass,
   type ReviewTally,
 } from './reviewSessionState';
-import { isConfirmation, isGreetingOrEmpty } from './sessionState';
-import { generateContent } from './jira/llmHelpers';
+import { isConfirmation, isGreetingOrEmpty } from '../utils/chatPrimitives';
+import { generateContent } from './bitbucket/generateContent';
 import { createTokenMeter } from './bitbucket/tokenMeter';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { TicketService } from '../services/TicketService';

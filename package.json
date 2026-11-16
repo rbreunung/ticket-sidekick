@@ -25,23 +25,6 @@
   "contributes": {
     "chatParticipants": [
       {
-        "id": "ticket-sidekick.jira",
-        "name": "jira",
-        "fullName": "Ticket Sidekick",
-        "description": "Deprecated: imports emails into Jira. Use /ts-jira or Agent mode for everything else",
-        "isSticky": true,
-        "disambiguation": [
-          {
-            "category": "jira_report_import",
-            "description": "The user wants to import an email (.eml) into a Jira ticket, or add an email to a Jira ticket as a comment.",
-            "examples": [
-              "Create a ticket from this email",
-              "Add this email to PROJ-42 as a comment"
-            ]
-          }
-        ]
-      },
-      {
         "id": "ticket-sidekick.bitbucket",
         "name": "bitbucket",
         "fullName": "Ticket Sidekick — Bitbucket",
@@ -95,10 +78,6 @@
       {
         "command": "ticket-sidekick.configureBitbucketCloud",
         "title": "Ticket Sidekick: Configure Bitbucket Cloud Credentials"
-      },
-      {
-        "command": "ticket-sidekick.importEml",
-        "title": "Ticket Sidekick: Create Jira ticket from email (.eml)"
       },
       {
         "command": "ticket-sidekick.sessions.clear",
@@ -516,7 +495,7 @@
       {
         "name": "jira_add_comment",
         "displayName": "Add a comment to a Jira ticket",
-        "modelDescription": "Adds one comment to a Jira ticket. Write the comment as Markdown (headings, lists, tables, code); it reaches Jira as wiki markup, as from @jira. The same comment on the same ticket within a minute is skipped, so a repeated call does not post it twice.",
+        "modelDescription": "Adds one comment to a Jira ticket. Write the comment as Markdown (headings, lists, tables, code); it reaches Jira as wiki markup. The same comment on the same ticket within a minute is skipped, so a repeated call does not post it twice.",
         "userDescription": "Adds one comment to a Jira ticket.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraAddComment",
@@ -914,11 +893,6 @@
             "default": [],
             "description": "Jira field names that must be set for ticket validation (e.g. [\"assignee\", \"priority\"])"
           },
-          "ticketSidekick.jira.showConnectionInfo": {
-            "type": "boolean",
-            "default": false,
-            "description": "When enabled, each @jira import response starts with an italic line showing the active base URL, API version, and auth type."
-          },
           "ticketSidekick.jira.additionalDisplayFields": {
             "type": "array",
             "items": {
@@ -1251,7 +1225,7 @@
       {
         "id": "ticket-sidekick.jiraGettingStarted",
         "title": "Ticket Sidekick: Jira",
-        "description": "Set up @jira and create your first ticket.",
+        "description": "Set up Jira and create your first ticket from a Copilot chat.",
         "steps": [
           {
             "id": "jiraBaseUrl",

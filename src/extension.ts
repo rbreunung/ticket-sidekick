@@ -1,18 +1,10 @@
 import * as vscode from 'vscode';
-import * as os from 'os';
-import * as path from 'path';
 import { ConfigService } from './services/ConfigService';
-import { createJiraParticipant } from './participant/JiraParticipant';
 import { createBitbucketParticipant } from './participant/BitbucketParticipant';
-import { endBitbucketSessions } from './participant/reviewSessionState';
-import {
-  checkEmailBatchCaps, parseEmlFiles, describeEmailFileSelection, EMAIL_TEMPLATE_SESSION_KEY, EMAIL_CLEANUP_SESSION_KEY,
-} from './participant/jira/emailHandler';
-import { buildPendingEmailCleanupSession } from './participant/sessionState';
 import { registerBitbucketTools } from './tools/bitbucketTools';
 import { registerJiraTools } from './tools/registerJiraTools';
 import type { BoardStats } from './boards/boardPanels';
-import { registerDefaultProjectCheck } from './participant/jira/defaultProjectNotice';
+import { registerDefaultProjectCheck } from './services/defaultProjectNotice';
 
 /** What `activate` returns: read only by the tests that drive a real VS Code. */
 export interface TicketSidekickApi {
@@ -106,58 +98,8 @@ export function activate(context: vscode.ExtensionContext): TicketSidekickApi {
         vscode.window.showInformationMessage('Ticket Sidekick: Bitbucket Cloud credentials saved.');
       }
     }),
-
-    // R1/KTD1: selects one or more .eml files and hands off into the same email flow the
-    // chat-triggered picker uses (emailHandler.ts). KTD8: stores a `pending` EmailCleanupSession; the
-    // chat turn opened below runs boilerplate detection (and asks for model consent there, since the
-    // model is only reachable from a chat request), then continues into the template pick.
-    vscode.commands.registerCommand('ticket-sidekick.importEml', async () => {
-      const uris = await vscode.window.showOpenDialog({
-        canSelectMany: true,
-        filters: { 'Email files': ['eml'] },
-        defaultUri: vscode.Uri.file(path.join(os.homedir(), 'Downloads')),
-        title: 'Select .eml file(s) to import',
-      });
-      if (!uris || uris.length === 0) return;
-
-      const capError = await checkEmailBatchCaps(uris);
-      if (capError) {
-        vscode.window.showErrorMessage(`Ticket Sidekick: ${capError}`);
-        return;
-      }
-
-      const config = await configService.getConfig();
-      if (!config.baseUrl || !config.token) {
-        vscode.window.showErrorMessage('Ticket Sidekick: Configure Jira credentials first.');
-        return;
-      }
-
-      const items = await parseEmlFiles(uris, failures => {
-        vscode.window.showWarningMessage(`Ticket Sidekick: Could not import ${failures.length} file(s): ${failures.join('; ')}`);
-      }, 'extension');
-      if (items.length === 0) {
-        vscode.window.showErrorMessage('Ticket Sidekick: No emails could be imported.');
-        return;
-      }
-
-      const projectKey = vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '';
-      if (!projectKey) {
-        vscode.window.showErrorMessage('Ticket Sidekick: Set ticketSidekick.jira.defaultProject in VS Code settings before importing email.');
-        return;
-      }
-
-      const session = buildPendingEmailCleanupSession(items, {
-        kind: 'batch', projectKey, fileName: describeEmailFileSelection(items),
-      });
-      // A template session left over from an earlier import must not be resumed instead of this one.
-      await context.workspaceState.update(EMAIL_TEMPLATE_SESSION_KEY, undefined);
-      await context.workspaceState.update(EMAIL_CLEANUP_SESSION_KEY, session);
-      await vscode.commands.executeCommand('workbench.action.chat.open', { query: '@jira create from email' });
-    }),
   );
 
-  // A Jira request moves the user on from a Bitbucket review, so it ends that review's session.
-  createJiraParticipant(context, configService, () => endBitbucketSessions(context.workspaceState));
   createBitbucketParticipant(context, configService);
   registerBitbucketTools(context, configService);
   // The Jira tools for Copilot (language model tools) and the boards they open in editor tabs.
