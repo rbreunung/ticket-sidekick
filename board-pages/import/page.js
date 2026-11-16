@@ -531,7 +531,7 @@ function render(view, board, locked, state) {
   ].filter(Boolean).join(' '));
 
   return h('div', {},
-    h('p', { class: 'muted' }, `${view.reportKind} report ${view.reportFile} in ${view.project}. Template "${view.template}", issue type ${view.issueType}.`),
+    h('p', { class: 'muted' }, `${ctx.email ? `Emails: ${view.reportFile}` : `${view.reportKind} report ${view.reportFile}`} in ${view.project}. Template "${view.template}", issue type ${view.issueType}.`),
     reportMissing ? h('section', { class: 'banner error', 'aria-label': 'Report file missing' },
       h('p', {}, 'The report file is missing, so nothing can be written. Your choices are kept. Pick the file at its new place to go on.'),
       h('vscode-button', { id: 'pick-file-again', disabled: locked, onClick: () => board.pickFile() }, 'Pick the file again…')) : null,
@@ -544,11 +544,12 @@ function render(view, board, locked, state) {
       h('p', {}, 'Refresh could not keep these choices:'),
       h('ul', {}, view.dropped.map(d => h('li', {}, d))),
       h('vscode-button', { id: 'dismiss-dropped', secondary: true, disabled: locked, onClick: () => board.act({ type: 'dismiss-dropped' }) }, 'Dismiss')) : null,
-    h('div', { class: 'bar' },
+    // Reload, the security overview export and the matched-ticket search belong to Veracode and Waltz reports.
+    ctx.email ? null : h('div', { class: 'bar' },
       h('vscode-button', { id: 'reload-report', secondary: true, disabled: locked || writesOff, onClick: () => { previewTab = shown; return board.preview({ type: 'reload-report' }); } }, 'Reload report…'),
       h('vscode-button', { id: 'save-csv', secondary: true, disabled: locked, onClick: () => board.save('csv') }, 'Save overview as CSV…'),
       h('vscode-button', { id: 'save-xlsx', secondary: true, disabled: locked, onClick: () => board.save('xlsx') }, 'Save overview as Excel…')),
-    searchBox(view, board, locked),
+    ctx.email ? null : searchBox(view, board, locked),
     tablist({ label: 'Groups', tabs, selected: shown, onSelect: select }),
     tabpanel(shown, body));
 }

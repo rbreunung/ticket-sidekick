@@ -136,10 +136,10 @@ What the `@jira` import did and what the import board does with it. The list is 
 
 | # | Decision | Needed before |
 | --- | --- | --- |
-| Q1 | Can the extension call a language model outside a chat participant on the managed machine, also with the Local harness disallowed? The review board and the email check depend on it | O12, O8. If not, the review design is reopened before `@bitbucket` is removed |
+| Q1 | Answered yes on 2026-11-16: on the managed machine with VS Code 1.146 and the Local harness hidden (`chat.editor.localAgent.enabled: false`; the `vscode.temporaryAllowLocalHarness` policy can only be set by the organisation), the import start screen listed the models, saved the pick and got "The model answered." from a call outside any chat request. Not tested with the organisation policy itself set | — |
 | Q2 | Do the Bitbucket tools move into the catalog shape of the Jira tools (`defineTool`, generated `package.json` entries), or stay as they are with one tool added? | O13 |
 | Q3 | How the review board shows progress during a long review, and whether it opens before or after the passes finish | O12 |
-| Q4 | Whether the organisation plans to turn the Local harness off, and when. It changes urgency, not scope | — |
+| Q4 | Whether the organisation plans to turn the Local harness off, and when. It changes urgency, not scope. VS Code 1.146's release notes deprecate the Local harness and announce its removal for February 2027, so the participants stop working then at the latest | — |
 | Q5 | Mark the participants as deprecated in the chat UI now (O18), or only in the documentation? | Next release |
 
 ## 5. Not verified
