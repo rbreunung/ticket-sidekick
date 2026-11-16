@@ -10,6 +10,10 @@ import { JiraApiError } from '../../utils/apiError';
 import type { ReportImportDescriptor } from '../../imports/descriptor';
 import type { ReviewRowBase } from '../../imports/types';
 import {
+  EMAIL_MODEL_SETTING, checkModelAnswers, emailModelInUse, modelLabel,
+  type BoardModelInfo, type BoardModels, type ModelCheck, type ModelSettings, type ModelSource,
+} from '../boardModels';
+import {
   REPORT_KINDS, REPORT_KIND_LABELS, emailRecipe, importSessionId, isReportKind, normaliseEmailPaths, normaliseReportPath,
   type ImportRecipe, type ReportKind,
 } from './recipe';
@@ -80,6 +84,9 @@ export interface ImportStartDeps {
   /** The open dialog for one or more `.eml` files; undefined when it was cancelled. */
   pickEmailFiles(): Promise<string[] | undefined>;
   emailFiles: EmailFilesReader;
+  /** The models a board may call, and the two model settings; without them the email import shows no model. */
+  models?: BoardModels;
+  modelSettings?: ModelSettings;
   /** Opens VS Code's Settings at this setting. */
   openSetting(key: string): Promise<void>;
   hasSession(id: string): Promise<boolean>;
@@ -124,6 +131,17 @@ export interface StartScreenView {
     typed?: boolean;
     warning?: string;
   };
+  /**
+   * An email import's model for the boilerplate check: the one in use and where it comes from, the
+   * models to pick from, and the result of the one-call check after a pick. Not needed to open the import.
+   */
+  emailModel?: {
+    settingKey: string;
+    inUse?: { id: string; label: string; source: ModelSource };
+    options?: Array<{ id: string; label: string }>;
+    listProblem?: string;
+    check?: { ok: boolean; message: string };
+  };
   /** The Jira setup hint, shown instead of Open while Jira is not configured. */
   jiraHint?: string;
   /** An import of this file in this project is stored already: Open shows it as it is, Start over begins again. */
@@ -158,6 +176,10 @@ export class ImportStartScreen {
   private reports = new Map<string, ReportResult>();
   /** Issue types of the projects read so far; only successful reads are kept. */
   private projects = new Map<string, string[]>();
+  /** The models available, once listed; listed again after a pick. */
+  private modelList?: BoardModelInfo[];
+  /** The last one-call check of a model, shown until another model is picked or checked. */
+  private modelCheck?: ModelCheck;
   /** Jira's project list, once read; a failed read is tried again on the next view. */
   private projectList?: Array<{ key: string; name: string }>;
 
@@ -252,6 +274,24 @@ export class ImportStartScreen {
         this.state.issueType = { template: view.template.name, name };
         return this.view();
       }
+      case 'model': {
+        const { models, modelSettings } = this.deps;
+        if (!models || !modelSettings) throw new SessionError(404, 'Unknown request.');
+        const id = stringOf(body.id, 'model');
+        const list = await this.listModels();
+        if (!('models' in list) || !list.models.some(m => m.id === id)) throw new SessionError(400, 'That model is not available.');
+        await modelSettings.writeEmailModel(id);
+        this.deps.onDiag?.('info', 'Email check model setting saved', { setting: EMAIL_MODEL_SETTING, modelId: id });
+        this.modelCheck = await checkModelAnswers(models, id, this.deps.onDiag);
+        return this.view();
+      }
+      case 'model-check': {
+        const { models, modelSettings } = this.deps;
+        const inUse = modelSettings ? emailModelInUse(modelSettings) : undefined;
+        if (!models || !inUse) throw new SessionError(409, 'No model is set for the email check.');
+        this.modelCheck = await checkModelAnswers(models, inUse.id, this.deps.onDiag);
+        return this.view();
+      }
       case 'open':
         return this.open(false);
       case 'start-over':
@@ -272,6 +312,40 @@ export class ImportStartScreen {
     this.state.reportPath = reportPath;
     // A file picked again is read again: it may have been replaced.
     this.reports.delete(`${this.state.kind}\n${reportPath}`);
+  }
+
+  private async listModels(): Promise<{ models: BoardModelInfo[] } | { problem: string }> {
+    if (this.modelList) return { models: this.modelList };
+    try {
+      this.modelList = await this.deps.models!.list();
+      return { models: this.modelList };
+    } catch (err) {
+      this.deps.onDiag?.('warn', 'Could not list the language models on the import start screen', { error: errorText(err) });
+      return { problem: errorText(err) };
+    }
+  }
+
+  /** The email import's model row: what is in use, what can be picked, and the last check. */
+  private async emailModelView(): Promise<StartScreenView['emailModel']> {
+    const { models, modelSettings } = this.deps;
+    if (!models || !modelSettings) return undefined;
+    const view: NonNullable<StartScreenView['emailModel']> = { settingKey: EMAIL_MODEL_SETTING };
+    const list = await this.listModels();
+    const known = 'models' in list ? list.models : [];
+    const inUse = emailModelInUse(modelSettings);
+    if (inUse) {
+      const model = known.find(m => m.id === inUse.id);
+      view.inUse = { id: inUse.id, label: model ? modelLabel(model) : inUse.id, source: inUse.source };
+    }
+    if ('problem' in list) view.listProblem = `The language models could not be listed: ${list.problem}`;
+    else if (known.length === 0) view.listProblem = 'No language model is available in this VS Code. Sign in to GitHub Copilot to use the model check.';
+    else view.options = known.map(m => ({ id: m.id, label: modelLabel(m) }));
+    if (this.modelCheck && (!inUse || this.modelCheck.modelId === inUse.id)) {
+      view.check = this.modelCheck.ok
+        ? { ok: true, message: 'The model answered.' }
+        : { ok: false, message: `The model did not answer: ${this.modelCheck.error}` };
+    }
+    return view;
   }
 
   private setEmails(filePaths: string[]): void {
@@ -470,6 +544,7 @@ export class ImportStartScreen {
         ...(project.askReason ? { options: project.options ?? [], askReason: project.askReason, ...(project.listWarning ? { listWarning: project.listWarning } : {}) } : {}),
       },
       template, issueType,
+      ...(kind === 'email' ? { emailModel: await this.emailModelView() } : {}),
       ...(jiraHint ? { jiraHint } : {}),
       stored,
       canOpen: blocker === undefined,

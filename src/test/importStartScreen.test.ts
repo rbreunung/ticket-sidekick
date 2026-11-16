@@ -35,6 +35,10 @@ let openedSettings: string[];
 let readers: Partial<Record<ReportKind, ReportReader>>;
 let nextEmails: string[] | undefined;
 let unreadable: Set<string>;
+let modelSettings: { email: string; review: string };
+let available: Array<{ id: string; name: string; vendor: string; family: string }>;
+let modelFails: Error | undefined;
+let modelCalls: string[];
 
 const fakeReader = (items = 3): ReportReader => ({
   read: async () => ({ items: Array.from({ length: items }, (_, i) => i), rawItems: [] }),
@@ -70,6 +74,15 @@ function deps(): ImportStartDeps {
       checkCaps: async paths => (paths.length > 50 ? `Selected ${paths.length} files — the batch limit is 50.` : null),
       read: async filePath => { if (unreadable.has(path.basename(filePath))) throw new Error('not an email'); return {}; },
     },
+    models: {
+      list: async () => available,
+      send: async id => { modelCalls.push(id); if (modelFails) throw modelFails; return 'ready'; },
+    },
+    modelSettings: {
+      emailModel: () => modelSettings.email,
+      reviewModel: () => modelSettings.review,
+      writeEmailModel: async id => { modelSettings.email = id; },
+    },
     openSetting: async key => { openedSettings.push(key); },
     hasSession: async id => stored.has(id),
     discardSession: async id => { discarded.push(id); stored.delete(id); },
@@ -96,6 +109,10 @@ beforeEach(async () => {
   settings = { veracode: '', waltz: '', email: '' };
   nextEmails = undefined;
   unreadable = new Set();
+  modelSettings = { email: '', review: '' };
+  available = [{ id: 'm1', name: 'Model One', vendor: 'copilot', family: 'one' }];
+  modelFails = undefined;
+  modelCalls = [];
   writes = [];
   templates = [{ name: 'OSS finding', issueType: 'Vulnerability' }, { name: 'Plain', issueType: undefined } as JiraTemplate];
   defaultProject = 'PROJ';
@@ -457,5 +474,55 @@ describe('an email import', () => {
     expect(view.template.askReason).toMatch(/ticketSidekick\.email\.template is empty/);
     await screen.handle('template', { name: 'OSS finding' });
     expect(writes).toEqual([['email', 'OSS finding']]);
+  });
+});
+
+describe('the model for the email check', () => {
+  async function emailView(): Promise<{ screen: ImportStartScreen; view: StartScreenView }> {
+    const screen = new ImportStartScreen(deps());
+    const view = await screen.handle('kind', { kind: 'email' }) as StartScreenView;
+    return { screen, view };
+  }
+
+  it('offers the available models when no model is set, without calling one', async () => {
+    const { view } = await emailView();
+    expect(view.emailModel).toEqual({ settingKey: 'ticketSidekick.email.checkModel', options: [{ id: 'm1', label: 'Model One (copilot)' }] });
+    expect(modelCalls).toEqual([]);
+  });
+
+  it('shows the review model as in use when the email setting is empty', async () => {
+    modelSettings.review = 'm1';
+    const { view } = await emailView();
+    expect(view.emailModel!.inUse).toEqual({ id: 'm1', label: 'Model One (copilot)', source: 'review' });
+  });
+
+  it('saves a picked model and shows that it answered', async () => {
+    const { screen } = await emailView();
+    const view = await screen.handle('model', { id: 'm1' }) as StartScreenView;
+    expect(modelSettings.email).toBe('m1');
+    expect(modelCalls).toEqual(['m1']);
+    expect(view.emailModel!.check).toEqual({ ok: true, message: 'The model answered.' });
+  });
+
+  it('keeps the pick and shows why the model did not answer', async () => {
+    modelFails = new Error('Extension is not allowed to use language models');
+    const { screen } = await emailView();
+    const view = await screen.handle('model', { id: 'm1' }) as StartScreenView;
+    expect(modelSettings.email).toBe('m1');
+    expect(view.emailModel!.check).toEqual({ ok: false, message: 'The model did not answer: Extension is not allowed to use language models' });
+  });
+
+  it('says so when no model is available', async () => {
+    available = [];
+    const { view } = await emailView();
+    expect(view.emailModel!.listProblem).toMatch(/No language model is available/);
+    expect(view.emailModel!.options).toBeUndefined();
+  });
+
+  it('refuses a model that is not available and is not shown for the other kinds', async () => {
+    const { screen } = await emailView();
+    await expect(screen.handle('model', { id: 'other' })).rejects.toMatchObject({ status: 400 });
+    const veracode = await screen.handle('kind', { kind: 'veracode' }) as StartScreenView;
+    expect(veracode.emailModel).toBeUndefined();
   });
 });

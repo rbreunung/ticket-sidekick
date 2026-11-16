@@ -118,6 +118,7 @@ A board (the security report, a ticket list, an import, and later reviews) keeps
 | Email batch size limit (MB) | `ticketSidekick.email.maxBatchSizeMB` | `150` |
 | Email boilerplate patterns | `ticketSidekick.email.boilerplatePatterns` | `[]` |
 | Email import template | `ticketSidekick.email.template` | `""` |
+| Email check model | `ticketSidekick.email.checkModel` | `""` |
 | Veracode min severity | `ticketSidekick.veracode.minSeverity` | `4` |
 | Veracode included statuses | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` |
 | Veracode report size limit (MB) | `ticketSidekick.veracode.maxReportSizeMB` | `50` |
@@ -183,6 +184,7 @@ Known confidentiality headers, legal footers and signatures to remove from impor
 | Diff context lines | `ticketSidekick.bitbucket.reviewContextLines` | `12` |
 | Confidence threshold | `ticketSidekick.bitbucket.confidenceThreshold` | `0.7` |
 | Detailed diagnostics | `ticketSidekick.bitbucket.detailedDiagnostics` | `false` |
+| Review model | `ticketSidekick.bitbucket.reviewModel` | `""` |
 | Show token usage | `ticketSidekick.bitbucket.showTokenUsage` | `false` |
 
 **Optional: Bitbucket connection info banner**

@@ -81,6 +81,23 @@ function issueTypeCell() {
   return h('span', { class: 'muted' }, 'Read from the project once Jira and the project are set.');
 }
 
+// The model of the email boilerplate check: picking one saves it and asks the model once, so the
+// developer sees at once whether a model answers from a board.
+function modelCell() {
+  const model = view.emailModel;
+  const source = { email: `from ${model.settingKey}`, review: 'from ticketSidekick.bitbucket.reviewModel' };
+  return [
+    model.inUse ? [h('span', {}, model.inUse.label), h('span', { class: 'muted' }, ` (${source[model.inUse.source]})`), ' ']
+      : h('p', { class: 'muted' }, 'No model is set. Pick one; it is only used when you agree to the model check of an email.'),
+    model.options ? h('select', { id: 'email-model', 'aria-label': 'Model for the email check', disabled: busy, onChange: e => { if (e.target.value) void run('model', { id: e.target.value }); } },
+      h('option', { value: '', selected: true }, model.inUse ? 'Pick another model…' : 'Choose a model…'),
+      model.options.map(m => h('option', { value: m.id }, m.label))) : null,
+    model.inUse ? [' ', h('vscode-button', { id: 'email-model-check', secondary: true, disabled: busy, onClick: () => run('model-check') }, 'Check the model')] : null,
+    model.listProblem ? h('p', { class: 'banner' }, model.listProblem) : null,
+    model.check ? h('p', { class: model.check.ok ? 'banner' : 'banner error', role: 'status' }, model.check.message) : null,
+  ];
+}
+
 function projectCell() {
   const { project } = view;
   if (project.askReason) {
@@ -126,7 +143,8 @@ function paint() {
       view.report.problem ? row('', h('p', { class: 'banner error', role: 'alert' }, view.report.problem)) : null,
       row('Project', projectCell()),
       row('Template', templateCell()),
-      row('Issue type', issueTypeCell()))),
+      row('Issue type', issueTypeCell()),
+      view.emailModel ? row('Model for the email check', modelCell()) : null)),
     view.stored ? h('p', { class: 'banner' }, 'An import of this file in this project is stored. Open shows it as it is, with the template it was started with; Start over discards it and starts again with the template above.') : null,
     actions(),
   ] : [h('p', { class: 'muted' }, 'Reading the settings…')];

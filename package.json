@@ -1031,6 +1031,12 @@
             "default": false,
             "description": "When enabled, each review additionally emits a single fenced structured run record to the \"Ticket Sidekick\" output channel — run configuration, per-call records, and the findings funnel with drop reasons — copy-pasteable as one block for comparing runs or filing a provider bug report."
           },
+          "ticketSidekick.bitbucket.reviewModel": {
+            "type": "string",
+            "scope": "application",
+            "default": "",
+            "description": "The id of the language model the pull request review uses once reviews run on a board. Today the email boilerplate check falls back to it when ticketSidekick.email.checkModel is empty; @bitbucket still reviews with the model picked in the chat."
+          },
           "ticketSidekick.bitbucket.showTokenUsage": {
             "type": "boolean",
             "default": false,
@@ -1051,6 +1057,12 @@
             "type": "string",
             "default": "",
             "description": "Name of the template in .jira-templates.json that an email import on the import board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the import board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
+          },
+          "ticketSidekick.email.checkModel": {
+            "type": "string",
+            "scope": "application",
+            "default": "",
+            "description": "The id of the language model the email boilerplate check uses, after you agree to it for an email on the import board. When empty, the model in ticketSidekick.bitbucket.reviewModel is used; when both are empty, the import board asks you to pick one and saves it here."
           },
           "ticketSidekick.email.maxBatchSizeMB": {
             "type": "number",

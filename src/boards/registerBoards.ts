@@ -8,6 +8,7 @@ import { createVeracodeDescriptor } from '../imports/veracode';
 import { createWaltzDescriptor } from '../imports/waltz';
 import { checkEmailBatchCaps, createEmailDescriptor } from '../imports/email';
 import { parseEmlFile } from '../utils/emlParser';
+import { EMAIL_MODEL_SETTING, REVIEW_MODEL_SETTING, type BoardModels, type ModelSettings } from './boardModels';
 import { emailSettings, veracodeSettings, waltzSettings } from '../services/importSettings';
 import { registerKind } from '../sessions/boardKind';
 import { SessionManager } from '../sessions/sessionManager';
@@ -55,6 +56,41 @@ function importDescriptors(workspaceFolder: () => string | undefined, log: (leve
     veracode: createVeracodeDescriptor(veracodeSettings, { reviewColumns: [], onDiag: log }),
     waltz: createWaltzDescriptor(waltzSettings(workspaceFolder), { reviewColumns: [], onDiag: log }),
     email: createEmailDescriptor(emailSettings, { onDiag: log }),
+  };
+}
+
+/** The models a board calls, over VS Code's language model API: no chat request is needed. */
+export function vscodeBoardModels(justification: string): BoardModels {
+  return {
+    list: async () => (await vscode.lm.selectChatModels()).map(m => ({ id: m.id, name: m.name, vendor: m.vendor, family: m.family })),
+    send: async (id, prompt, cancel) => {
+      const [model] = await vscode.lm.selectChatModels({ id });
+      if (!model) throw new Error(`The model ${id} is not available.`);
+      const source = new vscode.CancellationTokenSource();
+      if (cancel?.isCancellationRequested) source.cancel();
+      cancel?.onCancellationRequested?.(() => source.cancel());
+      try {
+        const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], { justification }, source.token);
+        let text = '';
+        for await (const chunk of response.text) text += chunk;
+        return text;
+      } finally {
+        source.dispose();
+      }
+    },
+  };
+}
+
+/** The email check's and the review's model settings; a pick is saved for the user, since models belong to the user, not the workspace. */
+export function vscodeModelSettings(): ModelSettings {
+  const read = (key: string) => {
+    const value = vscode.workspace.getConfiguration().get<unknown>(key);
+    return typeof value === 'string' ? value : '';
+  };
+  return {
+    emailModel: () => read(EMAIL_MODEL_SETTING),
+    reviewModel: () => read(REVIEW_MODEL_SETTING),
+    writeEmailModel: async id => { await vscode.workspace.getConfiguration().update(EMAIL_MODEL_SETTING, id, vscode.ConfigurationTarget.Global); },
   };
 }
 
@@ -187,6 +223,8 @@ export function registerBoards(
       checkCaps: filePaths => checkEmailBatchCaps(filePaths, emailSettings.maxBatchBytes()),
       read: filePath => parseEmlFile(filePath),
     },
+    models: vscodeBoardModels('Ticket Sidekick checks imported emails for boilerplate such as signatures and legal footers.'),
+    modelSettings: vscodeModelSettings(),
     openSetting: async key => { await vscode.commands.executeCommand('workbench.action.openSettings', key); },
     // The stored list, not a lookup: looking a session up would start its background check.
     hasSession: async id => (await manager.list()).some(s => s.kind === IMPORT_KIND && s.id === id),
