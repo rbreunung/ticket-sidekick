@@ -343,6 +343,7 @@ async function applyNew(
       } else {
         try {
           let dropped: string[] | undefined;
+          let afterFailed: string | undefined;
           let row = engineRow(group, review, descriptor);
           if (isEmailRow(row)) {
             const fresh = await emailRowForWrite(row, chosenEmailBody(working.ext, row.emlFilePath));
@@ -355,11 +356,16 @@ async function applyNew(
           }
           const outcome = await createTicketForRow(row, review, ticketService, descriptor, baseUrl, undefined, {
             onDiag: deps.onDiag,
-            onEvent: event => { if (event.kind === 'created') dropped = event.droppedFields; },
+            onEvent: event => {
+              if (event.kind === 'created') dropped = event.droppedFields;
+              else if (event.kind === 'after-create-failed') afterFailed = event.error;
+            },
           });
           if ('key' in outcome) {
             record(dedupKeysOf(group), outcome.key);
-            results.push({ target: `${groupRef(group)}: ${outcome.key}`, outcome: 'done', ...(dropped?.length ? { reason: droppedFieldsNote(dropped) } : {}) });
+            // The ticket exists either way; a failed step after it (an email's attachment upload) is said on its line.
+            const notes = [dropped?.length ? droppedFieldsNote(dropped) : undefined, afterFailed].filter((n): n is string => !!n);
+            results.push({ target: `${groupRef(group)}: ${outcome.key}`, outcome: 'done', ...(notes.length ? { reason: notes.join(' ') } : {}) });
           } else {
             results.push({ target: groupRef(group), outcome: 'failed', reason: outcome.error });
           }

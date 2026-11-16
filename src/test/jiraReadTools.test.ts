@@ -999,6 +999,24 @@ describe('opening the import board', () => {
     expect(opened.map(o => (o.input as { reportPath?: string }).reportPath)).toEqual([file, file]);
   });
 
+  it('opens an email import for dragged .eml files and says the user agreed by dragging them', async () => {
+    const opened: Array<{ kind: string; input: unknown }> = [];
+    const dir = makeTempDir();
+    const files = [path.join(dir, 'a.eml'), path.join(dir, 'b.EML')];
+    await callTool(OPEN_BOARD_TOOL, { board: 'import', kind: 'email', paths: files, dragged: true }, { opened });
+    expect(opened).toEqual([{ kind: 'import-start', input: { kind: 'email', reportPaths: files, emailConsent: true, openWhenReady: true } }]);
+  });
+
+  it('refuses an email path that is not an .eml file or lies in a dotfolder, and opens nothing', async () => {
+    const opened: Array<{ kind: string; input: unknown }> = [];
+    const dir = makeTempDir();
+    const notEmail = await callTool(OPEN_BOARD_TOOL, { board: 'import', kind: 'email', paths: [path.join(dir, 'a.eml'), path.join(dir, 'id_rsa')] }, { opened });
+    expect(notEmail).toMatch(/^Not opened: ".*id_rsa" is not an \.eml file/);
+    const hidden = await callTool(OPEN_BOARD_TOOL, { board: 'import', kind: 'email', paths: [path.join(dir, '.ssh', 'mail.eml')] }, { opened });
+    expect(hidden).toMatch(/^Not opened: ".*mail\.eml" is not an \.eml file outside a dotfile or dotfolder/);
+    expect(opened).toEqual([]);
+  });
+
   it('refuses a report on another machine and opens nothing, so no network connection is made', async () => {
     const opened: Array<{ kind: string; input: unknown }> = [];
     for (const p of ['\\\\fileserver\\share\\oss.xlsx', '//fileserver/share/oss.xlsx', 'file://fileserver/share/oss.xlsx']) {

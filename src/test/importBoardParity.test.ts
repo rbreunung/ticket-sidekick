@@ -227,7 +227,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
   },
   'email-keep': {
     actions: ['cleanup-keep'],
-    tests: [[CLEANUP, 'keeps everything on keep, and leaves an email out of the strip when it is unticked']],
+    tests: [[CLEANUP, 'keeps everything on keep, and then lets the tickets be created']],
   },
   'email-model-check': {
     actions: ['cleanup-check', 'cleanup-skip'],
@@ -239,7 +239,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
   },
   'email-rows': {
     actions: ['cleanup-exclude'],
-    tests: [[CLEANUP, 'keeps everything on keep, and leaves an email out of the strip when it is unticked']],
+    tests: [[CLEANUP, 'leaves an email out of the strip when it is unticked']],
   },
   'email-save': {
     actions: ['cleanup-save'],

@@ -14,9 +14,11 @@ Download the email from OWA using **More actions → Download message** to save 
 4. **Open**. If boilerplate was found, or an email can be checked by the model, the [cleanup step](#removing-confidentiality-headers-footers-and-signatures) comes first
 5. Each email is a row on the **New** tab. Create tickets for the selected emails, or add emails to an existing ticket as comments, each after a preview and **Apply**. Creating more than one ticket asks you to confirm in a VS Code dialog
 
-Each ticket gets the email's subject as its summary and its body as the description. Tables in the email body (including those written in desktop Outlook or Word) arrive as Jira tables with a header row, and empty cells stay empty. A table that only lays out a signature or logo is flattened into plain lines. Inline images are uploaded as Jira attachments and embedded as thumbnails at their position; file attachments are uploaded to the ticket. A failed upload is named in the result and does not fail the ticket. Individual attachments larger than 25 MB are rejected with a clear message.
+Each ticket gets the email's subject as its summary and its body as the description. Tables in the email body (including those written in desktop Outlook or Word) arrive as Jira tables with a header row, and empty cells stay empty. A table that only lays out a signature or logo is flattened into plain lines. Inline images are uploaded as Jira attachments and embedded as thumbnails at their position; file attachments are uploaded to the ticket. A failed upload is named on that email's result line and does not fail the ticket; the `.eml` file is then kept, even with `ticketSidekick.email.deleteEmlAfterImport` on, so the attachment is not lost. Individual attachments larger than 25 MB are rejected with a clear message.
 
-The board does not keep the attachments themselves: it reads them from the `.eml` file again when it writes. If a file was moved or deleted in the meantime, that email is not written and the result says so; the other emails are written.
+The board does not keep the attachments themselves: it reads them from the `.eml` file again when it writes. If a file was moved or deleted in the meantime, or another email was saved under the same name, that email is not written and the result says so; the other emails are written. After **Refresh** a changed email is read again, and if the cleanup had already stripped or kept its boilerplate, the cleanup asks again.
+
+When the board deleted every `.eml` file after creating its tickets, it stays finished and offers **Close**.
 
 ### Likely repeats
 

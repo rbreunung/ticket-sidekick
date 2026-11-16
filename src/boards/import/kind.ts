@@ -1,5 +1,6 @@
 import * as path from 'path';
 import type { BoardKind, CheckMode, Validated } from '../../sessions/boardKind';
+import { forgetChangedEmails } from './cleanupStage';
 import { handlerOf } from './handlers';
 import { IMPORT_HANDLERS } from './registry';
 import { newGroupRefs } from './newTab';
@@ -11,7 +12,7 @@ import type { AcceptedHidden, TicketedAction } from '../../imports/types';
 import { countedNoun } from '../../utils/chatPrimitives';
 import type { DateKind } from '../../utils/waltzDates';
 import {
-  isEmailRow, isLeftOut, newRows, readImport, rowKeyOf, slicesOf, staleTickets, ticketedRows,
+  ReportNotFoundError, isEmailRow, isLeftOut, newRows, readImport, rowKeyOf, slicesOf, staleTickets, ticketedRows,
   type ImportData, type ImportDeps, type ImportRow, type ImportTab, type SliceEntry,
 } from './read';
 import {
@@ -265,6 +266,25 @@ function missingFilesNotice(data: ImportData, writes: ImportWrites): string | un
   const missing = (data.missingFiles ?? []).filter(f => !created.has(f));
   if (missing.length === 0) return undefined;
   return `${countedNoun(missing.length, 'email file(s)')} no longer there: ${missing.map(f => path.basename(f)).join(', ')}. Their emails are not on the board.`;
+}
+
+/**
+ * An email import whose files are all gone is not found, unless the board deleted them itself after
+ * creating their tickets: then the import is finished. Answers the first file the board did not
+ * delete, or undefined.
+ */
+function lostEmailFile(session: ImportSession, data: ImportData): string | undefined {
+  const paths = recipePaths(session.recipe);
+  if (session.recipe.kind !== 'email' || (data.missingFiles ?? []).length < paths.length) return undefined;
+  const created = createdKeySet(session.working.writes);
+  return paths.find(p => !created.has(p));
+}
+
+/** The row keys of the emails whose file content differs between two readings. */
+function changedEmailKeys(before: ImportData, after: ImportData): string[] {
+  const hashes = (data: ImportData) => new Map(newRows(data).filter(isEmailRow).map(r => [rowKeyOf(data, r), r.contentHash]));
+  const was = hashes(before);
+  return [...hashes(after)].filter(([key, h]) => was.has(key) && was.get(key) !== h).map(([key]) => key);
 }
 
 const DATE_LABELS: Record<DateKind, string> = { policy: 'Policy date', planned: 'Planned date', attestation: 'Attestation date', due: 'Due Date' };
@@ -568,8 +588,11 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
   read: (recipe, deps) => readImport(recipe, deps),
 
   reconcile: (current, fresh, mode: CheckMode) => {
+    const lost = lostEmailFile(current, fresh.data);
+    if (lost) throw new ReportNotFoundError(lost);
     const tabs = tabsOf(current.recipe);
-    const session: ImportSession = { ...current, working: { ...current.working, writes: writesFor(current, fresh) } };
+    const working = forgetChangedEmails(current.working, changedEmailKeys(current.derived.data, fresh.data));
+    const session: ImportSession = { ...current, working: { ...working, writes: writesFor(current, fresh) } };
     if (mode === 'refresh') {
       // A running ticket merge works from the Already-ticketed reading it started from: a Refresh
       // takes every other tab and leaves that one marked until the merge ends.

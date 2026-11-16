@@ -87,7 +87,7 @@ function installCanned(c: Canned): void {
 }
 
 function newRow(n: number, extra: Partial<NewRowView> = {}): NewRowView {
-  return { id: `N${n}`, ref: `Flaw ${100 + n}`, summary: `${100 + n} - File${n}.java:1${n} - Hard-coded password`, rating: 'High', included: true, ...extra };
+  return { id: `N${n}`, ref: `Flaw ${100 + n}`, summary: `${100 + n} - File${n}.java:1${n} - Hard-coded password`, rating: 'High', included: true, group: `Flaw ${100 + n}`, ...extra };
 }
 
 function ticketedRow(n: number, extra: Partial<TicketedRowView> = {}): TicketedRowView {

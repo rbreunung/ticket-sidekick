@@ -606,11 +606,7 @@ question from an earlier review. A typed `done` under a comment preview acts
 like Cancel; under the smart-fallback question it ends that question. `/review` without a URL, or a message
 that is only `quick`, `smart` or `deep` (`isReviewStartWithoutUrl`,
 whole-message only so "is this quick to fix?" stays a follow-up), ends the
-session and falls through to the usual no-URL response. Any `@jira` request
-ends it too: `createJiraParticipant` takes an `onRequest` hook that
-`extension.ts` binds to `endBitbucketSessions`, because `@jira` runs in its
-own chat history and `@bitbucket` would otherwise still see the stored
-session. `check` and `usage` are neutral: they return the active session's
+session and falls through to the usual no-URL response. `check` and `usage` are neutral: they return the active session's
 marker so a live session survives them. Any LLM error surfaces as `**Follow-up failed: …**` with the
 session kept alive so the user can retry; a comment-preview refinement error
 surfaces as `**Refinement failed: …**` with the comment-preview session kept

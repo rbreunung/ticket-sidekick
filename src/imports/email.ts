@@ -136,15 +136,17 @@ export function createEmailDescriptor(
       const { uploaded, failures } = await uploadEmailAttachments(
         row.attachments, issueKey, (name, type, bytes) => ticketService.uploadAttachment(issueKey, name, type, bytes), onDiag,
       );
+      if (failures.length > 0) {
+        // The file stays, even with deleteEmlAfterImport on: it is the only copy of the attachments that did not upload.
+        const kept = settings.deleteEmlAfterImport() ? ' The .eml file was kept.' : '';
+        throw new Error(`Uploaded ${uploaded} of ${row.attachments.length} attachment(s); failed: ${failures.join('; ')}.${kept}`);
+      }
       if (settings.deleteEmlAfterImport()) {
         await fs.promises.unlink(row.emlFilePath).catch((err: unknown) => {
           onDiag?.('warn', `Could not delete .eml after import — ${path.basename(row.emlFilePath)}`, {
             emlFilePath: row.emlFilePath, error: err instanceof Error ? err.message : String(err),
           });
         });
-      }
-      if (failures.length > 0) {
-        throw new Error(`Uploaded ${uploaded} of ${row.attachments.length} attachment(s); failed: ${failures.join('; ')}`);
       }
     },
   };

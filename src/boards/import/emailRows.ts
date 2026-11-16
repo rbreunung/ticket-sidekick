@@ -1,5 +1,7 @@
+import { createHash } from 'crypto';
+import * as fs from 'fs';
 import * as path from 'path';
-import { parseEmlFile } from '../../utils/emlParser';
+import { parseEmlBuffer } from '../../utils/emlParser';
 import type { ReviewRowBase } from '../../imports/types';
 import type { EmailBoardRow } from './read';
 
@@ -13,6 +15,11 @@ export type EmailWriteRow = EmailBoardRow & ReviewRowBase;
 export interface EmailBodyChoice {
   markdownBody: string;
   droppedImages: string[];
+}
+
+/** The hash an email row keeps of its file's content as the board read it. */
+export function emailContentHash(content: Buffer): string {
+  return createHash('sha256').update(content).digest('hex').slice(0, 32);
 }
 
 function isMissing(err: unknown): boolean {
@@ -31,7 +38,12 @@ export function missingEmailFile(filePath: string): string {
 export async function emailRowForWrite(row: EmailWriteRow, body?: EmailBodyChoice): Promise<{ row: EmailWriteRow } | { refused: string }> {
   let attachments: EmailWriteRow['attachments'];
   try {
-    attachments = (await parseEmlFile(row.emlFilePath)).attachments;
+    const content = await fs.promises.readFile(row.emlFilePath);
+    // A different email saved under the same name would mix two emails in one ticket.
+    if (row.contentHash && emailContentHash(content) !== row.contentHash) {
+      return { refused: `The file ${path.basename(row.emlFilePath)} changed since the board read it, so nothing was written for this email. Refresh to read it again.` };
+    }
+    attachments = (await parseEmlBuffer(content, row.emlFilePath)).attachments;
   } catch (err) {
     if (isMissing(err)) return { refused: missingEmailFile(row.emlFilePath) };
     return { refused: `The file ${path.basename(row.emlFilePath)} could not be read again, so nothing was written for this email: ${err instanceof Error ? err.message : String(err)}` };

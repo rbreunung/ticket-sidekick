@@ -97,6 +97,23 @@ function withState(working: ImportWorking, state: CleanupState): ImportWorking {
   return { ...working, ext: { ...working.ext, [NAME]: state } };
 }
 
+/**
+ * Forgets what the cleanup found and chose for emails whose file changed since the board read it, so
+ * a stored body or a model's line ranges are never applied to another email's text. When one of them
+ * had cleanup state, the strip-or-keep decision is asked again.
+ */
+export function forgetChangedEmails(working: ImportWorking, changedKeys: string[]): ImportWorking {
+  const stored = working.ext[NAME] as Partial<CleanupState> | undefined;
+  if (!stored || changedKeys.length === 0) return working;
+  const state = stateOf(working);
+  const touched = changedKeys.filter(k => state.rows[k] || state.bodies?.[k]);
+  if (touched.length === 0) return working;
+  const rows = { ...state.rows };
+  for (const k of touched) delete rows[k];
+  const { decision: _decision, bodies: _bodies, ...rest } = state;
+  return withState(working, { ...rest, rows });
+}
+
 type EmailRow = EmailBoardRow & { id: string };
 
 function emailRows(data: ImportData): EmailRow[] {

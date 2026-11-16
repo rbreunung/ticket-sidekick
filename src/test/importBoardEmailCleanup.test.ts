@@ -113,7 +113,33 @@ describe('patterns', () => {
     expect(fs.readFileSync(a, 'utf8')).toContain('CONFIDENTIAL');
   });
 
-  it('keeps everything on keep, and leaves an email out of the strip when it is unticked', async () => {
+  it('keeps everything on keep, and then lets the tickets be created', async () => {
+    const a = emlFile(dir, 'a.eml', 'One', { body: `Body one.\n\n${DISCLAIMER}` });
+    let session = await openEmails([a]);
+    expect(cleanup(session).phase).toBe('preview');
+    session = act(session, { type: 'cleanup-keep' });
+    expect(cleanup(session).phase).toBe('done');
+    await apply(session, plan(session, { type: 'new-create' }));
+    expect(String(jira.createIssueCalls[0].additionalFields!.description)).toContain('CONFIDENTIAL');
+  });
+
+  it('asks again when an email changed on disk after the strip, so its old cleaned body is never written', async () => {
+    const a = emlFile(dir, 'a.eml', 'One', { body: `Body one.\n\n${DISCLAIMER}` });
+    let session = await openEmails([a]);
+    session = act(session, { type: 'cleanup-strip' });
+    expect(cleanup(session).phase).toBe('done');
+    emlFile(dir, 'a.eml', 'Two', { body: `Body two.\n\n${DISCLAIMER}` });
+    const fresh = await importKind.read(session.recipe, deps);
+    session = { ...session, ...importKind.reconcile(session, fresh, 'refresh') };
+    expect(cleanup(session).phase).toBe('preview');
+    session = act(session, { type: 'cleanup-strip' });
+    await apply(session, plan(session, { type: 'new-create' }));
+    const description = String(jira.createIssueCalls[0].additionalFields!.description);
+    expect(description).toContain('Body two.');
+    expect(description).not.toContain('Body one.');
+  });
+
+  it('leaves an email out of the strip when it is unticked', async () => {
     const a = emlFile(dir, 'a.eml', 'One', { body: `Body one.\n\n${DISCLAIMER}` });
     const b = emlFile(dir, 'b.eml', 'Two', { body: `Body two.\n\n${DISCLAIMER}` });
     let session = await openEmails([a, b]);

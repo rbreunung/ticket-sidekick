@@ -1,6 +1,6 @@
 # Jira Templates and Cleanup Rules
 
-`.jira-templates.json` defines per-application ticket templates and named cleanup rules. The Copilot tools create tickets from the templates (`jira_list_templates`, `jira_create_ticket`, `/ts-jira-create`, `/ts-jira-template`), and the ticket list board runs the cleanup rules; see [Jira Tools for Copilot Chats](copilot-tools.md) and [Boards](boards.md#cleanup). The Veracode, Waltz and email imports of `@jira` use the templates too. See the main [README](../../README.md) for setup first.
+`.jira-templates.json` defines per-application ticket templates and named cleanup rules. The Copilot tools create tickets from the templates (`jira_list_templates`, `jira_create_ticket`, `/ts-jira-create`, `/ts-jira-template`), and the ticket list board runs the cleanup rules; see [Jira Tools for Copilot Chats](copilot-tools.md) and [Boards](boards.md#cleanup). The import board's Veracode, Waltz and email imports use the templates too. See the main [README](../../README.md) for setup first.
 
 ## Templates and cleanup rules
 

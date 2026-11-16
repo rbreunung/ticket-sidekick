@@ -11,6 +11,7 @@ import type { DiagLogger } from '../../utils/diagTypes';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../../utils/waltzReport';
 import { parseEmlBuffer, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
+import { emailContentHash } from './emailRows';
 import { matchRepeats, subjectSearchTerm } from '../../imports/email';
 import { detectPatternBlocks, type BoilerplatePattern, type DetectedBlock } from '../../utils/emailBoilerplate';
 import { describeEmailModels, type BoardModels, type EmailModelChoice, type ModelSettings } from '../boardModels';
@@ -32,7 +33,8 @@ export interface RepeatTicket {
 }
 
 /** An email's row on the board: the chat's email row with its subject as the summary every tab shows, and the tickets it likely repeats. */
-export type EmailBoardRow = EmailReviewRow & { summary: string; repeatOf?: RepeatTicket[]; patternBlocks?: DetectedBlock[] };
+/** An email's New row; `contentHash` is the file as the board read it, so a write can tell the file changed since. */
+export type EmailBoardRow = EmailReviewRow & { summary: string; contentHash?: string; repeatOf?: RepeatTicket[]; patternBlocks?: DetectedBlock[] };
 
 export type ImportRow = (VeracodeReviewRow | WaltzReviewRow | EmailBoardRow) & ReviewRowBase;
 
@@ -342,11 +344,13 @@ async function readEmails(recipe: ImportRecipe, deps: ImportDeps): Promise<Deriv
   const missingFiles: string[] = [];
   const failed: string[] = [];
   const hashes: string[] = [];
+  const contentHashes = new Map<string, string>();
   const items: EmailImportItem[] = [];
   for (const filePath of paths) {
     let content: Buffer;
     try {
       content = await fs.promises.readFile(filePath);
+      contentHashes.set(filePath, emailContentHash(content));
       hashes.push(`${filePath}\n${hash(content)}`);
     } catch (err) {
       if (isMissing(err)) missingFiles.push(filePath);
@@ -360,8 +364,9 @@ async function readEmails(recipe: ImportRecipe, deps: ImportDeps): Promise<Deriv
       failed.push(`${path.basename(filePath)}: ${messageOf(err)}`);
     }
   }
-  if (missingFiles.length === paths.length) throw new ReportNotFoundError(paths[0]);
-
+  // Every file gone is not an error here: the board deletes each file whose ticket it created when
+  // ticketSidekick.email.deleteEmlAfterImport is on, so a finished import reads as no emails. The
+  // kind's reconcile, which knows the board's writes, decides whether the import is not found.
   const notices: string[] = [];
   if (failed.length > 0) notices.push(`Could not read ${failed.length} email file(s): ${failed.join('; ')}`);
   const template = await deps.templateFields(recipe, descriptor);
@@ -375,7 +380,8 @@ async function readEmails(recipe: ImportRecipe, deps: ImportDeps): Promise<Deriv
   const patterns = deps.boilerplatePatterns?.() ?? [];
   const asBoardRow = (row: EmailReviewRow & ReviewRowBase) => {
     const patternBlocks = row.markdownBody.trim() ? detectPatternBlocks(row.markdownBody, patterns, row.senderName) : [];
-    return { ...row, summary: row.subject, ...(repeats[row.id] ? { repeatOf: repeats[row.id] } : {}), ...(patternBlocks.length > 0 ? { patternBlocks } : {}) };
+    const contentHash = contentHashes.get(row.emlFilePath);
+    return { ...row, summary: row.subject, ...(contentHash ? { contentHash } : {}), ...(repeats[row.id] ? { repeatOf: repeats[row.id] } : {}), ...(patternBlocks.length > 0 ? { patternBlocks } : {}) };
   };
   const allRows = session.allRows.map(asBoardRow) as ImportRow[];
   const review = { ...session, allRows, rows: session.rows.map(asBoardRow) } as unknown as ReviewSession<ImportRow>;

@@ -23,7 +23,16 @@ function rowFor(emlFilePath: string, attachments: EmailReviewRow['attachments'])
 const attachment = (name: string) => ({ name, contentType: 'text/plain', contentBytes: Buffer.from(name).toString('base64'), isInline: false });
 
 describe('email descriptor after a ticket is created', () => {
-  it('uploads what it can, deletes the .eml when the setting is on, and reports the failed upload', async () => {
+  it('deletes the .eml when the setting is on and every attachment uploaded', async () => {
+    const eml = path.join(dir, 'mail.eml');
+    fs.writeFileSync(eml, 'x');
+    const ticketService = { uploadAttachment: async () => undefined } as unknown as TicketService;
+    const descriptor = createEmailDescriptor({ deleteEmlAfterImport: () => true, maxBatchBytes: () => 1024 });
+    await descriptor.afterCreate!(rowFor(eml, [attachment('log.txt')]), 'PROJ-1', ticketService);
+    expect(fs.existsSync(eml)).toBe(false);
+  });
+
+  it('uploads what it can, reports the failed upload, and keeps the .eml even with the setting on', async () => {
     const eml = path.join(dir, 'mail.eml');
     fs.writeFileSync(eml, 'x');
     const uploaded: string[] = [];
@@ -36,9 +45,9 @@ describe('email descriptor after a ticket is created', () => {
     const descriptor = createEmailDescriptor({ deleteEmlAfterImport: () => true, maxBatchBytes: () => 1024 });
 
     await expect(descriptor.afterCreate!(rowFor(eml, [attachment('log.txt'), attachment('broken.txt')]), 'PROJ-1', ticketService))
-      .rejects.toThrow('Uploaded 1 of 2 attachment(s); failed: broken.txt: too large');
+      .rejects.toThrow('Uploaded 1 of 2 attachment(s); failed: broken.txt: too large. The .eml file was kept.');
     expect(uploaded).toEqual(['log.txt']);
-    expect(fs.existsSync(eml)).toBe(false);
+    expect(fs.existsSync(eml)).toBe(true);
   });
 
   it('keeps the .eml when the setting is off', async () => {

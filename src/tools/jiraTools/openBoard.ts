@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { z } from 'zod';
@@ -81,6 +82,21 @@ function reportPathOf(value: string, workspaceFolder: string | undefined): strin
   return workspaceFolder ? path.resolve(workspaceFolder, p) : undefined;
 }
 
+/**
+ * The first email path an agent gave that the board must not read: its real path (links followed) is
+ * not an `.eml` file, or runs through a dotfile or dotfolder such as `.ssh`. An agent steered by text
+ * it read could otherwise put any local file in front of the user as an email to send to Jira. A
+ * path that does not exist passes; the start screen says it is missing.
+ */
+async function refusedEmailPath(paths: string[]): Promise<string | undefined> {
+  for (const p of paths) {
+    const real = await fs.promises.realpath(p).catch(() => p);
+    const hidden = real.split(/[\\/]/).some(segment => segment.startsWith('.') && segment !== '.' && segment !== '..');
+    if (hidden || path.extname(real).toLowerCase() !== '.eml') return p;
+  }
+  return undefined;
+}
+
 export const openBoardTool = defineTool<JiraToolDeps, typeof openBoardShape>({
   name: OPEN_BOARD_TOOL,
   title: 'Open a Ticket Sidekick board',
@@ -110,6 +126,10 @@ export const openBoardTool = defineTool<JiraToolDeps, typeof openBoardShape>({
       }
       // The start screen, opened as the import board when the files read and the template and project settings are complete.
       const resolved = args.kind ? given.map(p => reportPathOf(p, deps.workspaceFolders()[0])).filter((p): p is string => p !== undefined) : [];
+      if (args.kind === 'email') {
+        const refused = await refusedEmailPath(resolved);
+        if (refused) return `Not opened: "${refused}" is not an .eml file outside a dotfile or dotfolder. Ask the user to choose the emails in the import board's file dialog.`;
+      }
       const files = args.kind === 'email'
         ? { ...(resolved.length > 0 ? { reportPaths: resolved } : {}), ...(args.dragged === true ? { emailConsent: true } : {}) }
         : resolved[0] ? { reportPath: resolved[0] } : {};

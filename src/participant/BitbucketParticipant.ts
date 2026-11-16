@@ -91,8 +91,7 @@ import {
 // R1/R3/U4: replaces the former `getLastAssistantText(...).includes('<!-- bitbucket:TAG -->')` — reads the
 // metadata a session-producing response returned via `{ metadata: { bitbucketSession } }` off the
 // last turn in `chatContext.history` instead of scanning rendered text, so no visible artifact of
-// session-tracking remains in the transcript. Mirrors `getActiveJiraSession` in
-// `jira/ticketContext.ts`. Returns undefined when the last turn isn't a `ChatResponseTurn`, carries
+// session-tracking remains in the transcript. Returns undefined when the last turn isn't a `ChatResponseTurn`, carries
 // no result metadata, or the user has moved on since — matching today's "tag absent" behavior.
 function getActiveBitbucketSession(chatContext: vscode.ChatContext): BitbucketSessionContinuity | undefined {
   const last = chatContext.history[chatContext.history.length - 1];

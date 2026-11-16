@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { WorkflowGraph } from '../services/WorkflowService';
-import { buildStaleTargetOptions, type StaleTargetOption } from '../imports/staleClose';
-import { selectedStaleIssueTypes, staleTargetNeedsResolution, planStaleTransitions, type ReviewSessionStale, type StaleTicketGroup, type TransitionBatchTicket } from '../imports/types';
+import { buildStaleTargetOptions } from '../imports/staleClose';
+import { selectedStaleIssueTypes, type StaleTargetOption, staleTargetNeedsResolution, planStaleTransitions, type ReviewSessionStale, type StaleTicketGroup, type TransitionBatchTicket } from '../imports/types';
 
 describe('buildStaleTargetOptions', () => {
   const label = (o: StaleTargetOption): string => (o.kind === 'rule' ? `${o.ruleName} → ${o.targetState}` : o.status);

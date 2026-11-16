@@ -134,6 +134,47 @@ describe('creating tickets from emails', () => {
     expect(view({ ...after, ...refreshed }).notices.join(' ')).not.toMatch(/no longer there/);
   });
 
+  it('says on the created line that an attachment did not upload, and keeps the .eml', async () => {
+    const deleting = emptyProjectImportDeps(dir, jira, { deleteEmlAfterImport: true });
+    const a = emlFile(dir, 'a.eml', 'Login fails', { attachment: 'log.txt' });
+    jira.uploadAttachment = async () => { throw new Error('too large'); };
+    const session = await openEmails([a], deleting);
+    const { applied } = await apply(session, await plan(session, { type: 'new-create' }, deleting), deleting);
+    expect(applied.results.map(r => r.outcome)).toEqual(['done']);
+    expect(applied.results[0].reason).toMatch(/Uploaded 0 of 1 attachment\(s\); failed: log\.txt: too large\. The \.eml file was kept\./);
+    expect(fs.existsSync(a)).toBe(true);
+  });
+
+  it('stays finished when the board deleted every email file after creating their tickets', async () => {
+    const deleting = emptyProjectImportDeps(dir, jira, { deleteEmlAfterImport: true });
+    const a = emlFile(dir, 'a.eml', 'Login fails');
+    const session = await openEmails([a], deleting);
+    const { session: after } = await apply(session, await plan(session, { type: 'new-create' }, deleting), deleting);
+    expect(fs.existsSync(a)).toBe(false);
+    const fresh = await importKind.read(after.recipe, deleting);
+    const refreshed = importKind.reconcile(after, fresh, 'refresh');
+    expect(view({ ...after, ...refreshed }).notices.join(' ')).not.toMatch(/no longer there/);
+  });
+
+  it('is not found when every email file is gone and the board deleted none of them', async () => {
+    const a = emlFile(dir, 'a.eml', 'Login fails');
+    const session = await openEmails([a]);
+    fs.rmSync(a);
+    const fresh = await importKind.read(session.recipe, deps);
+    expect(() => importKind.reconcile(session, fresh, 'refresh')).toThrow(/a\.eml/);
+  });
+
+  it('refuses an email whose file changed since the board read it', async () => {
+    const a = emlFile(dir, 'a.eml', 'Login fails', { attachment: 'log.txt' });
+    const session = await openEmails([a]);
+    const p = await plan(session, { type: 'new-create' });
+    emlFile(dir, 'a.eml', 'Another email saved under the same name', { attachment: 'other.txt' });
+    const { applied } = await apply(session, p);
+    expect(applied.results.map(r => r.outcome)).toEqual(['refused']);
+    expect(applied.results[0].reason).toMatch(/a\.eml changed since the board read it.*Refresh/);
+    expect(jira.createIssueCalls).toHaveLength(0);
+  });
+
   it('does not merge emails', async () => {
     const session = await openEmails([emlFile(dir, 'a.eml', 'One'), emlFile(dir, 'b.eml', 'Two')]);
     const reduced = importKind.reduce(session, { type: 'new-merge', ids: [rowId(session, 'a.eml'), rowId(session, 'b.eml')] } as never);
