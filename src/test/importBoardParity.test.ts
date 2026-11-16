@@ -1,14 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import { resolve } from 'path';
-import { IMPORT_COMMAND_ENTRIES } from '../participant/sessionState';
 
 // Guard for the import board parity ledger in docs/architecture/migration-status.md. Every reply command of the
 // import review screens and every optional importer capability must have a row there saying whether the import board
 // carries it over or drops it, and every Veracode or Waltz row that carries over must name, in BOARD_PARITY below, the
-// board action or rule that keeps it and the scenario test that proves the same result. The email rows are still
-// checked against the `@jira` catalog, since the email import runs there.
-// This guard outlives the Veracode and Waltz chat imports: their rows stay in the ledger, and this map holds them.
+// board action or rule that keeps it and the scenario test that proves the same result. The same holds for the email
+// rows since the email import moved to the board.
+// This guard outlives the chat imports: their reply commands are kept below as they were, and this map holds them.
 // See docs/solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md.
 
 const root = process.cwd();
@@ -62,10 +61,12 @@ function optionalMembers(source: string, iface: string): string[] {
 
 const DECISIONS = ['Carry over', 'Dropped'];
 
-/** Rows only the email import has; they are checked against the `@jira` catalog and the descriptor, not the board. */
-const EMAIL_ONLY = new Set([
-  'email-strip', 'email-keep', 'email-model-check', 'email-rows', 'email-save', 'email-cancel', 'afterCreate',
-]);
+/** The reply commands of the chat's import review screens and email cleanup, as their catalog named them before `@jira` was removed. */
+const CHAT_COMMANDS = [
+  'toggle-rows', 'bulk', 'create', 'fold', 'accept-cve', 'accept-component', 'accepted-list', 'row-action', 'all-action', 'run',
+  'merge-tickets', 'toggle-stale', 'close', 'search', 'show', 'export', 'reload', 'paging', 'open', 'exit', 'help',
+  'email-strip', 'email-keep', 'email-model-check', 'email-rows', 'email-save', 'email-cancel',
+];
 
 interface BoardEquivalent {
   /** The import board actions that keep the behaviour (the `type` of a reduce or plan request). */
@@ -86,6 +87,9 @@ const MERGE = 'importBoardMerge.test.ts';
 const EXPORT = 'importBoardExport.test.ts';
 const BOARD = 'importBoard.test.ts';
 const START = 'importStartScreen.test.ts';
+const EMAIL = 'importBoardEmail.test.ts';
+const CLEANUP = 'importBoardEmailCleanup.test.ts';
+const MESSAGES = 'boardMessages.test.ts';
 
 const SELECT_ROWS: BoardEquivalent = {
   actions: ['new-include'],
@@ -152,7 +156,7 @@ const TARGET_DESCRIPTIONS: BoardEquivalent = {
   ],
 };
 
-/** Every Veracode and Waltz "Carry over" row of the ledger, and what keeps it on the import board. */
+/** Every "Carry over" row of the ledger, and what keeps it on the import board. */
 const BOARD_PARITY: Record<string, BoardEquivalent> = {
   // Reply commands
   'toggle-rows': SELECT_ROWS,
@@ -217,7 +221,43 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
   export: EXPORT_OVERVIEW,
   reload: RELOAD,
 
+  'email-strip': {
+    actions: ['cleanup-strip'],
+    tests: [[CLEANUP, 'finds a pattern block, shows it, and strips it from the ticket while the file stays as it is']],
+  },
+  'email-keep': {
+    actions: ['cleanup-keep'],
+    tests: [[CLEANUP, 'keeps everything on keep, and leaves an email out of the strip when it is unticked']],
+  },
+  'email-model-check': {
+    actions: ['cleanup-check', 'cleanup-skip'],
+    tests: [
+      [CLEANUP, 'asks before any call, and continues without the model when the developer says no'],
+      [CLEANUP, 'asks for a model when none is set, names every email and the model in the preview, and saves the pick'],
+      [CLEANUP, 'marks an email whose check failed, keeps its blocks, and offers it again'],
+    ],
+  },
+  'email-rows': {
+    actions: ['cleanup-exclude'],
+    tests: [[CLEANUP, 'keeps everything on keep, and leaves an email out of the strip when it is unticked']],
+  },
+  'email-save': {
+    actions: ['cleanup-save'],
+    tests: [[CLEANUP, 'saves a block the model found as a pattern']],
+  },
+  'email-cancel': {
+    rule: 'Close on a board discards its session and closes its tab; nothing is imported',
+    tests: [[MESSAGES, 'closes the tab when the page closes the board, and the session is gone']],
+  },
+
   // Importer capabilities
+  afterCreate: {
+    actions: ['new-create'],
+    tests: [
+      [EMAIL, 'creates one ticket per email with its subject and uploads its attachment read from the file again'],
+      [EMAIL, 'deletes the .eml after creating its ticket when the setting is on, without naming it as missing afterwards'],
+    ],
+  },
   fileFilter: FILE_CHOICE,
   filePickerTitle: FILE_CHOICE,
   parseAndFilter: FILE_CHOICE,
@@ -293,10 +333,11 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     tests: [[NEW, 'drops a Due Date Jira refuses, creates the ticket once more without it and says so']],
   },
   'A drained import finishes without `done`': {
-    rule: 'A board with no work left on any tab says so and offers Discard',
+    rule: 'A board with no work left on any tab says so and offers Close',
     tests: [
       [BOARD, 'says there is nothing left to do when no tab has work'],
-      [EXPORT, 'says there is nothing left to do, offers Discard, and still saves the export'],
+      [EXPORT, 'says there is nothing left to do, offers Close, and still saves the export'],
+      [EMAIL, 'creates one ticket per email with its subject and uploads its attachment read from the file again'],
     ],
   },
   'Screens out of date after `unaccept` or a ticket merge': {
@@ -338,7 +379,7 @@ describe('import board parity ledger', () => {
   const rows = ledgerRows(ledgerSection());
 
   it('lists every reply command of the import review screens', () => {
-    const missing = IMPORT_COMMAND_ENTRIES.map(e => e.id).filter(id => !rows.has(id));
+    const missing = CHAT_COMMANDS.filter(id => !rows.has(id));
     expect(missing, 'commands with no row in the import board parity ledger').toEqual([]);
   });
 
@@ -358,20 +399,11 @@ describe('import board parity ledger', () => {
     expect(undecided, `rows whose decision is not one of ${DECISIONS.join(' / ')}`).toEqual([]);
   });
 
-  it('keeps the email-only rows in the chat catalog, where the email import runs', () => {
-    const catalog = new Set<string>([
-      ...IMPORT_COMMAND_ENTRIES.map(e => e.id),
-      ...optionalMembers(read('src/imports/descriptor.ts'), 'ReportImportDescriptor'),
-    ]);
-    expect([...EMAIL_ONLY].filter(id => !rows.has(id)), 'email rows missing from the ledger').toEqual([]);
-    expect([...EMAIL_ONLY].filter(id => !catalog.has(id)), 'email rows the chat catalog no longer has').toEqual([]);
-  });
-
-  it('maps every Veracode and Waltz "Carry over" row to the board, and nothing else', () => {
-    const carried = [...rows].filter(([id, decision]) => decision === 'Carry over' && !EMAIL_ONLY.has(id)).map(([id]) => id);
+  it('maps every "Carry over" row to the board, and nothing else', () => {
+    const carried = [...rows].filter(([, decision]) => decision === 'Carry over').map(([id]) => id);
     expect(carried.filter(id => !(id in BOARD_PARITY)), '"Carry over" rows with no board equivalent').toEqual([]);
-    const extra = Object.keys(BOARD_PARITY).filter(id => rows.get(id) !== 'Carry over' || EMAIL_ONLY.has(id));
-    expect(extra, 'map entries that are not a Veracode or Waltz "Carry over" row').toEqual([]);
+    const extra = Object.keys(BOARD_PARITY).filter(id => rows.get(id) !== 'Carry over');
+    expect(extra, 'map entries that are not a "Carry over" row').toEqual([]);
   });
 
   it('names for each row a board action, export or rule, and only actions and exports the import kind handles', () => {

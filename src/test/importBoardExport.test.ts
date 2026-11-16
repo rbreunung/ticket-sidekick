@@ -286,7 +286,7 @@ describe('exporting the overview', () => {
 });
 
 describe('a finished import', () => {
-  it('says there is nothing left to do, offers Discard, and still saves the export', async () => {
+  it('says there is nothing left to do, offers Close, and still saves the export', async () => {
     jira.tickets = { 'PROJ-1': veracodeTicket('301', { summary: 'Hard-coded password in A.java', due: '2026-11-01' }) };
     const session = await openVeracode([{ id: '301', file: 'A.java' }]);
 
@@ -294,7 +294,7 @@ describe('a finished import', () => {
 
     expect(v.finished).toBe(true);
     expect(extras(v).finishedMessage).toMatch(/nothing left to do/i);
-    expect(extras(v).finishedMessage).toMatch(/discard/i);
+    expect(extras(v).finishedMessage).toMatch(/close/i);
     const file = await importKind.exportFile!(session, 'csv', deps);
     expect(new TextDecoder().decode(file.bytes)).toContain('PROJ-1');
   });

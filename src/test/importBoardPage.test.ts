@@ -110,7 +110,7 @@ function baseView(extra: Partial<ImportView> = {}): ImportView {
     tab: 'new', openingTab: 'new', finished: false, filter: '',
     new: { rows: [1, 2, 3, 4, 5, 6, 7].map(n => newRow(n)) },
     dropped: [], notices: [],
-    ext: { new: { toCreate: 7, perApply: 50, addedTo: {} }, 'search-export': { search: null, finishedMessage: 'Nothing left to do: every tab of this import is handled. You can still save the overview, or discard the import.' } },
+    ext: { new: { toCreate: 7, perApply: 50, addedTo: {} }, 'search-export': { search: null, finishedMessage: 'Nothing left to do: every tab of this import is handled. You can still save the overview, or close the import.' } },
     ...extra,
   };
 }
