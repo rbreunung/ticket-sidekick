@@ -33,6 +33,8 @@ let discarded: string[];
 let opened: ImportRecipe[];
 let openedSettings: string[];
 let readers: Partial<Record<ReportKind, ReportReader>>;
+let nextEmails: string[] | undefined;
+let unreadable: Set<string>;
 
 const fakeReader = (items = 3): ReportReader => ({
   read: async () => ({ items: Array.from({ length: items }, (_, i) => i), rawItems: [] }),
@@ -63,6 +65,11 @@ function deps(): ImportStartDeps {
     templates: () => templates,
     reportReader: kind => readers[kind] ?? fakeReader(),
     pickReportFile: async (_kind, filter) => { pickedFilters.push(filter.label); return nextFile; },
+    pickEmailFiles: async () => nextEmails,
+    emailFiles: {
+      checkCaps: async paths => (paths.length > 50 ? `Selected ${paths.length} files — the batch limit is 50.` : null),
+      read: async filePath => { if (unreadable.has(path.basename(filePath))) throw new Error('not an email'); return {}; },
+    },
     openSetting: async key => { openedSettings.push(key); },
     hasSession: async id => stored.has(id),
     discardSession: async id => { discarded.push(id); stored.delete(id); },
@@ -86,7 +93,9 @@ async function screenWithFile(kind: ReportKind = 'waltz', file = report()): Prom
 
 beforeEach(async () => {
   dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ts-import-start-'));
-  settings = { veracode: '', waltz: '' };
+  settings = { veracode: '', waltz: '', email: '' };
+  nextEmails = undefined;
+  unreadable = new Set();
   writes = [];
   templates = [{ name: 'OSS finding', issueType: 'Vulnerability' }, { name: 'Plain', issueType: undefined } as JiraTemplate];
   defaultProject = 'PROJ';
@@ -271,7 +280,7 @@ describe('the report file', () => {
     const view = await screen.handle('kind', { kind: 'veracode' }) as StartScreenView;
     expect(view.kind).toBe('veracode');
     expect(view.report.path).toBeUndefined();
-    await expect(screen.handle('kind', { kind: 'email' })).rejects.toMatchObject({ status: 400 });
+    await expect(screen.handle('kind', { kind: 'mail' })).rejects.toMatchObject({ status: 400 });
   });
 });
 
@@ -401,5 +410,52 @@ describe('what is missing around the import', () => {
     expect(view).toMatchObject({ kind: 'waltz', report: { path: file, items: 3 } });
     screen.prefill({ kind: 'nonsense', reportPath: 'relative/path.xlsx' });
     expect((await screen.view()).report.path).toBe(file);
+  });
+});
+
+describe('an email import', () => {
+  async function emailScreen(names: string[]): Promise<{ screen: ImportStartScreen; view: StartScreenView }> {
+    settings.email = 'OSS finding';
+    const screen = new ImportStartScreen(deps());
+    await screen.handle('kind', { kind: 'email' });
+    nextEmails = names.map(n => report(n));
+    const view = await screen.handle('pick-file', {}) as StartScreenView;
+    return { screen, view };
+  }
+
+  it('takes several files and leaves out the ones that do not read', async () => {
+    unreadable.add('b.eml');
+    const { screen, view } = await emailScreen(['c.eml', 'a.eml', 'b.eml']);
+    expect(view.report.fileName).toBe('3 emails');
+    expect(view.report.items).toBe(2);
+    expect(view.report.skipped).toEqual(['b.eml: not an email']);
+    expect(view.canOpen).toBe(true);
+    await screen.handle('open', {});
+    expect(opened[0].kind).toBe('email');
+    expect(opened[0].reportPaths!.map(p => path.basename(p))).toEqual(['a.eml', 'b.eml', 'c.eml']);
+  });
+
+  it('refuses more than 50 files before reading any', async () => {
+    const { view } = await emailScreen(Array.from({ length: 51 }, (_, i) => `m${i}.eml`));
+    expect(view.report.problem).toMatch(/the batch limit is 50/);
+    expect(view.canOpen).toBe(false);
+  });
+
+  it('continues the same import when the same files are chosen in another order', async () => {
+    const { screen } = await emailScreen(['a.eml', 'b.eml']);
+    await screen.handle('open', {});
+    nextEmails = [path.join(dir, 'b.eml'), path.join(dir, 'a.eml')];
+    const again = await screen.handle('pick-file', {}) as StartScreenView;
+    expect(again.stored).toBe(true);
+  });
+
+  it('asks for the email template once and saves it', async () => {
+    const screen = new ImportStartScreen(deps());
+    await screen.handle('kind', { kind: 'email' });
+    nextEmails = [report('a.eml')];
+    const view = await screen.handle('pick-file', {}) as StartScreenView;
+    expect(view.template.askReason).toMatch(/ticketSidekick\.email\.template is empty/);
+    await screen.handle('template', { name: 'OSS finding' });
+    expect(writes).toEqual([['email', 'OSS finding']]);
   });
 });

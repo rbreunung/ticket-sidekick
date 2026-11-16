@@ -11,13 +11,15 @@ import type { AcceptedHidden, TicketedAction } from '../../imports/types';
 import { countedNoun } from '../../utils/chatPrimitives';
 import type { DateKind } from '../../utils/waltzDates';
 import {
-  newRows, readImport, rowKeyOf, slicesOf, staleTickets, ticketedRows,
+  isEmailRow, newRows, readImport, rowKeyOf, slicesOf, staleTickets, ticketedRows,
   type ImportData, type ImportDeps, type ImportRow, type ImportTab, type SliceEntry,
 } from './read';
-import { IMPORT_KIND, REPORT_KIND_LABELS, importSourceKey, isReportKind, normaliseReportPath, type ImportRecipe } from './recipe';
+import {
+  IMPORT_KIND, REPORT_KIND_LABELS, emailRecipe, importSourceKey, isReportKind, normaliseReportPath, recipePaths, type ImportRecipe,
+} from './recipe';
 
 // The import board: a Veracode or Waltz report against Jira, one tab per group (New, Already
-// ticketed, Stale, and Accepted for Waltz). A check after a restart or another change keeps a tab
+// ticketed, Stale, and Accepted for Waltz), or a batch of emails, which has the New tab only. A check after a restart or another change keeps a tab
 // with unfinished choices as the developer saw it and marks it out of date; Refresh then takes the
 // fresh reading and keeps every choice whose rows still exist. The board's own recorded writes
 // never count as a change. vscode-free.
@@ -193,8 +195,20 @@ const STALE_UNAVAILABLE = 'The search for stale tickets failed, so this tab is n
 const MAX_TEXT = 255;
 const MAX_FILTER = 200;
 
+const EMAIL_EMPTY = 'No emails to import: none of the files could be read.';
+/** How many email files one import takes at most. */
+const MAX_EMAIL_FILES = 50;
+
 function tabsOf(recipe: ImportRecipe): ImportTab[] {
+  if (recipe.kind === 'email') return ['new'];
   return recipe.kind === 'waltz' ? ['new', 'ticketed', 'stale', 'accepted'] : ['new', 'ticketed', 'stale'];
+}
+
+/** An import's title: the report file, or the one email or the number of emails. */
+function importTitle(recipe: ImportRecipe): string {
+  const files = recipePaths(recipe);
+  const source = recipe.kind === 'email' && files.length > 1 ? `${files.length} emails` : path.basename(recipe.reportPath);
+  return `${REPORT_KIND_LABELS[recipe.kind]} import: ${source}`;
 }
 
 function text(value: unknown, max = MAX_TEXT): string | undefined {
@@ -206,27 +220,47 @@ function text(value: unknown, max = MAX_TEXT): string | undefined {
 /** A recipe in its accepted shape: a known kind, a project key, an absolute report path, a template and an issue type. */
 function recipeOf(value: unknown): Validated<ImportRecipe> {
   const v = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>;
-  if (!isReportKind(v.kind)) return { ok: false, reason: 'the import names no report kind the board knows (veracode or waltz).' };
+  if (!isReportKind(v.kind)) return { ok: false, reason: 'the import names no report kind the board knows (veracode, waltz or email).' };
   const projectKey = typeof v.projectKey === 'string' ? normalizeProjectKey(v.projectKey) : undefined;
   if (!projectKey) return { ok: false, reason: 'the import names no valid Jira project key.' };
-  if (typeof v.reportPath !== 'string' || !path.isAbsolute(v.reportPath) || v.reportPath.length > 4096) {
-    return { ok: false, reason: 'the import names no report file by its full path.' };
-  }
+  const fullPath = (p: unknown): p is string => typeof p === 'string' && path.isAbsolute(p) && p.length <= 4096;
   const templateName = text(v.templateName);
   const issueType = text(v.issueType);
+  if (v.kind === 'email') {
+    const files = Array.isArray(v.reportPaths) ? v.reportPaths : fullPath(v.reportPath) ? [v.reportPath] : [];
+    if (files.length === 0 || files.length > MAX_EMAIL_FILES || !files.every(fullPath)) {
+      return { ok: false, reason: `the import names no email files by their full paths (at most ${MAX_EMAIL_FILES}).` };
+    }
+    if (!templateName) return { ok: false, reason: 'the import names no template.' };
+    if (!issueType) return { ok: false, reason: 'the import names no issue type.' };
+    return { ok: true, recipe: emailRecipe({ projectKey, templateName, issueType }, files) };
+  }
+  if (!fullPath(v.reportPath)) {
+    return { ok: false, reason: 'the import names no report file by its full path.' };
+  }
   if (!templateName) return { ok: false, reason: 'the import names no template.' };
   if (!issueType) return { ok: false, reason: 'the import names no issue type.' };
   return { ok: true, recipe: { kind: v.kind, projectKey, reportPath: normaliseReportPath(v.reportPath), templateName, issueType } };
 }
 
-/** How a row is named to the developer: its flaw ids, or its component. */
+/** How a row is named to the developer: its flaw ids, its component, or its email's file. */
 export function rowRef(row: ImportRow): string {
   if ('issueIds' in row) return `Flaw ${row.issueIds.join(', ')}`;
+  if (isEmailRow(row)) return path.basename(row.emlFilePath);
   return row.nameVersion;
 }
 
 function rowRating(row: ImportRow): string {
-  return 'issueIds' in row ? row.severityLabelText : row.maxVulnRating;
+  if ('issueIds' in row) return row.severityLabelText;
+  return isEmailRow(row) ? '' : row.maxVulnRating;
+}
+
+/** The notice naming an email import's files that are gone, leaving out the ones the board deleted after creating their tickets. */
+function missingFilesNotice(data: ImportData, writes: ImportWrites): string | undefined {
+  const created = createdKeySet(writes);
+  const missing = (data.missingFiles ?? []).filter(f => !created.has(f));
+  if (missing.length === 0) return undefined;
+  return `${countedNoun(missing.length, 'email file(s)')} no longer there: ${missing.map(f => path.basename(f)).join(', ')}. Their emails are not on the board.`;
 }
 
 const DATE_LABELS: Record<DateKind, string> = { policy: 'Policy date', planned: 'Planned date', attestation: 'Attestation date', due: 'Due Date' };
@@ -501,7 +535,7 @@ function matches(filter: string | undefined, ...fields: Array<string | null | un
 export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, ImportAction, ImportView, ImportDeps> = {
   kind: IMPORT_KIND,
   formatVersion: 1,
-  title: recipe => `${REPORT_KIND_LABELS[recipe.kind]} import: ${path.basename(recipe.reportPath)}`,
+  title: recipe => importTitle(recipe),
 
   validate: async (input, deps) => {
     const checked = recipeOf(input);
@@ -515,7 +549,9 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
   revalidate: async stored => recipeOf(stored),
 
   sourceKey: recipe => importSourceKey(recipe),
-  sourceLabel: recipe => `${REPORT_KIND_LABELS[recipe.kind]} report ${recipe.reportPath} in ${recipe.projectKey}`,
+  sourceLabel: recipe => (recipe.kind === 'email'
+    ? `${countedNoun(recipePaths(recipe).length, 'email file(s)')} (${recipePaths(recipe).map(f => path.basename(f)).join(', ')}) in ${recipe.projectKey}`
+    : `${REPORT_KIND_LABELS[recipe.kind]} report ${recipe.reportPath} in ${recipe.projectKey}`),
 
   initialWorking: () => ({
     tab: null, filters: {}, ticketedShow: null, outOfDate: [], dropped: [],
@@ -646,7 +682,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
         id, label: TAB_LABELS[id], count: counts[id], outOfDate: working.outOfDate.includes(id),
         hasWork: tabHasWork(session, id),
         ...(unavailable ? { unavailable } : {}),
-        ...(counts[id] === 0 && !unavailable ? { empty: EMPTY[id] } : {}),
+        ...(counts[id] === 0 && !unavailable ? { empty: recipe.kind === 'email' && id === 'new' ? EMAIL_EMPTY : EMPTY[id] } : {}),
         ...(warning ? { warning } : {}),
       };
     });
@@ -665,7 +701,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
       finished: tabViews.every(t => !t.hasWork),
       filter: filter ?? '',
       dropped: working.dropped,
-      notices: data.notices,
+      notices: [...data.notices, ...[missingFilesNotice(data, writes)].filter((n): n is string => n !== undefined)],
       ext: {},
     };
     const hidden = describeAcceptedHidden(data.review.acceptedHidden);

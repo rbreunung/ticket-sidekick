@@ -119,6 +119,7 @@ export function createEmailDescriptor(
     buildRowFields: item => ({
       subject: item.subject,
       senderName: item.senderName,
+      ...(item.receivedDateTime ? { receivedDateTime: item.receivedDateTime } : {}),
       attachmentNames: item.attachments.filter(a => !a.isInline).map(a => a.name),
       markdownBody: item.markdownBody,
       inlineImageMap: item.inlineImageMap,

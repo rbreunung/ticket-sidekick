@@ -1047,6 +1047,11 @@
             "default": false,
             "description": "Delete the .eml file automatically after the Jira ticket is created."
           },
+          "ticketSidekick.email.template": {
+            "type": "string",
+            "default": "",
+            "description": "Name of the template in .jira-templates.json that an email import on the import board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the import board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
+          },
           "ticketSidekick.email.maxBatchSizeMB": {
             "type": "number",
             "default": 150,

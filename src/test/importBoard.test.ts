@@ -288,7 +288,7 @@ describe('the recipe', () => {
     const file = writeVeracode([{ id: '1', file: 'A.java' }]);
     const checked = await importKind.revalidate!({ ...recipe('veracode', file), templateName: 'Old template', issueType: 'Vulnerability' }, deps);
     expect(checked).toEqual({ ok: true, recipe: { ...recipe('veracode', file), templateName: 'Old template', issueType: 'Vulnerability' } });
-    expect((await importKind.revalidate!({ ...recipe('veracode', file), kind: 'email' }, deps)).ok).toBe(false);
+    expect((await importKind.revalidate!({ ...recipe('veracode', file), kind: 'mail' as never }, deps)).ok).toBe(false);
     expect((await importKind.revalidate!({ ...recipe('veracode', file), reportPath: 'relative.xml' }, deps)).ok).toBe(false);
   });
 

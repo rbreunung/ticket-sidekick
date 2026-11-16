@@ -4,7 +4,7 @@ import type { BitbucketAuthType, BitbucketConfig, ReviewMode } from '../bitbucke
 type AuthType = 'datacenter' | 'cloud';
 
 /** The report kinds whose import takes its template from a setting (`ticketSidekick.<kind>.template`). */
-export type ImportTemplateKind = 'veracode' | 'waltz';
+export type ImportTemplateKind = 'veracode' | 'waltz' | 'email';
 
 export interface JiraConfig {
   baseUrl: string | undefined;

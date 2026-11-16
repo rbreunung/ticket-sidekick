@@ -6,7 +6,9 @@ import { TicketService } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
 import { createVeracodeDescriptor } from '../imports/veracode';
 import { createWaltzDescriptor } from '../imports/waltz';
-import { veracodeSettings, waltzSettings } from '../services/importSettings';
+import { checkEmailBatchCaps, createEmailDescriptor } from '../imports/email';
+import { parseEmlFile } from '../utils/emlParser';
+import { emailSettings, veracodeSettings, waltzSettings } from '../services/importSettings';
 import { registerKind } from '../sessions/boardKind';
 import { SessionManager } from '../sessions/sessionManager';
 import { SessionStore } from '../sessions/sessionStore';
@@ -47,11 +49,12 @@ export function retentionDays(): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 365 ? value : DEFAULT_RETENTION_DAYS;
 }
 
-/** The Veracode and Waltz descriptors over the settings, shared by the start screen and the import board. */
+/** The Veracode, Waltz and email descriptors over the settings, shared by the start screen and the import board. */
 function importDescriptors(workspaceFolder: () => string | undefined, log: (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void): ImportDescriptors {
   return {
     veracode: createVeracodeDescriptor(veracodeSettings, { reviewColumns: [], onDiag: log }),
     waltz: createWaltzDescriptor(waltzSettings(workspaceFolder), { reviewColumns: [], onDiag: log }),
+    email: createEmailDescriptor(emailSettings, { onDiag: log }),
   };
 }
 
@@ -139,7 +142,16 @@ export function registerBoards(
   // The pages are plain files shipped with the extension and loaded by the tab itself.
   const pagesRoot = vscode.Uri.joinPath(context.extensionUri, 'out', 'board-pages');
   const configService = new ConfigService(context);
-  const readers: Record<ReportKind, ReportReader> = { veracode: reportReaderOf(descriptors.veracode), waltz: reportReaderOf(descriptors.waltz) };
+  const readers: Record<ReportKind, ReportReader> = {
+    veracode: reportReaderOf(descriptors.veracode),
+    waltz: reportReaderOf(descriptors.waltz),
+    // The start screen reads email selections through `emailFiles`; this reader serves "Pick the file again".
+    email: {
+      read: async filePath => { const item = await parseEmlFile(filePath); return { items: [item], rawItems: [item] }; },
+      noMatchMessage: 'No email could be read.',
+      fileFilter: { label: 'Email', extensions: ['eml'] },
+    },
+  };
   /** VS Code's open dialog for a report of this kind, starting in Downloads. */
   const pickReportFile = async (filter: ReportReader['fileFilter']) => {
     const uris = await vscode.window.showOpenDialog({
@@ -162,6 +174,19 @@ export function registerBoards(
     },
     reportReader: kind => readers[kind],
     pickReportFile: (_kind, filter) => pickReportFile(filter),
+    pickEmailFiles: async () => {
+      const uris = await vscode.window.showOpenDialog({
+        canSelectMany: true,
+        filters: { Email: ['eml'] },
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), 'Downloads')),
+        title: 'Select .eml file(s) to import',
+      });
+      return uris?.map(uri => uri.fsPath);
+    },
+    emailFiles: {
+      checkCaps: filePaths => checkEmailBatchCaps(filePaths, emailSettings.maxBatchBytes()),
+      read: filePath => parseEmlFile(filePath),
+    },
     openSetting: async key => { await vscode.commands.executeCommand('workbench.action.openSettings', key); },
     // The stored list, not a lookup: looking a session up would start its background check.
     hasSession: async id => (await manager.list()).some(s => s.kind === IMPORT_KIND && s.id === id),

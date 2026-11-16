@@ -117,6 +117,7 @@ A board (the security report, a ticket list, an import, and later reviews) keeps
 | Delete .eml after import | `ticketSidekick.email.deleteEmlAfterImport` | `false` |
 | Email batch size limit (MB) | `ticketSidekick.email.maxBatchSizeMB` | `150` |
 | Email boilerplate patterns | `ticketSidekick.email.boilerplatePatterns` | `[]` |
+| Email import template | `ticketSidekick.email.template` | `""` |
 | Veracode min severity | `ticketSidekick.veracode.minSeverity` | `4` |
 | Veracode included statuses | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` |
 | Veracode report size limit (MB) | `ticketSidekick.veracode.maxReportSizeMB` | `50` |
@@ -129,7 +130,7 @@ A board (the security report, a ticket list, an import, and later reviews) keeps
 
 What the filter settings do is described with each import in [Report Imports](report-imports.md).
 
-The two template settings name the template in `.jira-templates.json` that an import on the import board (`Ticket Sidekick: Open import board`) uses; the issue type comes from that template. When a template setting is empty, or names a template that is no longer in `.jira-templates.json`, the import board's start screen asks for one and saves your choice to the setting. See [Boards](boards.md).
+The three template settings name the template in `.jira-templates.json` that an import on the import board (`Ticket Sidekick: Open import board`) uses; the issue type comes from that template. When a template setting is empty, or names a template that is no longer in `.jira-templates.json`, the import board's start screen asks for one and saves your choice to the setting. See [Boards](boards.md).
 
 **Veracode SLA days**
 

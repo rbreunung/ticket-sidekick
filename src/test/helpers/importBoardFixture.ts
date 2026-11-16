@@ -4,6 +4,7 @@ import { importJiraDeps } from '../../boards/import/jiraDeps';
 import type { ImportDeps } from '../../boards/import/read';
 import { createVeracodeDescriptor } from '../../imports/veracode';
 import { createWaltzDescriptor } from '../../imports/waltz';
+import { createEmailDescriptor } from '../../imports/email';
 import type { JiraCreatedIssue, JiraIssue, JiraSearchResult } from '../../jira/IJiraClient';
 import { MockJiraClient } from '../mocks/MockJiraClient';
 
@@ -39,7 +40,7 @@ export class EmptyProjectJira extends MockJiraClient {
 }
 
 /** The import board's dependencies for a workspace in `dir` with the template "Security bug" (issue type Bug). */
-export function emptyProjectImportDeps(dir: string, jira: MockJiraClient): ImportDeps {
+export function emptyProjectImportDeps(dir: string, jira: MockJiraClient, emailOptions: { deleteEmlAfterImport?: boolean } = {}): ImportDeps {
   fs.writeFileSync(path.join(dir, '.jira-templates.json'), JSON.stringify({ templates: [{ name: 'Security bug', issueType: 'Bug', defaultFields: { labels: ['security'] } }] }));
   const veracode = createVeracodeDescriptor({
     filter: () => ({ minSeverity: 3, includeStatuses: ['New', 'Open', 'Reopened'], maxReportBytes: 20 * 1024 * 1024 }),
@@ -53,7 +54,10 @@ export function emptyProjectImportDeps(dir: string, jira: MockJiraClient): Impor
   return importJiraDeps({
     getJira: async () => ({ configured: true, client: jira, config: { baseUrl: 'https://jira.example.com' } }) as never,
     workspaceFolder: () => dir,
-    descriptors: { veracode, waltz },
+    descriptors: {
+      veracode, waltz,
+      email: createEmailDescriptor({ deleteEmlAfterImport: () => emailOptions.deleteEmlAfterImport ?? false, maxBatchBytes: () => 150 * 1024 * 1024 }),
+    },
     now: () => Date.parse('2026-11-15T12:00:00Z'),
   });
 }
@@ -82,4 +86,36 @@ export function veracodeReport(files: string[]): string {
     </category>
   </severity>
 </detailedreport>`;
+}
+
+/** A small `.eml` file with a subject, a text body and, when named, one attached text file. */
+export function emlFile(dir: string, name: string, subject: string, options: { body?: string; attachment?: string } = {}): string {
+  const file = path.join(dir, name);
+  const boundary = 'BOUNDARY';
+  const parts = [
+    'From: Ann Example <ann@example.com>',
+    'To: support@example.com',
+    `Subject: ${subject}`,
+    'Date: Mon, 16 Nov 2026 08:00:00 +0000',
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    options.body ?? 'The login page fails.',
+  ];
+  if (options.attachment) {
+    parts.push(
+      `--${boundary}`,
+      `Content-Type: text/plain; name="${options.attachment}"`,
+      `Content-Disposition: attachment; filename="${options.attachment}"`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      Buffer.from('log line').toString('base64'),
+    );
+  }
+  parts.push(`--${boundary}--`, '');
+  fs.writeFileSync(file, parts.join('\r\n'));
+  return file;
 }

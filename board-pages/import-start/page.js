@@ -39,10 +39,14 @@ function kindPicker() {
 
 function reportCell() {
   const { report } = view;
+  const email = view.kind === 'email';
+  const noun = email ? 'email(s) to review' : 'item(s) to review';
   return [
-    report.fileName ? h('span', { title: report.path }, report.fileName) : h('span', { class: 'muted' }, 'No file chosen.'),
-    report.items !== undefined ? h('span', { class: 'muted' }, ` ${report.items} item(s) to review.`) : null,
-    ' ', h('vscode-button', { id: 'pick-file', secondary: true, disabled: busy, onClick: () => run('pick-file') }, report.fileName ? 'Choose another file…' : 'Choose file…'),
+    report.fileName ? h('span', { title: (report.paths ?? [report.path]).join('\n') }, report.fileName) : h('span', { class: 'muted' }, email ? 'No emails chosen.' : 'No file chosen.'),
+    report.items !== undefined ? h('span', { class: 'muted' }, ` ${report.items} ${noun}.`) : null,
+    ' ', h('vscode-button', { id: 'pick-file', secondary: true, disabled: busy, onClick: () => run('pick-file') },
+      email ? (report.fileName ? 'Choose other emails…' : 'Choose emails…') : (report.fileName ? 'Choose another file…' : 'Choose file…')),
+    report.skipped?.length ? h('p', { class: 'banner warning' }, `Left out because they could not be read: ${report.skipped.join('; ')}`) : null,
   ];
 }
 
@@ -118,7 +122,7 @@ function paint() {
   const content = view ? [
     h('div', { class: 'bar' }, kindPicker()),
     h('table', {}, h('tbody', {},
-      row('Report file', reportCell()),
+      row(view.kind === 'email' ? 'Email files' : 'Report file', reportCell()),
       view.report.problem ? row('', h('p', { class: 'banner error', role: 'alert' }, view.report.problem)) : null,
       row('Project', projectCell()),
       row('Template', templateCell()),

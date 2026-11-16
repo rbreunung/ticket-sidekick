@@ -100,10 +100,10 @@ function newTab(view, board, ctx) {
   const addedTo = ext.addedTo ?? {};
   const open = rows.filter(r => !r.created && !addedTo[r.id]);
   const selected = open.filter(r => r.included).map(r => r.id);
-  const { off, writeOff, waltz } = ctx;
+  const { off, writeOff, waltz, email } = ctx;
 
-  const table = h('div', { class: 'table-wrap' }, h('table', { 'aria-label': 'New rows' },
-    headRow('Create', 'Finding', 'Title', waltz ? 'Rating' : 'Severity', 'Merge', 'Result'),
+  const table = h('div', { class: 'table-wrap' }, h('table', { 'aria-label': email ? 'Emails' : 'New rows' },
+    email ? headRow('Create', 'File', 'Subject', 'Result') : headRow('Create', 'Finding', 'Title', waltz ? 'Rating' : 'Severity', 'Merge', 'Result'),
     h('tbody', {}, rows.map(row => {
       const isOpen = !row.created && !addedTo[row.id];
       return h('tr', { id: `row-${row.id}` },
@@ -111,8 +111,8 @@ function newTab(view, board, ctx) {
           type: 'checkbox', id: `include-${row.id}`, checked: row.included, disabled: off, 'aria-label': `Create ${row.ref}`,
           onChange: () => board.act({ type: 'new-include', ids: [row.id], included: !row.included }),
         }) : ''),
-        h('td', {}, row.ref), h('td', {}, row.summary), h('td', {}, row.rating),
-        h('td', {}, row.merge ? [`Merged #${row.merge} `, isOpen ? h('vscode-button', {
+        h('td', {}, row.ref), h('td', {}, row.summary), email ? null : h('td', {}, row.rating),
+        email ? null : h('td', {}, row.merge ? [`Merged #${row.merge} `, isOpen ? h('vscode-button', {
           id: `unmerge-${row.id}`, secondary: true, disabled: off, onClick: () => board.act({ type: 'new-unmerge', id: row.id }),
         }, 'Unmerge') : null] : ''),
         // A view without the group reference names a row by its own.
@@ -120,7 +120,8 @@ function newTab(view, board, ctx) {
     }))));
 
   const addKey = h('input', { id: 'add-key', type: 'text', size: 12, value: drafts.addKey, disabled: off, onInput: e => { drafts.addKey = e.target.value; } });
-  const addMode = h('select', { id: 'add-mode', disabled: off, onChange: e => { drafts.addMode = e.target.value; } },
+  // An email is added to a ticket as a comment only.
+  const addMode = email ? h('span', {}, 'as a comment') : h('select', { id: 'add-mode', disabled: off, onChange: e => { drafts.addMode = e.target.value; } },
     h('option', { value: 'comment', selected: drafts.addMode === 'comment' }, 'as a comment'),
     h('option', { value: 'rewrite', selected: drafts.addMode === 'rewrite' }, 'as a rewrite'));
   const reason = h('input', { id: 'accept-reason', type: 'text', size: 24, value: drafts.reason, disabled: off, onInput: e => { drafts.reason = e.target.value; } });
@@ -135,11 +136,11 @@ function newTab(view, board, ctx) {
     ctx.summary,
     rows.length === 0 ? null : table,
     h('div', { class: 'bar' },
-      h('vscode-button', { id: 'merge-selected', secondary: true, disabled: off || selected.length < 2, onClick: () => board.act({ type: 'new-merge', ids: selected }) }, 'Merge selected'),
+      email ? null : h('vscode-button', { id: 'merge-selected', secondary: true, disabled: off || selected.length < 2, onClick: () => board.act({ type: 'new-merge', ids: selected }) }, 'Merge selected'),
       h('vscode-button', { id: 'preview-create', disabled: writeOff || ext.toCreate === 0, onClick: () => ctx.preview({ type: 'new-create' }) }, `Preview create (${ext.toCreate} ticket(s))…`)),
     h('div', { class: 'bar' },
       h('label', {}, 'Add selected to ticket', addKey), addMode,
-      h('vscode-button', { id: 'preview-add', secondary: true, disabled: writeOff || selected.length === 0, onClick: () => ctx.preview({ type: 'new-add', ids: selected, key: drafts.addKey, mode: drafts.addMode }) }, 'Preview add…')),
+      h('vscode-button', { id: 'preview-add', secondary: true, disabled: writeOff || selected.length === 0, onClick: () => ctx.preview({ type: 'new-add', ids: selected, key: drafts.addKey, mode: email ? 'comment' : drafts.addMode }) }, 'Preview add…')),
     waltz ? h('div', { class: 'bar' },
       h('label', {}, 'Reason (optional)', reason),
       h('vscode-button', { id: 'preview-accept-cve', secondary: true, disabled: writeOff || selected.length === 0, onClick: () => ctx.preview(acceptAction('accept-cve')) }, 'Preview accept CVEs of selected…'),
@@ -408,6 +409,7 @@ function render(view, board, locked, state) {
     locked, writesOff, results: resultsHere, pending, summary, frozen, off,
     writeOff: off || writesOff,
     waltz: view.tabs.some(t => t.id === 'accepted'),
+    email: view.reportKind === 'Email',
     preview: action => { previewTab = shown; return board.preview(action); },
   };
 

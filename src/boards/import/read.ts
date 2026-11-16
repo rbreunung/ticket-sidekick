@@ -10,21 +10,32 @@ import type { ReviewRowBase, ReviewSession } from '../../imports/types';
 import type { DiagLogger } from '../../utils/diagTypes';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../../utils/waltzReport';
+import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
 import { ACCEPTED_FILE_NAME, type AcceptedEntry } from '../../utils/waltzAccepted';
-import type { ImportRecipe } from './recipe';
+import { recipePaths, type ImportRecipe } from './recipe';
 
 // Reading an import: the report file through its kind's descriptor, the review build of the shared
 // engine (dedup, stale tickets, the accepted list), and what the export needs from Jira, so the
 // export is built from the reading the board shows. Each tab's slice gets its own fingerprint, so a
-// later check can tell which tabs changed. vscode-free.
+// later check can tell which tabs changed. An email import reads its `.eml` files instead, one New
+// row per email, and keeps no attachment content: a write reads the file again. vscode-free.
 
 export type ImportTab = 'new' | 'ticketed' | 'stale' | 'accepted';
 
-export type ImportRow = (VeracodeReviewRow | WaltzReviewRow) & ReviewRowBase;
+/** An email's row on the board: the chat's email row with its subject as the summary every tab shows. */
+export type EmailBoardRow = EmailReviewRow & { summary: string };
+
+export type ImportRow = (VeracodeReviewRow | WaltzReviewRow | EmailBoardRow) & ReviewRowBase;
+
+/** Whether a row is an email's. */
+export function isEmailRow(row: ImportRow): row is EmailBoardRow & ReviewRowBase {
+  return 'emlFilePath' in row;
+}
 
 export interface ImportDescriptors {
   veracode: ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewRow>;
   waltz: ReportImportDescriptor<WaltzComponent[], WaltzReviewRow>;
+  email: ReportImportDescriptor<EmailImportItem, EmailReviewRow>;
 }
 
 /** What the import board needs around it; `jiraDeps.ts` builds it over the Jira services. */
@@ -83,6 +94,8 @@ export interface ImportData {
   /** How many target descriptions could not be read; those rows get no date comparison. */
   descriptionsUnread: number;
   notices: string[];
+  /** An email import's files that were not there at this reading. */
+  missingFiles?: string[];
   export: ImportExportData;
   baseUrl?: string;
 }
@@ -292,9 +305,68 @@ async function readWith<TItem, TRow extends ReviewRowBase & ImportRow>(
   return { readAt: deps.now(), fingerprints: fingerprintsOf(data, reportHash, await acceptedFingerprint(deps.workspaceRoot())), data };
 }
 
+/** An email without its attachments' content, which a session does not keep. */
+function withoutAttachmentContent(item: EmailImportItem): EmailImportItem {
+  return { ...item, attachments: item.attachments.map(a => ({ ...a, contentBytes: '' })) };
+}
+
+/**
+ * Reads an email import: every file that is there is parsed into one New row; a file that fails to
+ * parse is named in a notice, and a file that is gone is listed so the board can tell it apart from
+ * one it deleted itself after creating its ticket. Only when no file is there at all is the import
+ * not found.
+ */
+async function readEmails(recipe: ImportRecipe, deps: ImportDeps): Promise<DerivedPart<ImportData>> {
+  const descriptor = deps.descriptors().email;
+  const paths = recipePaths(recipe);
+  const missingFiles: string[] = [];
+  const failed: string[] = [];
+  const hashes: string[] = [];
+  const items: EmailImportItem[] = [];
+  for (const filePath of paths) {
+    try {
+      hashes.push(`${filePath}\n${await hashFile(filePath)}`);
+    } catch (err) {
+      if (isMissing(err)) missingFiles.push(filePath);
+      else failed.push(`${path.basename(filePath)}: ${messageOf(err)}`);
+      continue;
+    }
+    try {
+      items.push(withoutAttachmentContent(await parseEmlFile(filePath)));
+    } catch (err) {
+      deps.onDiag?.('warn', 'Import board: an email could not be read', { fileName: path.basename(filePath), error: messageOf(err) });
+      failed.push(`${path.basename(filePath)}: ${messageOf(err)}`);
+    }
+  }
+  if (missingFiles.length === paths.length) throw new ReportNotFoundError(paths[0]);
+
+  const notices: string[] = [];
+  if (failed.length > 0) notices.push(`Could not read ${failed.length} email file(s): ${failed.join('; ')}`);
+  const template = await deps.templateFields(recipe, descriptor);
+  if (template.problem) notices.push(template.problem);
+  const { session } = await deps.buildReview({
+    projectKey: recipe.projectKey, items, rawItems: items, reportFilePath: recipe.reportPath,
+    issueType: recipe.issueType, templateName: recipe.templateName, additionalFields: template.additionalFields,
+  }, descriptor, () => undefined);
+
+  const allRows = session.allRows.map(row => ({ ...row, summary: row.subject })) as ImportRow[];
+  const review = { ...session, allRows, rows: session.rows.map(row => ({ ...row, summary: row.subject })) } as unknown as ReviewSession<ImportRow>;
+  const rowKeys: Record<string, string[]> = {};
+  for (const row of allRows) rowKeys[row.id] = [(row as EmailBoardRow).emlFilePath];
+  const data: ImportData = {
+    reportFileName: paths.length === 1 ? path.basename(paths[0]) : `${paths.length} emails`,
+    review, rowKeys, updated: {}, accepted: null, staleFailed: false, descriptionsUnread: 0, notices,
+    ...(missingFiles.length > 0 ? { missingFiles } : {}),
+    export: { tickets: [], versions: [], versionsFailed: false, descriptions: {} },
+  };
+  data.baseUrl = await deps.baseUrl();
+  return { readAt: deps.now(), fingerprints: fingerprintsOf(data, hash([...hashes, ...missingFiles].join('\n')), 'none'), data };
+}
+
 /** Reads the report and Jira for an import. A missing report file and a failed dedup search throw; a failed stale search does not. */
 export async function readImport(recipe: ImportRecipe, deps: ImportDeps): Promise<DerivedPart<ImportData>> {
   const descriptors = deps.descriptors();
+  if (recipe.kind === 'email') return readEmails(recipe, deps);
   return recipe.kind === 'waltz'
     ? readWith(recipe, descriptors.waltz as ReportImportDescriptor<WaltzComponent[], WaltzReviewRow & ImportRow>, deps)
     : readWith(recipe, descriptors.veracode as ReportImportDescriptor<VeracodeFlaw[], VeracodeReviewRow & ImportRow>, deps);

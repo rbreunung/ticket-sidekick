@@ -10,12 +10,12 @@ import { JiraApiError } from '../../utils/apiError';
 import type { ReportImportDescriptor } from '../../imports/descriptor';
 import type { ReviewRowBase } from '../../imports/types';
 import {
-  REPORT_KINDS, REPORT_KIND_LABELS, importSessionId, isReportKind, normaliseReportPath,
+  REPORT_KINDS, REPORT_KIND_LABELS, emailRecipe, importSessionId, isReportKind, normaliseEmailPaths, normaliseReportPath,
   type ImportRecipe, type ReportKind,
 } from './recipe';
 
 // The start screen of an import: a tab without a session. The developer picks the report kind and
-// the report file; the template comes from `ticketSidekick.<kind>.template`, the issue type from
+// the report file (for an email import, one or more `.eml` files); the template comes from `ticketSidekick.<kind>.template`, the issue type from
 // that template and the project from `ticketSidekick.jira.defaultProject`. The template is asked
 // for only when its setting is empty or names a template that is gone, and the choice is saved to
 // the setting. The default project is picked the same way: when it is empty, not a project key or a
@@ -55,6 +55,14 @@ export function reportReaderOf<TItem, TRow extends ReviewRowBase>(descriptor: Re
   return { read: parseAndFilter, noMatchMessage: descriptor.noMatchMessage, fileFilter };
 }
 
+/** How an email import's files are read on the start screen. */
+export interface EmailFilesReader {
+  /** The batch caps for this selection: the message to show, or null when the selection may be read. */
+  checkCaps(filePaths: string[]): Promise<string | null>;
+  /** Parses one file; throws with the reason it cannot be read. */
+  read(filePath: string): Promise<unknown>;
+}
+
 export interface ImportStartDeps {
   /** The current Jira settings, plus a client when Jira is configured. */
   jira(): Promise<JiraAccess>;
@@ -69,6 +77,9 @@ export interface ImportStartDeps {
   reportReader(kind: ReportKind): ReportReader;
   /** VS Code's native open dialog; undefined when it was cancelled. */
   pickReportFile(kind: ReportKind, filter: ReportReader['fileFilter']): Promise<string | undefined>;
+  /** The open dialog for one or more `.eml` files; undefined when it was cancelled. */
+  pickEmailFiles(): Promise<string[] | undefined>;
+  emailFiles: EmailFilesReader;
   /** Opens VS Code's Settings at this setting. */
   openSetting(key: string): Promise<void>;
   hasSession(id: string): Promise<boolean>;
@@ -81,7 +92,11 @@ export interface ImportStartDeps {
 export interface StartScreenView {
   kind: ReportKind;
   kinds: Array<{ id: ReportKind; label: string }>;
-  report: { path?: string; fileName?: string; items?: number; problem?: string };
+  /**
+   * The report file, or an email import's files: `paths` lists every file, `fileName` names the one
+   * file or the count, `items` is the number of emails that read, and `skipped` names the ones that did not.
+   */
+  report: { path?: string; paths?: string[]; fileName?: string; items?: number; problem?: string; skipped?: string[] };
   /**
    * The default project. `askReason` and `options` (Jira's projects, as suggestions for a typed key)
    * are present while one must be given: the setting is empty, not a key, or names a project Jira
@@ -118,11 +133,13 @@ export interface StartScreenView {
   blocker?: string;
 }
 
-type ReportResult = { items: number } | { problem: string };
+type ReportResult = { items: number; skipped?: string[] } | { problem: string };
 
 interface StartState {
   kind: ReportKind;
   reportPath?: string;
+  /** An email import's files, normalised and sorted; `reportPath` is the first. */
+  reportPaths?: string[];
   /** The issue type picked for a template that names none, with that template's name. */
   issueType?: { template: string; name: string };
 }
@@ -148,9 +165,15 @@ export class ImportStartScreen {
 
   /** Starts on a kind and a report file the board was asked for with; anything else in the input is ignored. */
   prefill(input: unknown): void {
-    const v = (typeof input === 'object' && input !== null ? input : {}) as { kind?: unknown; reportPath?: unknown };
+    const v = (typeof input === 'object' && input !== null ? input : {}) as { kind?: unknown; reportPath?: unknown; reportPaths?: unknown };
     if (!isReportKind(v.kind)) return;
     if (v.kind !== this.state.kind) this.state = { kind: v.kind };
+    if (v.kind === 'email') {
+      const files = Array.isArray(v.reportPaths) ? v.reportPaths : [v.reportPath];
+      const absolute = files.filter((f): f is string => typeof f === 'string' && path.isAbsolute(f));
+      if (absolute.length > 0) this.setEmails(absolute);
+      return;
+    }
     if (typeof v.reportPath === 'string' && path.isAbsolute(v.reportPath)) this.setReport(v.reportPath);
   }
 
@@ -182,6 +205,11 @@ export class ImportStartScreen {
       }
       case 'pick-file': {
         const kind = this.state.kind;
+        if (kind === 'email') {
+          const files = await this.deps.pickEmailFiles();
+          if (files && files.length > 0 && this.state.kind === 'email') this.setEmails(files);
+          return this.view();
+        }
         const picked = await this.deps.pickReportFile(kind, this.deps.reportReader(kind).fileFilter);
         // A cancelled dialog changes nothing; so does a kind changed while it was open.
         if (picked && kind === this.state.kind) this.setReport(picked);
@@ -244,6 +272,46 @@ export class ImportStartScreen {
     this.state.reportPath = reportPath;
     // A file picked again is read again: it may have been replaced.
     this.reports.delete(`${this.state.kind}\n${reportPath}`);
+  }
+
+  private setEmails(filePaths: string[]): void {
+    const reportPaths = normaliseEmailPaths(filePaths);
+    this.state.reportPaths = reportPaths;
+    this.state.reportPath = reportPaths[0];
+    this.reports.delete(this.emailKey(reportPaths));
+  }
+
+  private emailKey(reportPaths: string[]): string {
+    return ['email', ...reportPaths].join('\n');
+  }
+
+  /** Reads an email selection: the caps first, then each file; the files that do not read are named and left out. */
+  private async readEmails(reportPaths: string[]): Promise<ReportResult> {
+    const key = this.emailKey(reportPaths);
+    const known = this.reports.get(key);
+    if (known) return known;
+    let result: ReportResult;
+    const capProblem = await this.deps.emailFiles.checkCaps(reportPaths);
+    if (capProblem) {
+      result = { problem: capProblem };
+    } else {
+      const skipped: string[] = [];
+      let items = 0;
+      for (const filePath of reportPaths) {
+        try {
+          await this.deps.emailFiles.read(filePath);
+          items++;
+        } catch (err) {
+          this.deps.onDiag?.('warn', 'Could not read an email on the import start screen', { fileName: path.basename(filePath), error: errorText(err) });
+          skipped.push(`${path.basename(filePath)}: ${errorText(err)}`);
+        }
+      }
+      result = items > 0
+        ? { items, ...(skipped.length > 0 ? { skipped } : {}) }
+        : { problem: `None of the selected emails could be read: ${skipped.join('; ')}` };
+    }
+    this.reports.set(key, result);
+    return result;
   }
 
   private loadTemplates(): { templates: JiraTemplate[]; problem?: string } {
@@ -321,7 +389,7 @@ export class ImportStartScreen {
   }
 
   async view(): Promise<StartScreenView> {
-    const { kind, reportPath } = this.state;
+    const { kind, reportPath, reportPaths } = this.state;
     const access = await this.deps.jira();
     const jiraHint = access.configured ? undefined : buildJiraNotConfiguredMessage(access.config);
     const project = await this.readProject(access);
@@ -362,7 +430,18 @@ export class ImportStartScreen {
     }
 
     const report: StartScreenView['report'] = {};
-    if (reportPath) {
+    if (kind === 'email' && reportPaths && reportPaths.length > 0) {
+      report.path = reportPaths[0];
+      report.paths = reportPaths;
+      report.fileName = reportPaths.length === 1 ? path.basename(reportPaths[0]) : `${reportPaths.length} emails`;
+      const read = await this.readEmails(reportPaths);
+      if ('items' in read) {
+        report.items = read.items;
+        if (read.skipped) report.skipped = read.skipped;
+      } else {
+        report.problem = read.problem;
+      }
+    } else if (reportPath && kind !== 'email') {
       report.path = reportPath;
       report.fileName = path.basename(reportPath);
       const read = await this.readReport(kind, reportPath);
@@ -370,13 +449,15 @@ export class ImportStartScreen {
       else report.problem = read.problem;
     }
 
-    const stored = project.key && reportPath ? await this.deps.hasSession(importSessionId({ kind, projectKey: project.key, reportPath })) : false;
+    const stored = project.key && report.path
+      ? await this.deps.hasSession(importSessionId({ kind, projectKey: project.key, reportPath: report.path, ...(report.paths ? { reportPaths: report.paths } : {}) }))
+      : false;
 
     const blocker = jiraHint
       ?? project.problem
       ?? (project.askReason ? 'Type or choose a project.' : undefined)
       ?? template.problem
-      ?? (!reportPath ? 'Choose the report file.' : undefined)
+      ?? (!report.path ? (kind === 'email' ? 'Choose the email files.' : 'Choose the report file.') : undefined)
       ?? report.problem
       ?? (!template.name ? 'Pick a template.' : undefined)
       ?? (!issueType.name ? 'Pick an issue type.' : undefined);
@@ -398,6 +479,11 @@ export class ImportStartScreen {
 
   /** The recipe of a view that can open. */
   private recipeOf(view: StartScreenView): ImportRecipe {
+    if (view.kind === 'email') {
+      return emailRecipe({
+        projectKey: view.project.key as string, templateName: view.template.name as string, issueType: view.issueType.name as string,
+      }, view.report.paths as string[]);
+    }
     return {
       kind: view.kind,
       projectKey: view.project.key as string,

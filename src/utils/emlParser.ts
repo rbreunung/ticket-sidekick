@@ -75,6 +75,7 @@ export interface EmailReviewRow {
   included: boolean;
   subject: string;
   senderName?: string;
+  receivedDateTime?: string;
   attachmentNames: string[]; // non-inline attachment names, for the review table's Attachments column
   markdownBody: string;
   inlineImageMap: Record<string, string>;
