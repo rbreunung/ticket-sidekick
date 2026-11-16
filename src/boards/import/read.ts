@@ -11,6 +11,7 @@ import type { DiagLogger } from '../../utils/diagTypes';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../../utils/waltzReport';
 import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
+import { matchRepeats, subjectSearchTerm } from '../../imports/email';
 import { ACCEPTED_FILE_NAME, type AcceptedEntry } from '../../utils/waltzAccepted';
 import { recipePaths, type ImportRecipe } from './recipe';
 
@@ -22,8 +23,14 @@ import { recipePaths, type ImportRecipe } from './recipe';
 
 export type ImportTab = 'new' | 'ticketed' | 'stale' | 'accepted';
 
-/** An email's row on the board: the chat's email row with its subject as the summary every tab shows. */
-export type EmailBoardRow = EmailReviewRow & { summary: string };
+/** A ticket whose summary is an email's subject: the email is likely a repeat. */
+export interface RepeatTicket {
+  key: string;
+  summary: string;
+}
+
+/** An email's row on the board: the chat's email row with its subject as the summary every tab shows, and the tickets it likely repeats. */
+export type EmailBoardRow = EmailReviewRow & { summary: string; repeatOf?: RepeatTicket[] };
 
 export type ImportRow = (VeracodeReviewRow | WaltzReviewRow | EmailBoardRow) & ReviewRowBase;
 
@@ -55,6 +62,8 @@ export interface ImportDeps {
   /** Jira's `updated` time of each named ticket; throws with a worded reason. */
   updatedTimes(keys: string[]): Promise<Record<string, string>>;
   projectVersions(projectKey: string): Promise<ProjectVersionInfo[]>;
+  /** The project's tickets whose summary matches one of these text search terms; candidates only, compared exactly by the caller. Throws with a worded reason. */
+  summarySearch?(projectKey: string, terms: string[]): Promise<RepeatTicket[]>;
   /** The descriptions of the named tickets; a ticket that cannot be read is null. */
   descriptions(keys: string[]): Promise<Record<string, string | null>>;
   /** The Jira services the write actions run through; throws when Jira is not set up. */
@@ -349,8 +358,10 @@ async function readEmails(recipe: ImportRecipe, deps: ImportDeps): Promise<Deriv
     issueType: recipe.issueType, templateName: recipe.templateName, additionalFields: template.additionalFields,
   }, descriptor, () => undefined);
 
-  const allRows = session.allRows.map(row => ({ ...row, summary: row.subject })) as ImportRow[];
-  const review = { ...session, allRows, rows: session.rows.map(row => ({ ...row, summary: row.subject })) } as unknown as ReviewSession<ImportRow>;
+  const repeats = await findRepeats(recipe, session.allRows, deps, notices);
+  const asBoardRow = (row: EmailReviewRow & ReviewRowBase) => ({ ...row, summary: row.subject, ...(repeats[row.id] ? { repeatOf: repeats[row.id] } : {}) });
+  const allRows = session.allRows.map(asBoardRow) as ImportRow[];
+  const review = { ...session, allRows, rows: session.rows.map(asBoardRow) } as unknown as ReviewSession<ImportRow>;
   const rowKeys: Record<string, string[]> = {};
   for (const row of allRows) rowKeys[row.id] = [(row as EmailBoardRow).emlFilePath];
   const data: ImportData = {
@@ -361,6 +372,44 @@ async function readEmails(recipe: ImportRecipe, deps: ImportDeps): Promise<Deriv
   };
   data.baseUrl = await deps.baseUrl();
   return { readAt: deps.now(), fingerprints: fingerprintsOf(data, hash([...hashes, ...missingFiles].join('\n')), 'none'), data };
+}
+
+/** How many subjects one text search asks Jira for. */
+const SUBJECT_CHUNK = 10;
+
+/**
+ * The tickets in the project whose summary is an email's subject, by row id. A failed search
+ * marks no email and says so in a notice; creating is still possible.
+ */
+async function findRepeats(
+  recipe: ImportRecipe, rows: Array<EmailReviewRow & ReviewRowBase>, deps: ImportDeps, notices: string[],
+): Promise<Record<string, RepeatTicket[]>> {
+  if (!deps.summarySearch || rows.length === 0) return {};
+  const terms = [...new Set(rows.map(r => subjectSearchTerm(r.subject)).filter(t => t !== ''))];
+  if (terms.length === 0) return {};
+  try {
+    const found: RepeatTicket[] = [];
+    for (let i = 0; i < terms.length; i += SUBJECT_CHUNK) found.push(...await deps.summarySearch(recipe.projectKey, terms.slice(i, i + SUBJECT_CHUNK)));
+    const unique = [...new Map(found.map(t => [t.key, t])).values()];
+    return matchRepeats(Object.fromEntries(rows.map(r => [r.id, r.subject])), unique);
+  } catch (err) {
+    deps.onDiag?.('warn', 'Import board: the search for tickets with the same subject failed', { projectKey: recipe.projectKey, error: messageOf(err) });
+    notices.push('The search for tickets with the same subject failed, so no email is marked as a likely repeat. Refresh to search again.');
+    return {};
+  }
+}
+
+/** The tickets each New email likely repeats, by row key; empty for the other kinds. */
+export function repeatsByRowKey(data: ImportData): Map<string, RepeatTicket[]> {
+  const repeats = new Map<string, RepeatTicket[]>();
+  for (const row of newRows(data)) if (isEmailRow(row) && row.repeatOf?.length) repeats.set(rowKeyOf(data, row), row.repeatOf);
+  return repeats;
+}
+
+/** Whether a New row is left out of the create: the developer left it out, or it is a likely repeat the developer did not take in. */
+export function isLeftOut(data: ImportData, choices: { excluded: string[]; included?: string[] }, key: string): boolean {
+  if (choices.excluded.includes(key)) return true;
+  return repeatsByRowKey(data).has(key) && !(choices.included ?? []).includes(key);
 }
 
 /** Reads the report and Jira for an import. A missing report file and a failed dedup search throw; a failed stale search does not. */

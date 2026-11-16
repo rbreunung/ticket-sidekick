@@ -15,8 +15,13 @@ export class EmptyProjectJira extends MockJiraClient {
   tickets: Record<string, { labels: string[]; summary: string }> = {};
   private nextKey = 100;
 
+  /** Makes the subject search of an email import fail. */
+  summarySearchFails = false;
+
   override async searchJql(jql: string): Promise<JiraSearchResult> {
-    const keys = jql.startsWith('key in (') ? Object.keys(this.tickets) : [];
+    if (jql.includes('summary ~') && this.summarySearchFails) throw new Error('Jira is down');
+    // Every ticket is a candidate of a subject search; the board compares the summaries itself.
+    const keys = jql.startsWith('key in (') || jql.includes('summary ~') ? Object.keys(this.tickets) : [];
     const issues = keys.map(key => ({
       id: key, key,
       fields: {

@@ -11,7 +11,7 @@ import type { AcceptedHidden, TicketedAction } from '../../imports/types';
 import { countedNoun } from '../../utils/chatPrimitives';
 import type { DateKind } from '../../utils/waltzDates';
 import {
-  isEmailRow, newRows, readImport, rowKeyOf, slicesOf, staleTickets, ticketedRows,
+  isEmailRow, isLeftOut, newRows, readImport, rowKeyOf, slicesOf, staleTickets, ticketedRows,
   type ImportData, type ImportDeps, type ImportRow, type ImportTab, type SliceEntry,
 } from './read';
 import {
@@ -30,6 +30,8 @@ export type { ImportTab } from './read';
 export interface ImportChoices {
   /** New rows left out of the create. */
   excluded: string[];
+  /** Likely repeats (emails) the developer took into the create; a likely repeat starts left out. */
+  included?: string[];
   /** New rows merged into one ticket, each by its members' row keys in order. */
   merges: string[][];
   /** Already-ticketed actions the developer chose in place of the default. */
@@ -115,6 +117,8 @@ export interface NewRowView {
   created?: string;
   /** That ticket's page in Jira. */
   createdUrl?: string;
+  /** An email whose subject is already these tickets' summary; it starts left out of the create. */
+  repeatOf?: Array<{ key: string; summary: string; url: string | null }>;
 }
 
 export interface TicketedRowView {
@@ -327,7 +331,7 @@ function hasWork(data: ImportData, writes: ImportWrites, choices: ImportChoices,
     const created = createdKeySet(writes);
     return newRows(data).some(r => {
       const key = rowKeyOf(data, r);
-      return !isCreated(created, key) && !choices.excluded.includes(key);
+      return !isCreated(created, key) && !isLeftOut(data, choices, key);
     });
   }
   if (tab === 'ticketed') return ticketedRows(data).some(r => needsDecision(data, r, writes));
@@ -353,7 +357,7 @@ function hasUnfinishedChoices(data: ImportData, working: ImportWorking, tab: Imp
     const keys = new Set(newRows(data).map(r => rowKeyOf(data, r)));
     const created = createdKeySet(writes);
     const open = (key: string) => keys.has(key) && !isCreated(created, key);
-    return choices.excluded.some(open) || choices.merges.some(m => m.some(open));
+    return choices.excluded.some(open) || (choices.included ?? []).some(open) || choices.merges.some(m => m.some(open));
   }
   if (tab === 'ticketed') {
     const rows = new Map(ticketedRows(data).map(r => [rowKeyOf(data, r), r]));
@@ -522,7 +526,8 @@ function keepChoices(session: ImportSession, fresh: ImportData): { choices: Impo
     dropped.push(`${key}: its selection for closing was dropped, because it is no longer a stale ticket the board can close.`);
     return false;
   });
-  return { choices: { excluded, merges, actions, staleSelected }, dropped };
+  const included = (choices.included ?? []).filter(key => freshNew.has(key));
+  return { choices: { excluded, ...(included.length > 0 ? { included } : {}), merges, actions, staleSelected }, dropped };
 }
 
 function matches(filter: string | undefined, ...fields: Array<string | null | undefined>): boolean {
@@ -720,7 +725,8 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
           const createdKey = isCreated(created, key) ? createdFor(writes, key) : undefined;
           const merge = mergeOf.get(key);
           return {
-            id: r.id, ref: rowRef(r), group: groupRefs.get(r.id)!, summary: r.summary, rating: rowRating(r), included: !choices.excluded.includes(key),
+            id: r.id, ref: rowRef(r), group: groupRefs.get(r.id)!, summary: r.summary, rating: rowRating(r), included: !isLeftOut(data, choices, key),
+            ...(isEmailRow(r) && r.repeatOf?.length ? { repeatOf: r.repeatOf.map(t => ({ key: t.key, summary: t.summary, url: browseUrl(data.baseUrl, t.key) })) } : {}),
             ...(merge ? { merge } : {}), ...(createdKey ? { created: createdKey, ...(browseUrl(data.baseUrl, createdKey) ? { createdUrl: browseUrl(data.baseUrl, createdKey)! } : {}) } : {}),
           };
         }),

@@ -94,6 +94,17 @@ function newRowState(row, ref, ctx, addedTo) {
   return resultCell(...rowOutcome(ctx.pending.has(ref), result?.outcome === 'done' ? undefined : result, false, ''));
 }
 
+// An email whose subject is already a ticket's summary: name the tickets and offer to add the email to the first as a comment.
+function repeatNote(row, ctx) {
+  const [first] = row.repeatOf;
+  return h('div', { class: 'muted' },
+    'Likely a repeat of ', row.repeatOf.map((t, n) => [n > 0 ? ', ' : '', link(t.key, t.url)]), '. ',
+    h('vscode-button', {
+      id: `add-repeat-${row.id}`, secondary: true, disabled: ctx.writeOff,
+      onClick: () => ctx.preview({ type: 'new-add', ids: [row.id], key: first.key, mode: 'comment' }),
+    }, `Add as comment to ${first.key}…`));
+}
+
 function newTab(view, board, ctx) {
   const rows = view.new?.rows ?? [];
   const ext = view.ext.new ?? { toCreate: 0, perApply: 50, addedTo: {} };
@@ -111,7 +122,7 @@ function newTab(view, board, ctx) {
           type: 'checkbox', id: `include-${row.id}`, checked: row.included, disabled: off, 'aria-label': `Create ${row.ref}`,
           onChange: () => board.act({ type: 'new-include', ids: [row.id], included: !row.included }),
         }) : ''),
-        h('td', {}, row.ref), h('td', {}, row.summary), email ? null : h('td', {}, row.rating),
+        h('td', {}, row.ref), h('td', {}, row.summary, row.repeatOf && isOpen ? repeatNote(row, ctx) : null), email ? null : h('td', {}, row.rating),
         email ? null : h('td', {}, row.merge ? [`Merged #${row.merge} `, isOpen ? h('vscode-button', {
           id: `unmerge-${row.id}`, secondary: true, disabled: off, onClick: () => board.act({ type: 'new-unmerge', id: row.id }),
         }, 'Unmerge') : null] : ''),

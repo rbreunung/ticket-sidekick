@@ -70,3 +70,13 @@ describe('email batch caps', () => {
     expect(await checkEmailBatchCaps([eml], 3 * 1024 * 1024)).toBeNull();
   });
 });
+
+describe('likely repeats', () => {
+  it('compares subjects without reply prefixes, spacing or case', async () => {
+    const { matchRepeats, normaliseSubject, subjectSearchTerm } = await import('../imports/email');
+    expect(normaliseSubject('AW: WG:  Login   Fails')).toBe('login fails');
+    expect(subjectSearchTerm('RE: [Prod] Login fails?')).toBe('prod login fails');
+    expect(matchRepeats({ 1: 'RE: Login fails', 2: 'Other' }, [{ key: 'P-1', summary: 'login fails' }, { key: 'P-2', summary: 'Login fails today' }]))
+      .toEqual({ 1: [{ key: 'P-1', summary: 'login fails' }] });
+  });
+});

@@ -7,7 +7,7 @@ import type { AddMode, ReviewSession } from '../../imports/types';
 import { BATCH_LIMIT, templateLabelsOf } from '../../utils/reportImport';
 import { descriptorOf, type HandlerPayload, type ImportDescriptor, type ImportHandler, type ImportSession } from './handlers';
 import type { ImportWorking } from './kind';
-import { ISSUE_KEY_PATTERN, isEmailRow, newRows, rowKeyOf, ticketedRows, type ImportData, type ImportDeps, type ImportRow } from './read';
+import { ISSUE_KEY_PATTERN, isEmailRow, isLeftOut, newRows, repeatsByRowKey, rowKeyOf, ticketedRows, type ImportData, type ImportDeps, type ImportRow } from './read';
 import { buildEmailCommentWiki, uploadEmailAttachments } from '../../imports/email';
 import { chosenEmailBody, emailRowForWrite } from './emailRows';
 import * as path from 'path';
@@ -80,8 +80,8 @@ function groupsOf(data: ImportData, working: ImportWorking): Group[] {
   return groups;
 }
 
-function isIncluded(group: Group, working: ImportWorking): boolean {
-  return !group.keys.some(key => working.choices.excluded.includes(key));
+function isIncluded(data: ImportData, group: Group, working: ImportWorking): boolean {
+  return !group.keys.some(key => isLeftOut(data, working.choices, key));
 }
 
 /** How a group is named: its flaw ids, its components, or its emails' files. */
@@ -144,7 +144,14 @@ function reduceNew(session: ImportSession, action: { type: string } & Record<str
     if (!groups) return { ok: false, reason: 'Pick new rows that have no ticket yet.' };
     const keys = new Set(groups.flatMap(g => g.keys));
     const kept = working.choices.excluded.filter(key => !keys.has(key));
-    return { ok: true, working: withChoices(working, { excluded: action.included ? kept : [...kept, ...keys] }) };
+    // A likely repeat starts left out, so taking it in is a choice of its own.
+    const repeats = repeatsByRowKey(data);
+    const keptIn = (working.choices.included ?? []).filter(key => !keys.has(key));
+    const included = action.included ? [...keptIn, ...[...keys].filter(key => repeats.has(key))] : keptIn;
+    return {
+      ok: true,
+      working: withChoices(working, { excluded: action.included ? kept : [...kept, ...keys], ...(included.length > 0 || working.choices.included ? { included } : {}) }),
+    };
   }
 
   if (action.type === 'new-merge') {
@@ -182,7 +189,7 @@ function planNew(session: ImportSession, action: { type: string } & Record<strin
   const { data } = session.derived;
 
   if (action.type === 'new-create') {
-    const included = groupsOf(data, working).filter(g => isIncluded(g, working));
+    const included = groupsOf(data, working).filter(g => isIncluded(data, g, working));
     if (included.length === 0) return { ok: false, reason: 'Nothing to create: no new row is selected.' };
     const batch = included.slice(0, BATCH_LIMIT);
     const remaining = included.length - batch.length;
@@ -481,7 +488,7 @@ export const newTabHandler: ImportHandler = {
       if (into) addedTo[row.id] = into.key;
     }
     const view: NewTabView = {
-      toCreate: groupsOf(data, working).filter(g => isIncluded(g, working)).length,
+      toCreate: groupsOf(data, working).filter(g => isIncluded(data, g, working)).length,
       perApply: BATCH_LIMIT,
       addedTo,
     };

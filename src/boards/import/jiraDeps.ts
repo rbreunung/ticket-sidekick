@@ -4,6 +4,7 @@ import type { JiraAccess } from '../../tools/jiraTools/jiraAccess';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
 import { fetchAllPages } from '../../utils/reportImport';
+import { quoteJqlValue } from '../../utils/searchConstraints';
 import { ISSUE_KEY_PATTERN, type ImportDeps, type ImportDescriptors } from './read';
 
 // What the import board needs from Jira, built on the shared services: template resolution, the
@@ -12,6 +13,8 @@ import { ISSUE_KEY_PATTERN, type ImportDeps, type ImportDescriptors } from './re
 
 const KEY_CHUNK = 50;
 const UPDATED_PARALLEL = 4;
+/** How many candidate tickets one subject search reads; the exact compare happens afterwards. */
+const SUMMARY_RESULTS = 100;
 
 export interface ImportJiraOptions {
   getJira(): Promise<JiraAccess>;
@@ -107,6 +110,15 @@ export function importJiraDeps(options: ImportJiraOptions): ImportDeps {
     projectVersions: async projectKey => {
       const { ticketService } = await jira();
       return guarded('Reading the project versions', () => ticketService.getProjectVersions(projectKey));
+    },
+
+    summarySearch: async (projectKey, terms) => {
+      const { ticketService } = await jira();
+      const jql = `project = ${quoteJqlValue(projectKey)} AND (${terms.map(t => `summary ~ ${quoteJqlValue(t)}`).join(' OR ')}) ORDER BY created DESC`;
+      return guarded('Searching for tickets with the same subject', async () => {
+        const result = await ticketService.searchTicketsRaw(jql, SUMMARY_RESULTS, ['summary']);
+        return result.issues.map(issue => ({ key: issue.key, summary: String((issue.fields as { summary?: unknown }).summary ?? '') }));
+      });
     },
 
     descriptions: async keys => {

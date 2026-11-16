@@ -149,3 +149,40 @@ export function createEmailDescriptor(
     },
   };
 }
+
+// ── Likely repeats: an email whose subject is already a ticket's summary ──────────────────────────
+
+/** Reply and forward prefixes a mail client puts before a subject, in English and German. */
+const SUBJECT_PREFIX = /^\s*(?:(?:re|aw|fw|fwd|wg)\s*(?:\[\d+\])?\s*:\s*)+/i;
+
+/** A subject or summary as the repeat check compares it: without reply/forward prefixes, spacing and case. */
+export function normaliseSubject(text: string): string {
+  return text.replace(SUBJECT_PREFIX, '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * The words of a subject as a Jira text search term: letters and digits only, since the text
+ * search reads many punctuation marks as operators. It only finds candidates; the exact compare is
+ * done on the normalised text. Empty when the subject has no words.
+ */
+export function subjectSearchTerm(subject: string): string {
+  return normaliseSubject(subject).replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+/** For each subject, the tickets whose summary is the same after normalising, in the order Jira returned them. */
+export function matchRepeats(
+  subjects: Record<string, string>, tickets: Array<{ key: string; summary: string }>,
+): Record<string, Array<{ key: string; summary: string }>> {
+  const byText = new Map<string, Array<{ key: string; summary: string }>>();
+  for (const t of tickets) {
+    const text = normaliseSubject(t.summary);
+    if (!text) continue;
+    byText.set(text, [...(byText.get(text) ?? []), t]);
+  }
+  const repeats: Record<string, Array<{ key: string; summary: string }>> = {};
+  for (const [id, subject] of Object.entries(subjects)) {
+    const hits = byText.get(normaliseSubject(subject));
+    if (hits && hits.length > 0) repeats[id] = hits;
+  }
+  return repeats;
+}

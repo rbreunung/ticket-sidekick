@@ -164,3 +164,32 @@ describe('adding an email to an existing ticket', () => {
     expect(planned).toEqual({ ok: false, reason: 'An email is added to a ticket as a comment.' });
   });
 });
+
+describe('likely repeats', () => {
+  it('marks an email whose subject is a ticket\'s summary, leaves it out and offers that ticket', async () => {
+    jira.tickets['PROJ-42'] = { labels: [], summary: 'Login fails' };
+    jira.tickets['PROJ-43'] = { labels: [], summary: 'Login fails on Monday' };
+    let session = await openEmails([emlFile(dir, 'a.eml', 'RE: Login fails'), emlFile(dir, 'b.eml', 'Export is slow')]);
+    const rows = view(session).new!.rows;
+    expect(rows.map(r => [r.ref, r.included, r.repeatOf?.map(t => t.key)])).toEqual([['a.eml', false, ['PROJ-42']], ['b.eml', true, undefined]]);
+    expect(rows[0].repeatOf![0].url).toBe('https://jira.example.com/browse/PROJ-42');
+
+    // Creating takes only the other email; the repeat can still be taken in.
+    expect((await plan(session, { type: 'new-create' })).lines.map(l => l.target)).toEqual(['b.eml']);
+    session = act(session, { type: 'new-include', ids: [rowId(session, 'a.eml')], included: true });
+    expect(view(session).new!.rows[0].included).toBe(true);
+    expect((await plan(session, { type: 'new-create' })).lines).toHaveLength(2);
+    session = act(session, { type: 'new-include', ids: 'all', included: false });
+    expect(view(session).new!.rows.map(r => r.included)).toEqual([false, false]);
+  });
+
+  it('marks nothing and says so when the search fails, and still creates', async () => {
+    jira.summarySearchFails = true;
+    const session = await openEmails([emlFile(dir, 'a.eml', 'Login fails')]);
+    const v = view(session);
+    expect(v.notices.join(' ')).toMatch(/search for tickets with the same subject failed/);
+    expect(v.new!.rows[0].included).toBe(true);
+    const { applied } = await apply(session, await plan(session, { type: 'new-create' }));
+    expect(applied.results.map(r => r.outcome)).toEqual(['done']);
+  });
+});
