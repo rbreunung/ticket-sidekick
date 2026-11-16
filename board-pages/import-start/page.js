@@ -93,7 +93,7 @@ function modelCell() {
       h('option', { value: '', selected: true }, model.inUse ? 'Pick another model…' : 'Choose a model…'),
       model.options.map(m => h('option', { value: m.id }, m.label))) : null,
     model.inUse ? [' ', h('vscode-button', { id: 'email-model-check', secondary: true, disabled: busy, onClick: () => run('model-check') }, 'Check the model')] : null,
-    model.listProblem ? h('p', { class: 'banner' }, model.listProblem) : null,
+    model.problem ? h('p', { class: 'banner' }, model.problem) : null,
     model.check ? h('p', { class: model.check.ok ? 'banner' : 'banner error', role: 'status' }, model.check.message) : null,
   ];
 }

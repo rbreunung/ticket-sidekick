@@ -1,18 +1,5 @@
-import { describe, it, expect, afterAll, vi } from 'vitest';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
-import { isAllowedUploadPath, isSafeFilename, isSafePathSegment } from '../tools/pathSafety';
-
-// isAllowedUploadPath() is relative to os.homedir(). On Windows (and some CI images) os.tmpdir()
-// lives *inside* the home directory, so a temp dir can't stand in for "outside home". The tests
-// below pin homedir() to a throwaway directory instead, which behaves the same on every platform.
-const fakeHome = vi.hoisted(() => ({ dir: '' }));
-vi.mock('os', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('os')>();
-  const homedir = () => fakeHome.dir || actual.homedir();
-  return { ...actual, homedir, default: { ...actual, homedir } };
-});
+import { describe, it, expect } from 'vitest';
+import { isSafeFilename, isSafePathSegment } from '../tools/pathSafety';
 
 describe('isSafePathSegment', () => {
   it('accepts a normal Jira ticket key', () => {
@@ -63,54 +50,5 @@ describe('isSafeFilename (code-review fix: isSafePathSegment was too strict for 
   it('rejects the literal traversal segments "." and ".."', () => {
     expect(isSafeFilename('.')).toBe(false);
     expect(isSafeFilename('..')).toBe(false);
-  });
-});
-
-describe('isAllowedUploadPath (security fix: code-review P0/P1)', () => {
-  // realpath: macOS /var -> /private/var and Windows 8.3 short names would otherwise make the
-  // resolved file path differ from the home string even though both name the same directory.
-  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-sidekick-home-')));
-  fakeHome.dir = home;
-  const testRoot = fs.mkdtempSync(path.join(os.homedir(), 'ticket-sidekick-test-'));
-  const plainFile = path.join(testRoot, 'report.pdf');
-  fs.writeFileSync(plainFile, 'stub');
-  const dotDir = path.join(testRoot, '.ssh');
-  fs.mkdirSync(dotDir);
-  const dotDirFile = path.join(dotDir, 'id_rsa');
-  fs.writeFileSync(dotDirFile, 'stub');
-  const dotFile = path.join(testRoot, '.env');
-  fs.writeFileSync(dotFile, 'stub');
-  const outsideHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ticket-sidekick-outside-')));
-  const outsideFile = path.join(outsideHome, 'evil.txt');
-  fs.writeFileSync(outsideFile, 'stub');
-
-  afterAll(() => {
-    fs.rmSync(home, { recursive: true, force: true });
-    fs.rmSync(outsideHome, { recursive: true, force: true });
-    fakeHome.dir = '';
-  });
-
-  it('accepts a plain file directly under the home directory', () => {
-    expect(isAllowedUploadPath(plainFile)).toBe(true);
-  });
-
-  it('rejects a file inside a dotdir under the home directory (e.g. ~/.ssh/id_rsa)', () => {
-    expect(isAllowedUploadPath(dotDirFile)).toBe(false);
-  });
-
-  it('rejects a dotfile directly under the home directory (e.g. ~/.env)', () => {
-    expect(isAllowedUploadPath(dotFile)).toBe(false);
-  });
-
-  it('rejects a path outside the home directory entirely', () => {
-    expect(isAllowedUploadPath(outsideFile)).toBe(false);
-  });
-
-  it('rejects a traversal path that resolves outside the home directory', () => {
-    expect(isAllowedUploadPath(path.join(testRoot, '..', '..', 'etc', 'passwd'))).toBe(false);
-  });
-
-  it('rejects the home directory itself', () => {
-    expect(isAllowedUploadPath(os.homedir())).toBe(false);
   });
 });

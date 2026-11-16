@@ -5,8 +5,7 @@ import { sanitizeDetails, MAX_STRING_LENGTH } from './logRedaction';
 let channel: vscode.OutputChannel | undefined;
 
 /**
- * Lazy singleton — shared by every feature in the extension (both `@jira`
- * and `@bitbucket`), not just this one. Visible to the user via
+ * Lazy singleton — shared by every feature in the extension. Visible to the user via
  * `View → Output → "Ticket Sidekick"`.
  */
 export function getOutputChannel(): vscode.OutputChannel {

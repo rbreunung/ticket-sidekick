@@ -26,22 +26,15 @@ export interface ReportImportRow extends ReviewRowBase {
  * shape instead.
  */
 export interface ReportImportDescriptor<TItem, TRow extends ReviewRowBase> {
-  // Identifies which importer this is. The shared issue-type chat-ask's AwaitIssueTypeResume
-  // carries it, and JiraParticipant.ts's router resumes only an 'email' one, through
-  // emailHandler.ts's handleEmailAwaitIssueType; the import board picks the Veracode or Waltz
-  // descriptor by its recipe's kind.
+  // Identifies which importer this is; the import board picks the descriptor by its recipe's kind.
   descriptorKind: 'veracode' | 'waltz' | 'email';
   scope: string; // logDiag scope, e.g. 'jira.veracode' / 'jira.waltz' / 'jira.email'
   importLabel: string; // e.g. 'Veracode' / 'Waltz OSS' — used only in the final diag-log line
   itemNoun: string; // e.g. 'flaw(s)' / 'component(s)' — table/summary wording
   filterKindLabel: string; // e.g. 'severity/status' / 'rating/remediation' — template-selection wording
   noMatchMessage: string; // full "no items matched your filters" message (config key names differ per importer)
-  // These three back openReportFilePicker()/handleImportReport() below, which are single-file (one
-  // report -> many items) — Veracode/Waltz's only file-picker entry point. Optional because email's
-  // one-file-per-item shape doesn't fit that contract; email's own entry points (emailHandler.ts)
-  // build EmailImportItem[] themselves via a multi-select picker and call buildImportTemplateSession()
-  // directly, bypassing openReportFilePicker()/handleImportReport() entirely — so email's descriptor
-  // omits all three rather than supplying values nothing would ever invoke.
+  // The single-file report reader (one report -> many items) the start screen uses for Veracode and
+  // Waltz. Email omits all three: its start screen reads one or more `.eml` files, one item each.
   fileFilter?: { label: string; extensions: string[] };
   filePickerTitle?: string;
   // readAndFilterXFile — encoding-aware per importer. Also returns the *raw, unfiltered* parsed

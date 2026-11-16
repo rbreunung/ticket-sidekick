@@ -58,7 +58,7 @@ export interface ImportTemplateSelectionSession<TItem> {
   items: TItem[]; // already filtered by the importer's own config (severity/rating, status/action, etc.)
   // The *raw, unfiltered* parsed items (before the importer's own minSeverity/status-style
   // filter) — needed to build the "is this finding still active" predicate the stale-ticket check
-  // requires (reportImportHandler.ts's `continueAfterImportIssueType`). `unknown[]` rather than a
+  // requires (`buildImportReview` in src/imports/review.ts). `unknown[]` rather than a
   // second generic parameter: Veracode's raw items (individual pre-fold flaws) are a different
   // shape than `TItem` (folded groups), so the importer's own descriptor.stale.buildActivePredicate
   // casts this back to its real type — see ReportImportDescriptor's own doc comment. Absent/empty

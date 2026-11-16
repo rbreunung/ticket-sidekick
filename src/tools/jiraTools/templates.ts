@@ -4,8 +4,8 @@ import { defineTool } from '../toolDefinition';
 import type { JiraToolDeps } from './jiraAccess';
 import { LIST_TEMPLATES_TOOL } from './toolNames';
 
-// The ticket templates of the workspace (`.jira-templates.json` in the first workspace folder,
-// the file `@jira` reads), each with the fields it sets. Reading them needs no Jira connection.
+// The ticket templates of the workspace (`.jira-templates.json` in the first workspace folder),
+// each with the fields it sets. Reading them needs no Jira connection.
 
 export const listTemplatesTool = defineTool<JiraToolDeps, Record<string, never>>({
   name: LIST_TEMPLATES_TOOL,

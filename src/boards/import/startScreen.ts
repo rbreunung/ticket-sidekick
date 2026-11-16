@@ -10,8 +10,8 @@ import { JiraApiError } from '../../utils/apiError';
 import type { ReportImportDescriptor } from '../../imports/descriptor';
 import type { ReviewRowBase } from '../../imports/types';
 import {
-  EMAIL_MODEL_SETTING, checkModelAnswers, emailModelInUse, modelLabel,
-  type BoardModelInfo, type BoardModels, type ModelCheck, type ModelSettings, type ModelSource,
+  EMAIL_MODEL_SETTING, checkModelAnswers, describeEmailModels, emailModelInUse,
+  type BoardModelInfo, type BoardModels, type EmailModelChoice, type ModelCheck, type ModelSettings,
 } from '../boardModels';
 import {
   REPORT_KINDS, REPORT_KIND_LABELS, emailRecipe, importSessionId, isReportKind, normaliseEmailPaths, normaliseReportPath,
@@ -135,13 +135,7 @@ export interface StartScreenView {
    * An email import's model for the boilerplate check: the one in use and where it comes from, the
    * models to pick from, and the result of the one-call check after a pick. Not needed to open the import.
    */
-  emailModel?: {
-    settingKey: string;
-    inUse?: { id: string; label: string; source: ModelSource };
-    options?: Array<{ id: string; label: string }>;
-    listProblem?: string;
-    check?: { ok: boolean; message: string };
-  };
+  emailModel?: EmailModelChoice & { settingKey: string; check?: { ok: boolean; message: string } };
   /** The Jira setup hint, shown instead of Open while Jira is not configured. */
   jiraHint?: string;
   /** An import of this file in this project is stored already: Open shows it as it is, Start over begins again. */
@@ -334,17 +328,8 @@ export class ImportStartScreen {
   private async emailModelView(): Promise<StartScreenView['emailModel']> {
     const { models, modelSettings } = this.deps;
     if (!models || !modelSettings) return undefined;
-    const view: NonNullable<StartScreenView['emailModel']> = { settingKey: EMAIL_MODEL_SETTING };
-    const list = await this.listModels();
-    const known = 'models' in list ? list.models : [];
-    const inUse = emailModelInUse(modelSettings);
-    if (inUse) {
-      const model = known.find(m => m.id === inUse.id);
-      view.inUse = { id: inUse.id, label: model ? modelLabel(model) : inUse.id, source: inUse.source };
-    }
-    if ('problem' in list) view.listProblem = `The language models could not be listed: ${list.problem}`;
-    else if (known.length === 0) view.listProblem = 'No language model is available in this VS Code. Sign in to GitHub Copilot to use the model check.';
-    else view.options = known.map(m => ({ id: m.id, label: modelLabel(m) }));
+    const view: NonNullable<StartScreenView['emailModel']> = { settingKey: EMAIL_MODEL_SETTING, ...describeEmailModels(await this.listModels(), modelSettings) };
+    const inUse = view.inUse;
     if (this.modelCheck && (!inUse || this.modelCheck.modelId === inUse.id)) {
       view.check = this.modelCheck.ok
         ? { ok: true, message: 'The model answered.' }

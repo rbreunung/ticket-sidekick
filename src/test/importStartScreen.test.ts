@@ -35,6 +35,7 @@ let openedSettings: string[];
 let readers: Partial<Record<ReportKind, ReportReader>>;
 let nextEmails: string[] | undefined;
 let unreadable: Set<string>;
+let capProblem: string | null;
 let modelSettings: { email: string; review: string };
 let available: Array<{ id: string; name: string; vendor: string; family: string }>;
 let modelFails: Error | undefined;
@@ -71,7 +72,7 @@ function deps(): ImportStartDeps {
     pickReportFile: async (_kind, filter) => { pickedFilters.push(filter.label); return nextFile; },
     pickEmailFiles: async () => nextEmails,
     emailFiles: {
-      checkCaps: async paths => (paths.length > 50 ? `Selected ${paths.length} files — the batch limit is 50.` : null),
+      checkCaps: async () => capProblem,
       read: async filePath => { if (unreadable.has(path.basename(filePath))) throw new Error('not an email'); return {}; },
     },
     models: {
@@ -109,6 +110,7 @@ beforeEach(async () => {
   settings = { veracode: '', waltz: '', email: '' };
   nextEmails = undefined;
   unreadable = new Set();
+  capProblem = null;
   modelSettings = { email: '', review: '' };
   available = [{ id: 'm1', name: 'Model One', vendor: 'copilot', family: 'one' }];
   modelFails = undefined;
@@ -452,9 +454,12 @@ describe('an email import', () => {
     expect(opened[0].reportPaths!.map(p => path.basename(p))).toEqual(['a.eml', 'b.eml', 'c.eml']);
   });
 
-  it('refuses more than 50 files before reading any', async () => {
-    const { view } = await emailScreen(Array.from({ length: 51 }, (_, i) => `m${i}.eml`));
-    expect(view.report.problem).toMatch(/the batch limit is 50/);
+  it('shows the batch caps\' refusal and cannot open, reading no email', async () => {
+    capProblem = 'CAP-PROBLEM';
+    unreadable.add('a.eml'); // would be named as unreadable if it were read
+    const { view } = await emailScreen(['a.eml', 'b.eml']);
+    expect(view.report.problem).toBe('CAP-PROBLEM');
+    expect(view.report.skipped).toBeUndefined();
     expect(view.canOpen).toBe(false);
   });
 
@@ -515,7 +520,7 @@ describe('the model for the email check', () => {
   it('says so when no model is available', async () => {
     available = [];
     const { view } = await emailView();
-    expect(view.emailModel!.listProblem).toMatch(/No language model is available/);
+    expect(view.emailModel!.problem).toMatch(/No language model is available/);
     expect(view.emailModel!.options).toBeUndefined();
   });
 

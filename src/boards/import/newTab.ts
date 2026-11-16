@@ -5,6 +5,7 @@ import { addRowsToTicket, checkAddTarget, type AddTargetCheck } from '../../impo
 import { mergeNewRows } from '../../imports/rows';
 import type { AddMode, ReviewSession } from '../../imports/types';
 import { BATCH_LIMIT, templateLabelsOf } from '../../utils/reportImport';
+import { countedNoun } from '../../utils/chatPrimitives';
 import { descriptorOf, type HandlerPayload, type ImportDescriptor, type ImportHandler, type ImportSession } from './handlers';
 import type { ImportWorking } from './kind';
 import { ISSUE_KEY_PATTERN, isEmailRow, isLeftOut, newRows, repeatsByRowKey, rowKeyOf, ticketedRows, type ImportData, type ImportDeps, type ImportRow } from './read';
@@ -258,19 +259,11 @@ function planEmailComment(session: ImportSession, action: { type: string } & Rec
     const attachments = isEmailRow(row) ? row.attachmentNames.length : 0;
     lines.push({
       target: `${groupRef(group)}: ${ticket}`,
-      change: `Post the email "${row.summary}" as a comment${attachments > 0 ? ` and upload its ${countedAttachments(attachments)}` : ''}`,
+      change: `Post the email "${row.summary}" as a comment${attachments > 0 ? ` and upload its ${countedNoun(attachments, 'attachment(s)')}` : ''}`,
     });
   }
   const payload: NewPayload = { handler: NAME, op: 'add', groups: groups.map(g => g.keys), ticket, mode: 'comment' };
-  return { ok: true, plan: { title: `Add ${countedEmails(groups.length)} to ${ticket} as comments`, lines, risky: false, payload } };
-}
-
-function countedAttachments(n: number): string {
-  return n === 1 ? '1 attachment' : `${n} attachments`;
-}
-
-function countedEmails(n: number): string {
-  return n === 1 ? '1 email' : `${n} emails`;
+  return { ok: true, plan: { title: `Add ${countedNoun(groups.length, 'email(s)')} to ${ticket} as comments`, lines, risky: false, payload } };
 }
 
 /** The row the engine writes for a group: the row itself, or the merged row the chat builds from its members. */
@@ -302,7 +295,7 @@ function addSession(session: ImportSession, groups: Group[], descriptor: ImportD
 }
 
 /** Before an add's preview: reads the target ticket and works out what a rewrite would drop. */
-function prepareNew(session: ImportSession, action: { type: string } & Record<string, unknown>, deps: ImportDeps): Promise<AddTargetCheck> | undefined {
+function prepareNew(session: ImportSession, action: { type: string } & Record<string, unknown>, deps: ImportDeps): Promise<AddTargetCheck | EmailTargetCheck> | undefined {
   if (action.type !== 'new-add' || session.working.outOfDate.includes('new')) return undefined;
   const ticket = typeof action.key === 'string' ? action.key.trim().toUpperCase() : '';
   const groups = groupsOfIds(session, action.ids);
@@ -318,7 +311,7 @@ function prepareNew(session: ImportSession, action: { type: string } & Record<st
         deps.onDiag?.('warn', `Could not read the target ticket — ${ticket}`, { issueKey: ticket, error: message });
         return { kind: 'read-failed', error: message };
       }
-    })() as unknown as Promise<AddTargetCheck>;
+    })();
   }
   return (async () => {
     const descriptor = descriptorOf(session, deps);
@@ -429,6 +422,7 @@ async function applyEmailComments(
   const baseUrl = await deps.baseUrl();
   const results: ApplyLineResult[] = [];
   let working = session.working;
+  let written = false;
   for (const [n, group] of groups.entries()) {
     const target = `${groupRef(group)}: ${ticket}`;
     const first = group.rows[0];
@@ -441,22 +435,14 @@ async function applyEmailComments(
         const { uploaded, failures } = await uploadEmailAttachments(
           fresh.row.attachments, ticket, (name, type, bytes) => ticketService.uploadAttachment(ticket, name, type, bytes), deps.onDiag,
         );
-        let updated: string | undefined;
-        try {
-          updated = (await deps.updatedTimes([ticket]))[ticket];
-        } catch {
-          // Without it a later check sees the ticket as changed by someone else.
-        }
+        // Recorded as an add at once, so an Apply cut short still shows the email as added to the ticket.
+        const ext = extOf(working);
         working = {
           ...working,
-          writes: {
-            ...working.writes,
-            created: [...working.writes.created, { dedupKeys: dedupKeysOf(group), key: ticket }],
-            tickets: { ...working.writes.tickets, [ticket]: { ...(updated !== undefined ? { updated } : {}), commentOnly: true } },
-          },
+          writes: { ...working.writes, created: [...working.writes.created, { dedupKeys: dedupKeysOf(group), key: ticket }] },
+          ext: { ...working.ext, [NAME]: { added: [...new Set([...ext.added, ticket])] } satisfies NewExt },
         };
-        const ext = extOf(working);
-        working = { ...working, ext: { ...working.ext, [NAME]: { added: [...new Set([...ext.added, ticket])] } satisfies NewExt } };
+        written = true;
         const note = failures.length > 0
           ? `uploaded ${uploaded} of ${fresh.row.attachments.length} attachment(s); failed: ${failures.join('; ')}`
           : undefined;
@@ -466,6 +452,21 @@ async function applyEmailComments(
       }
     }
     await progress?.({ working, done: n + 1, total: groups.length });
+  }
+  if (written) {
+    // Read once after the last comment: only the ticket's latest `updated` tells the board's own change apart.
+    let updated: string | undefined;
+    try {
+      updated = (await deps.updatedTimes([ticket]))[ticket];
+    } catch {
+      // Without it a later check sees the ticket as changed by someone else.
+    }
+    const earlier = working.writes.tickets[ticket];
+    const commentOnly = earlier !== undefined && !earlier.commentOnly ? {} : { commentOnly: true };
+    working = {
+      ...working,
+      writes: { ...working.writes, tickets: { ...working.writes.tickets, [ticket]: { ...(updated !== undefined ? { updated } : {}), ...commentOnly } } },
+    };
   }
   return { results, derived: session.derived, working };
 }

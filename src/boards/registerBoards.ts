@@ -64,12 +64,11 @@ function importDescriptors(workspaceFolder: () => string | undefined, log: (leve
 export function vscodeBoardModels(justification: string): BoardModels {
   return {
     list: async () => (await vscode.lm.selectChatModels()).map(m => ({ id: m.id, name: m.name, vendor: m.vendor, family: m.family })),
-    send: async (id, prompt, cancel) => {
+    send: async (id, prompt) => {
       const [model] = await vscode.lm.selectChatModels({ id });
       if (!model) throw new Error(`The model ${id} is not available.`);
+      // No caller cancels a board's call; the token is only required by the API.
       const source = new vscode.CancellationTokenSource();
-      if (cancel?.isCancellationRequested) source.cancel();
-      cancel?.onCancellationRequested?.(() => source.cancel());
       try {
         const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], { justification }, source.token);
         let text = '';
@@ -126,6 +125,9 @@ export function registerBoards(
     now: () => Date.now(),
     onDiag: log,
   });
+  // One binding of the models and their settings, shared by the start screen and the email cleanup.
+  const emailModels = vscodeBoardModels('Ticket Sidekick checks imported emails for boilerplate such as signatures and legal footers.');
+  const modelSettings = vscodeModelSettings();
   const descriptors = importDescriptors(workspaceFolder, (level, message, details) => logDiag('boards.import', level, message, details));
   const importDeps = importJiraDeps({
     getJira,
@@ -153,8 +155,8 @@ export function registerBoards(
           throw new Error(phrases.reduce((m, p) => m.split(p).join('<pattern text>'), message));
         }
       },
-      models: vscodeBoardModels('Ticket Sidekick checks imported emails for boilerplate such as signatures and legal footers.'),
-      modelSettings: vscodeModelSettings(),
+      models: emailModels,
+      modelSettings,
     },
     onDiag: (level, message, details) => logDiag('boards.import', level, message, details),
   });
@@ -247,8 +249,8 @@ export function registerBoards(
       checkCaps: filePaths => checkEmailBatchCaps(filePaths, emailSettings.maxBatchBytes()),
       read: filePath => parseEmlFile(filePath),
     },
-    models: vscodeBoardModels('Ticket Sidekick checks imported emails for boilerplate such as signatures and legal footers.'),
-    modelSettings: vscodeModelSettings(),
+    models: emailModels,
+    modelSettings,
     openSetting: async key => { await vscode.commands.executeCommand('workbench.action.openSettings', key); },
     // The stored list, not a lookup: looking a session up would start its background check.
     hasSession: async id => (await manager.list()).some(s => s.kind === IMPORT_KIND && s.id === id),

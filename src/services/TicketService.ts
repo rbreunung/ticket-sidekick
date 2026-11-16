@@ -6,7 +6,7 @@ import { refusedFieldsOf } from '../utils/jiraFieldErrors';
 import { buildRequirementsSource, type RequirementsSource } from '../utils/requirementsSource';
 import { formatFileSize } from '../utils/attachmentEligibility';
 import { mergedBanner, mergedSummary } from '../utils/ticketMerge';
-import { renderReviewTable, neutralizeMarkdownLinks, buildChatCommandLink, type ReviewTableColumn } from '../utils/chatPrimitives';
+import { renderReviewTable, neutralizeMarkdownLinks, type ReviewTableColumn } from '../utils/chatPrimitives';
 import { fetchAllPages } from '../utils/reportImport';
 
 export type FieldResolutionResult =
@@ -269,9 +269,7 @@ export function buildExtraFieldColumns<TRow>(
       header: meta?.name ?? id,
       accessor: (row: TRow) => {
         const rendered = meta ? renderFieldValue(valueOf(row, id), meta) : '_Not set_';
-        // Custom field values are untrusted, externally-influenced content — see
-        // neutralizeMarkdownLinks()'s own doc comment (sessionState.ts) for why this table's
-        // trust-gated footer (KTD5) requires it here.
+        // Custom field values are untrusted, externally-influenced content.
         return neutralizeMarkdownLinks(rendered.replace(/\|/g, '\\|'));
       },
     };

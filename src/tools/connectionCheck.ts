@@ -36,8 +36,7 @@ function settingsTable(settings: ConnectionSettings): string {
 
 /**
  * Checks the connection described by `access`. When Jira is not configured the answer is the
- * plain setup hint naming what is missing (`@jira` shows its own linked version of that hint
- * before it reaches the check). A failed call is reported, and logged through `onDiag`, never thrown;
+ * plain setup hint naming what is missing. A failed call is reported, and logged through `onDiag`, never thrown;
  * `describeError` words the failure in the Markdown (the full error text by default).
  */
 export async function checkConnection(

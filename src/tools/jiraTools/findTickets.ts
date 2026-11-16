@@ -16,8 +16,8 @@ import type { JiraToolDeps } from './jiraAccess';
 import { runJiraTool } from './runJiraTool';
 import { FIND_TICKETS_TOOL, LIST_MY_FILTERS_TOOL } from './toolNames';
 
-// One search tool over JQL or a saved filter, narrowed the way `@jira` narrows a filter (fix
-// version, sprint, assignee and the team JQL), plus the list of the user's own filters.
+// One search tool over JQL or a saved filter, narrowed by fix version, sprint, assignee and the
+// team JQL, plus the list of the user's own filters.
 
 export const FIND_PAGE_SIZE = 50;
 
@@ -59,7 +59,7 @@ export interface Narrowing {
 }
 
 /**
- * ANDs the narrowing onto a query, the way `@jira` narrowed a filter: the team JQL, then a fix
+ * ANDs the narrowing onto a query: the team JQL, then a fix
  * version, sprint or assignee resolved by name against Jira. The query's own `ORDER BY` stays at
  * the end. A string answer is the reason it could not, e.g. an ambiguous sprint name.
  */

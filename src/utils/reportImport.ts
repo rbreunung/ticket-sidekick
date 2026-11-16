@@ -9,16 +9,13 @@
 import type { DiagLogger } from './diagTypes';
 import type { DateChange } from './waltzDates';
 import { TRIGGER_CHARS } from './markdownToJiraWiki';
-// Type-only import: erased at compile time (no runtime `require`), so this does not create the
-// circular *runtime* import that sessionState.ts's own value import of this file (BATCH_LIMIT,
-// sanitizeCellText) would otherwise raise — only a value/side-effect import can cycle.
 import type { ReviewRowBase, TicketedAction } from '../imports/types';
 
 // Single source of truth for both importers (KTD4). Both currently hardcode the identical values
 // (20 MB / 50 tickets per run) independently; consuming these from here instead of the local
 // copies is a later unit's job (extension.ts + both handler files).
 export const MAX_REPORT_BYTES = 20 * 1024 * 1024; // 20 MB — default-parameter fallback for the
-// pure size-check/parse functions below (veracodeReport.ts/waltzReport.ts/reportImportHandler.ts);
+// pure size-check/parse functions below (veracodeReport.ts/waltzReport.ts);
 // each config-reading call site now resolves its own configured value via resolveMaxReportBytes()
 // instead of reading this constant directly.
 export const BATCH_LIMIT = 50;
@@ -30,7 +27,7 @@ export const DEFAULT_DEDUP_CHUNK_SIZE = 40; // keeps generated JQL well under Ji
 /**
  * Turns a configured `ticketSidekick.<x>.maxReportSizeMB`/`maxBatchSizeMB` setting value into a
  * validated byte limit — the single source of truth every config-reading call site
- * (src/services/importSettings.ts for Veracode and Waltz, emailHandler.ts for email) uses instead
+ * (src/services/importSettings.ts) uses instead
  * of re-implementing the same range check. A non-finite value or one outside
  * `[minMB, maxMB]` falls back to `defaultMB` rather than disabling the cap or throwing — a user
  * typo in settings.json must never leave an import unbounded.
@@ -385,8 +382,7 @@ export async function findStaleTickets(
 
 // U4: the pre-build "new" cap (`capNewRows`) that used to run here before review rows were built at
 // all was removed — the review screen now pages through every matched "new" candidate instead of
-// silently dropping the remainder of a run (see `buildReviewPage`/`ReviewSession` in
-// sessionState.ts). Lightweight row fields still build eagerly for every candidate; an importer
+// silently dropping the remainder of a run (see `buildReviewPage` in src/imports/rows.ts). Lightweight row fields still build eagerly for every candidate; an importer
 // whose full ticket description is expensive (Veracode's folded-group description) defers that
 // part to ticket-creation time instead, which is what actually avoids the wasted-work concern
 // `capNewRows` used to guard against.

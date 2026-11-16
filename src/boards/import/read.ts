@@ -10,10 +10,10 @@ import type { ReviewRowBase, ReviewSession } from '../../imports/types';
 import type { DiagLogger } from '../../utils/diagTypes';
 import type { VeracodeFlaw, VeracodeReviewRow } from '../../utils/veracodeReport';
 import type { WaltzComponent, WaltzReviewRow } from '../../utils/waltzReport';
-import { parseEmlFile, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
+import { parseEmlBuffer, type EmailImportItem, type EmailReviewRow } from '../../utils/emlParser';
 import { matchRepeats, subjectSearchTerm } from '../../imports/email';
 import { detectPatternBlocks, type BoilerplatePattern, type DetectedBlock } from '../../utils/emailBoilerplate';
-import { emailModelInUse, modelLabel, type BoardModels, type ModelSettings, type ModelSource } from '../boardModels';
+import { describeEmailModels, type BoardModels, type EmailModelChoice, type ModelSettings } from '../boardModels';
 import { ACCEPTED_FILE_NAME, type AcceptedEntry } from '../../utils/waltzAccepted';
 import { recipePaths, type ImportRecipe } from './recipe';
 
@@ -115,7 +115,7 @@ export interface ImportData {
   /** An email import's files that were not there at this reading. */
   missingFiles?: string[];
   /** An email import's model for the boilerplate check: the one in use, the ones to pick from, or why none can be listed. */
-  emailModels?: { inUse?: { id: string; label: string; source: ModelSource }; options?: Array<{ id: string; label: string }>; problem?: string };
+  emailModels?: EmailModelChoice;
   export: ImportExportData;
   baseUrl?: string;
 }
@@ -344,15 +344,17 @@ async function readEmails(recipe: ImportRecipe, deps: ImportDeps): Promise<Deriv
   const hashes: string[] = [];
   const items: EmailImportItem[] = [];
   for (const filePath of paths) {
+    let content: Buffer;
     try {
-      hashes.push(`${filePath}\n${await hashFile(filePath)}`);
+      content = await fs.promises.readFile(filePath);
+      hashes.push(`${filePath}\n${hash(content)}`);
     } catch (err) {
       if (isMissing(err)) missingFiles.push(filePath);
       else failed.push(`${path.basename(filePath)}: ${messageOf(err)}`);
       continue;
     }
     try {
-      items.push(withoutAttachmentContent(await parseEmlFile(filePath)));
+      items.push(withoutAttachmentContent(await parseEmlBuffer(content, filePath)));
     } catch (err) {
       deps.onDiag?.('warn', 'Import board: an email could not be read', { fileName: path.basename(filePath), error: messageOf(err) });
       failed.push(`${path.basename(filePath)}: ${messageOf(err)}`);
@@ -394,21 +396,13 @@ async function readEmails(recipe: ImportRecipe, deps: ImportDeps): Promise<Deriv
 /** The model of the email check as the board shows it; undefined where no model can be called. */
 async function listEmailModels(deps: ImportDeps): Promise<ImportData['emailModels']> {
   if (!deps.models || !deps.modelSettings) return undefined;
-  const view: NonNullable<ImportData['emailModels']> = {};
-  let listed: Awaited<ReturnType<BoardModels['list']>> = [];
+  let listed: { models: Awaited<ReturnType<BoardModels['list']>> } | { problem: string };
   try {
-    listed = await deps.models.list();
-    if (listed.length === 0) view.problem = 'No language model is available in this VS Code. Sign in to GitHub Copilot to use the model check.';
-    else view.options = listed.map(m => ({ id: m.id, label: modelLabel(m) }));
+    listed = { models: await deps.models.list() };
   } catch (err) {
-    view.problem = `The language models could not be listed: ${messageOf(err)}`;
+    listed = { problem: messageOf(err) };
   }
-  const inUse = emailModelInUse(deps.modelSettings);
-  if (inUse) {
-    const model = listed.find(m => m.id === inUse.id);
-    view.inUse = { id: inUse.id, label: model ? modelLabel(model) : inUse.id, source: inUse.source };
-  }
-  return view;
+  return describeEmailModels(listed, deps.modelSettings);
 }
 
 /** How many subjects one text search asks Jira for. */
@@ -425,8 +419,9 @@ async function findRepeats(
   const terms = [...new Set(rows.map(r => subjectSearchTerm(r.subject)).filter(t => t !== ''))];
   if (terms.length === 0) return {};
   try {
-    const found: RepeatTicket[] = [];
-    for (let i = 0; i < terms.length; i += SUBJECT_CHUNK) found.push(...await deps.summarySearch(recipe.projectKey, terms.slice(i, i + SUBJECT_CHUNK)));
+    const chunks: string[][] = [];
+    for (let i = 0; i < terms.length; i += SUBJECT_CHUNK) chunks.push(terms.slice(i, i + SUBJECT_CHUNK));
+    const found = (await Promise.all(chunks.map(chunk => deps.summarySearch!(recipe.projectKey, chunk)))).flat();
     const unique = [...new Map(found.map(t => [t.key, t])).values()];
     return matchRepeats(Object.fromEntries(rows.map(r => [r.id, r.subject])), unique);
   } catch (err) {
@@ -437,9 +432,15 @@ async function findRepeats(
 }
 
 /** The tickets each New email likely repeats, by row key; empty for the other kinds. */
+const repeatsCache = new WeakMap<ImportData, Map<string, RepeatTicket[]>>();
+
 export function repeatsByRowKey(data: ImportData): Map<string, RepeatTicket[]> {
+  // A reading is never changed in place, so its map is built once and every row's check reads it.
+  const cached = repeatsCache.get(data);
+  if (cached) return cached;
   const repeats = new Map<string, RepeatTicket[]>();
   for (const row of newRows(data)) if (isEmailRow(row) && row.repeatOf?.length) repeats.set(rowKeyOf(data, row), row.repeatOf);
+  repeatsCache.set(data, repeats);
   return repeats;
 }
 

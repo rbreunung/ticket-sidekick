@@ -17,17 +17,11 @@ export interface BoardModelInfo {
   family: string;
 }
 
-/** A cancellation the caller can set; the VS Code binding turns it into a cancellation token. */
-export interface ModelCancel {
-  readonly isCancellationRequested: boolean;
-  onCancellationRequested?(listener: () => void): void;
-}
-
 export interface BoardModels {
   /** The models available to the developer; empty when none is. */
   list(): Promise<BoardModelInfo[]>;
   /** Sends one user message to the model with this id and returns the reply's text; throws when the model is not there or refuses. */
-  send(id: string, prompt: string, cancel?: ModelCancel): Promise<string>;
+  send(id: string, prompt: string): Promise<string>;
 }
 
 /** The two model settings as they are now, and the write of a pick. */
@@ -69,4 +63,28 @@ export async function checkModelAnswers(models: BoardModels, id: string, onDiag?
 /** How a model is named to the developer. */
 export function modelLabel(model: BoardModelInfo): string {
   return model.vendor ? `${model.name} (${model.vendor})` : model.name;
+}
+
+/** The email check's model as a board shows it: the one in use, the ones to pick from, or why none can be listed. */
+export interface EmailModelChoice {
+  inUse?: { id: string; label: string; source: ModelSource };
+  options?: Array<{ id: string; label: string }>;
+  problem?: string;
+}
+
+/** The model choice from the models listed (or the reason they could not be listed) and the settings. */
+export function describeEmailModels(
+  listed: { models: BoardModelInfo[] } | { problem: string }, settings: Pick<ModelSettings, 'emailModel' | 'reviewModel'>,
+): EmailModelChoice {
+  const choice: EmailModelChoice = {};
+  const known = 'models' in listed ? listed.models : [];
+  if ('problem' in listed) choice.problem = `The language models could not be listed: ${listed.problem}`;
+  else if (known.length === 0) choice.problem = 'No language model is available in this VS Code. Sign in to GitHub Copilot to use the model check.';
+  else choice.options = known.map(m => ({ id: m.id, label: modelLabel(m) }));
+  const inUse = emailModelInUse(settings);
+  if (inUse) {
+    const model = known.find(m => m.id === inUse.id);
+    choice.inUse = { id: inUse.id, label: model ? modelLabel(model) : inUse.id, source: inUse.source };
+  }
+  return choice;
 }

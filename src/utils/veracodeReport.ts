@@ -576,10 +576,7 @@ export function buildFollowUpSummary(subset: VeracodeFlaw[], originalKey: string
   return clampSummary(head, tail + suffix);
 }
 
-// Lives here (rather than in sessionState.ts, where the other session-related types live) so that
-// reportImportHandler.ts's shared buildReviewRows() can produce it directly without a type-only
-// circular import between this file and sessionState.ts. sessionState.ts re-exports the type for
-// callers that expect it there.
+// The review row of a Veracode import, next to the report code that builds it.
 export interface VeracodeReviewRow {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   issueIds: string[]; // one or more folded Veracode issue ids (R9/R10) — a non-folded row has length 1

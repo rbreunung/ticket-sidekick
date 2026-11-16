@@ -870,10 +870,7 @@ export function buildUpdateCommentWiki(
   return markdownToJiraWiki(lines.join('\n'));
 }
 
-// Lives here (rather than in sessionState.ts, where the other session-related types live) so that
-// reportImportHandler.ts's shared buildReviewRows() can produce it directly without a type-only
-// circular import between this file and sessionState.ts — mirrors the same layout decision made for
-// VeracodeReviewRow. sessionState.ts re-exports the type for callers that expect it there.
+// The review row of a Waltz import, next to the report code that builds it.
 export interface WaltzReviewRow {
   id: string; // '1'..'N' new candidates, 'A1'..'Am' already-ticketed
   nameVersion: string;

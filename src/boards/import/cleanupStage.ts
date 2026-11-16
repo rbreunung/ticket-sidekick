@@ -7,6 +7,7 @@ import {
 import type { EmailImportItem } from '../../utils/emlParser';
 import { UnparseableReplyError, withLmRetry } from '../../utils/lmRetry';
 import { EMAIL_MODEL_SETTING } from '../boardModels';
+import { countedNoun } from '../../utils/chatPrimitives';
 import { EMAIL_CLEANUP_HANDLER, type EmailBodyChoice } from './emailRows';
 import type { HandlerPayload, ImportHandler, ImportSession } from './handlers';
 import type { ImportWorking } from './kind';
@@ -228,7 +229,7 @@ function planCleanup(session: ImportSession, action: { type: string } & Record<s
   const label = modelLabelOf(data, modelId);
   const payload: CleanupPayload = { handler: NAME, op: 'check', keys: rows.map(r => rowKeyOf(data, r)), modelId, save };
   const plan: WritePlan<CleanupPayload> = {
-    title: `Check ${rows.length === 1 ? '1 email' : `${rows.length} emails`} for boilerplate with ${label}`,
+    title: `Check ${countedNoun(rows.length, 'email(s)')} for boilerplate with ${label}`,
     lines: [
       ...rows.map(r => ({ target: path.basename(r.emlFilePath), change: `Send the text of "${r.subject}" to ${label}` })),
       ...(save ? [{ target: EMAIL_MODEL_SETTING, change: `Save ${label} as the model of the email check` }] : []),
