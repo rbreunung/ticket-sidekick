@@ -1,0 +1,4 @@
+[
+  { "expand": "description,lead,url,projectKeys", "self": "https://jira.example.com/rest/api/2/project/10000", "id": "10000", "key": "PROJ", "name": "Sample Project", "projectTypeKey": "software" },
+  { "expand": "description,lead,url,projectKeys", "self": "https://jira.example.com/rest/api/2/project/10001", "id": "10001", "key": "SEC", "name": "Security", "projectTypeKey": "software" }
+]

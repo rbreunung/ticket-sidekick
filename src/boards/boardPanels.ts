@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import type { SessionManager } from '../sessions/sessionManager';
 import { answerBoardRequest, asBoardRequest, SESSIONS_BOARD, type BoardHost } from './boardMessages';
 import { asBoardPanelState, boardPanelHtml, type BoardPanelState } from './boardPanelHtml';
+import type { ReportKind } from './import/recipe';
+import { IMPORT_START_BOARD, IMPORT_START_TITLE, type ImportStartScreen } from './import/startScreen';
 
 // Boards as editor tabs. The extension opens a webview tab, writes its document and answers the
 // page's requests over VS Code's message channel. An agent asks for a board through the
@@ -20,6 +22,8 @@ export interface BoardStats {
 
 export class BoardPanels implements BoardHost {
   private readonly panels = new Map<string, vscode.WebviewPanel>();
+  /** The message listener of each tab, replaced when the tab follows its session to another id. */
+  private readonly listeners = new Map<vscode.WebviewPanel, vscode.Disposable>();
   private requestsAnswered = 0;
 
   constructor(
@@ -28,7 +32,24 @@ export class BoardPanels implements BoardHost {
     /** The folder the board pages are shipped in. */
     private readonly pagesRoot: vscode.Uri,
     private readonly onError: (message: string) => void,
+    /** The import start screen: a tab without a session, like the stored sessions board. */
+    readonly importStart?: ImportStartScreen,
+    /** The native open dialog for an import's report file ("Pick the file again"). */
+    private readonly pickReport?: (kind: ReportKind) => Promise<string | undefined>,
   ) {}
+
+  pickReportFile(kind: ReportKind): Promise<string | undefined> {
+    return this.pickReport ? this.pickReport(kind) : Promise.resolve(undefined);
+  }
+
+  /** Points the tab of a session that moved to another id at the new one: its page loads again with the new session. */
+  async followSession(kind: string, fromId: string, toId: string, title: string): Promise<void> {
+    const key = this.key({ kind, id: fromId, title });
+    const panel = this.panels.get(key);
+    if (!panel) return;
+    this.panels.delete(key);
+    this.show(panel, { kind, id: toId, title });
+  }
 
   stats(): BoardStats {
     return { openTabs: this.panels.size, requestsAnswered: this.requestsAnswered };
@@ -48,6 +69,7 @@ export class BoardPanels implements BoardHost {
     const asset = (...parts: string[]) => panel.webview.asWebviewUri(vscode.Uri.joinPath(this.pagesRoot, ...parts)).toString();
     panel.title = state.title;
     panel.webview.options = this.options();
+    this.listeners.get(panel)?.dispose();
     const listener = panel.webview.onDidReceiveMessage(async (raw: unknown) => {
       const request = asBoardRequest(raw);
       if (!request) return;
@@ -56,8 +78,10 @@ export class BoardPanels implements BoardHost {
       // The tab may have been closed while a state request was waiting for a change.
       if (this.panels.get(key) === panel) void panel.webview.postMessage(reply);
     });
+    this.listeners.set(panel, listener);
     panel.onDidDispose(() => {
       listener.dispose();
+      if (this.listeners.get(panel) === listener) this.listeners.delete(panel);
       if (this.panels.get(key) === panel) this.panels.delete(key);
     });
     panel.webview.html = boardPanelHtml({
@@ -87,6 +111,17 @@ export class BoardPanels implements BoardHost {
       this.reveal({ kind, id: '', title: 'Stored sessions' });
       return { ok: true, title: 'Stored sessions' };
     }
+    if (kind === IMPORT_START_BOARD) {
+      if (!this.importStart) return { ok: false, reason: 'there is no board of that name.' };
+      this.importStart.prefill(input);
+      // Asked for loaded (the open-board tool): the import board when nothing is missing, the start screen otherwise.
+      if ((input as { openWhenReady?: unknown } | null | undefined)?.openWhenReady === true) {
+        const loaded = await this.importStart.openIfReady();
+        if (loaded.opened) return { ok: true, title: loaded.title ?? 'Import board' };
+      }
+      this.reveal({ kind, id: '', title: IMPORT_START_TITLE });
+      return { ok: true, title: IMPORT_START_TITLE };
+    }
     if (!this.kinds.includes(kind)) return { ok: false, reason: 'there is no board of that name.' };
     const opened = await this.manager.open(kind, input ?? {});
     if (!opened.ok) return opened;
@@ -108,7 +143,8 @@ export class BoardPanels implements BoardHost {
     return {
       deserializeWebviewPanel: async (panel, raw) => {
         const state = asBoardPanelState(raw);
-        if (!state || (state.kind !== SESSIONS_BOARD && !this.kinds.includes(state.kind))) {
+        const sessionless = state?.kind === SESSIONS_BOARD || (state?.kind === IMPORT_START_BOARD && this.importStart !== undefined);
+        if (!state || (!sessionless && !this.kinds.includes(state.kind))) {
           panel.dispose();
           return;
         }

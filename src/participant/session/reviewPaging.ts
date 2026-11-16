@@ -1,11 +1,10 @@
 // Pageable New-section slicing, page navigation and bulk include/exclude for report-import reviews.
 // Pure (vscode-free); re-exported through ../sessionState.ts.
 
-import type { VeracodeReviewRow } from '../../utils/veracodeReport';
-import type { WaltzReviewRow } from '../../utils/waltzReport';
-import { BATCH_LIMIT } from '../../utils/reportImport';
 import { ReviewRowBase } from './importTypes';
-import { ReviewTableColumn, neutralizeMarkdownLinks, normalizeReply, safeCellText } from './primitives';
+import { normalizeReply } from './primitives';
+
+export { buildReviewPage, type ReviewPage } from '../../imports/rows';
 
 // ---------------------------------------------------------------------------------------------
 // U4: pageable review-session "New" section (R6-R8). `allRows` (the full, unpaged candidate set)
@@ -14,34 +13,6 @@ import { ReviewTableColumn, neutralizeMarkdownLinks, normalizeReply, safeCellTex
 // separate from the screen renderers below (`buildNewGroupScreen()`) so the slicing logic is
 // independently testable.
 // ---------------------------------------------------------------------------------------------
-
-export interface ReviewPage<TRow extends ReviewRowBase> {
-  rows: TRow[];
-  page: number; // clamped 0-based page actually returned
-  totalPages: number;
-}
-
-/**
- * Slices a review session's full candidate set (`allRows`) into one displayable page: every
- * "already ticketed" row (R8 — shown in full regardless of page) plus one `BATCH_LIMIT`-sized page
- * of "new" rows, selected by `page` (0-based, clamped into `[0, totalPages - 1]` — an out-of-range
- * request, e.g. `next` from the last page or a `page <n>` beyond the end, lands on the nearest
- * valid page rather than erroring). `totalPages` is always at least 1, even when there are zero
- * "new" rows, so a caller never divides by / indexes a zero-page result.
- *
- * Deliberately re-derives `rows` fresh from `allRows` every time rather than mutating in place —
- * `allRows` itself is never touched here, which is what makes a "new" row's toggle page-local
- * (R7): a toggle applied only to a page's returned `rows` (see `applyReviewSessionToggle()`)
- * evaporates the next time this function re-slices that page from `allRows`.
- */
-export function buildReviewPage<TRow extends ReviewRowBase>(allRows: TRow[], page: number): ReviewPage<TRow> {
-  const ticketed = allRows.filter(r => r.existingTicketKey !== null);
-  const fresh = allRows.filter(r => r.existingTicketKey === null);
-  const totalPages = Math.max(1, Math.ceil(fresh.length / BATCH_LIMIT));
-  const clampedPage = Math.min(Math.max(page, 0), totalPages - 1);
-  const start = clampedPage * BATCH_LIMIT;
-  return { rows: [...ticketed, ...fresh.slice(start, start + BATCH_LIMIT)], page: clampedPage, totalPages };
-}
 
 export type ReviewPageNav =
   | { kind: 'next' }
@@ -113,18 +84,3 @@ export function parseBulkNewRowReply(reply: string): boolean | null {
 export function applyBulkNewRowSet<TRow extends ReviewRowBase>(rows: TRow[], value: boolean): TRow[] {
   return rows.map(r => (r.existingTicketKey === null ? { ...r, included: value } : r));
 }
-
-// Summary/component name are untrusted, scan-report-derived free text — this table's whole output
-// is trust-gated (KTD5, U6) once it carries the per-row toggle links below, so both go through
-// neutralizeMarkdownLinks() (see its own doc comment). Severity/CWE-id/rating stay unsanitized —
-// enum-shaped/numeric values from the report's own schema, not free text.
-export const VERACODE_REVIEW_COLUMNS: ReviewTableColumn<VeracodeReviewRow>[] = [
-  { header: 'Severity', accessor: (r) => `${r.severityLabelText} (${r.severity})` },
-  { header: 'CWE', accessor: (r) => (r.cweId ? `CWE-${r.cweId}` : '—') },
-  { header: 'Summary', accessor: (r) => neutralizeMarkdownLinks(r.summary) },
-];
-
-export const WALTZ_REVIEW_COLUMNS: ReviewTableColumn<WaltzReviewRow>[] = [
-  { header: 'Component', accessor: (r) => neutralizeMarkdownLinks(r.nameVersion) },
-  { header: 'Rating', accessor: (r) => safeCellText(r.maxVulnRating) },
-];

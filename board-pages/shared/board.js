@@ -42,6 +42,53 @@ export function h(tag, props, ...children) {
   return el;
 }
 
+/**
+ * Says `text` through one polite live region that stays outside the board's content, so a screen
+ * reader hears progress, refusals and marks even though the content is drawn again on each change.
+ * The same text is also shown on the page; the region only reads it out, once per change.
+ */
+export function announce(text) {
+  let region = document.getElementById('board-live');
+  if (!region) {
+    region = h('div', { id: 'board-live', class: 'visually-hidden', role: 'status', 'aria-live': 'polite' });
+    document.body.append(region);
+  }
+  const next = text ?? '';
+  if (region.textContent !== next) region.textContent = next;
+}
+
+/**
+ * A row of tabs after the WAI-ARIA tabs pattern: one tab in the Tab order, the arrow keys, Home and
+ * End move to the next tab and select it. `tabs` are `{ id, label }`; `onSelect(id)` is called for
+ * a click or a key, after focus moved to that tab. Tabs are never disabled, so switching them stays
+ * possible while an Apply runs.
+ */
+export function tablist({ label, tabs, selected, onSelect }) {
+  const select = (id) => {
+    document.getElementById(`tab-${id}`)?.focus();
+    onSelect(id);
+  };
+  const onKeydown = (event) => {
+    const at = tabs.findIndex(t => t.id === selected);
+    const moves = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 };
+    if (!(event.key in moves)) return;
+    event.preventDefault();
+    select(tabs[(moves[event.key] + tabs.length) % tabs.length].id);
+  };
+  return h('div', { class: 'tablist', role: 'tablist', 'aria-label': label },
+    tabs.map(t => h('button', {
+      id: `tab-${t.id}`, class: 'tab', role: 'tab', type: 'button',
+      'aria-selected': t.id === selected ? 'true' : 'false', 'aria-controls': `panel-${t.id}`,
+      tabIndex: t.id === selected ? 0 : -1,
+      onClick: () => select(t.id), onKeydown,
+    }, t.label)));
+}
+
+/** The panel of the selected tab of `tablist`. */
+export function tabpanel(id, ...children) {
+  return h('section', { id: `panel-${id}`, role: 'tabpanel', 'aria-labelledby': `tab-${id}`, tabIndex: 0 }, ...children);
+}
+
 export function formatTime(ms) {
   return ms ? new Date(ms).toLocaleString() : '';
 }
@@ -62,17 +109,29 @@ export function api(op, body) {
 }
 
 /**
- * Runs a board page. `render(view, board)` returns the board's own content for the current view;
- * `board` offers `act`, `preview`, `save` and the current `state`.
+ * Runs a board page. `render(view, board, locked, state)` returns the board's own content for the
+ * current view; `locked` is true while a request runs or an Apply is in progress, and the page
+ * disables its controls then. `board` offers `act`, `preview`, `save` and the current `state`.
+ * `loading(state)`, when given, is shown while the session has no view yet.
  */
-export function startBoard({ root, render }) {
+export function startBoard({ root, render, loading }) {
   let state;
   let message;
   let busy = false;
   let stopped = false;
+  // The plan an Apply is running and the last Apply's results, for pages that show them per row.
+  let applyingPlan;
+  let lastApply;
+  let applies = 0;
 
   const board = {
     get state() { return state; },
+    /** The last refusal, failure or result line, as shown in the banner; undefined when there is none. */
+    get message() { return message; },
+    /** The plan whose Apply is running on this page. */
+    get applyingPlan() { return applyingPlan; },
+    /** `{ seq, title, lines, results, message }` of the last Apply on this page: its plan's lines, what each target gave, and its banner line. */
+    get lastApply() { return lastApply; },
     /** Draws the page again from the current state, e.g. after a form field that is not sent yet changed the form's shape. */
     repaint() { paint(); },
     /** A non-writing action. */
@@ -95,6 +154,14 @@ export function startBoard({ root, render }) {
         message = outcome === 'saved' ? 'Saved.' : 'Save cancelled; nothing was written.';
       });
     },
+    /** "Pick the file again" for a board whose source file is missing; the file comes from VS Code's open dialog. */
+    async pickFile() {
+      await run(async () => {
+        const picked = await api('pick-file');
+        if (picked.outcome === 'picked') state = picked.state;
+        else message = 'No file was picked; nothing changed.';
+      });
+    },
     async discard() {
       await run(async () => {
         await api('discard');
@@ -105,8 +172,13 @@ export function startBoard({ root, render }) {
     },
   };
 
+  /** An Apply in progress, on this page or another: nothing else is sent until it ends. */
+  function locked() {
+    return busy || Boolean(state?.applying);
+  }
+
   async function run(work) {
-    if (busy) return;
+    if (locked()) return;
     busy = true;
     message = undefined;
     paint();
@@ -134,11 +206,17 @@ export function startBoard({ root, render }) {
           onClick: () => {
             dialog.close();
             void run(async () => {
-              const applied = await api('apply', { planId: plan.planId });
-              state = applied.state;
-              const done = applied.results.filter(r => r.outcome === 'done').length;
-              const rest = applied.results.filter(r => r.outcome !== 'done');
-              message = `${done} written.` + (rest.length ? ` ${rest.length} not written: ${rest.map(r => `${r.target} (${r.reason ?? r.outcome})`).join('; ')}` : '');
+              applyingPlan = plan;
+              try {
+                const applied = await api('apply', { planId: plan.planId });
+                state = applied.state;
+                const done = applied.results.filter(r => r.outcome === 'done').length;
+                const rest = applied.results.filter(r => r.outcome !== 'done');
+                message = `${done} written.` + (rest.length ? ` ${rest.length} not written: ${rest.map(r => `${r.target} (${r.reason ?? r.outcome})`).join('; ')}` : '');
+                lastApply = { seq: ++applies, title: plan.title, lines: plan.lines, results: applied.results, message };
+              } finally {
+                applyingPlan = undefined;
+              }
             });
           },
         }, 'Apply'),
@@ -161,23 +239,27 @@ export function startBoard({ root, render }) {
         h('ul', {}, state.conflicts.map(c => h('li', {},
           h('strong', {}, c.target), ` ${c.message}`,
           c.stored !== undefined || c.fresh !== undefined ? h('span', { class: 'muted' }, ` Stored: ${c.stored ?? 'none'}. Now: ${c.fresh ?? 'none'}.`) : null,
-          ' ', h('vscode-button', { secondary: true, onClick: () => board.act({ type: 'conflict/drop', id: c.id }) }, 'Drop'))))));
+          ' ', h('vscode-button', { secondary: true, disabled: locked(), onClick: () => board.act({ type: 'conflict/drop', id: c.id }) }, 'Drop'))))));
     }
     return items;
   }
 
   function paint() {
     const focusId = document.activeElement?.id;
+    const applying = state?.applying;
     const header = h('header', {},
       h('h1', {}, state?.title ?? rootElement.dataset.title ?? ''),
       state ? h('p', { class: 'muted', role: 'status' },
-        state.status === 'building' ? 'Reading…'
-          : state.status === 'checking' ? `As of ${formatTime(state.asOf)}. Checking for changes…`
-            : state.asOf ? `As of ${formatTime(state.asOf)}${state.restored ? ' (restored session)' : ''}.` : '') : null,
+        applying ? `Applying: ${applying.done} of ${applying.total} done…`
+          : state.status === 'building' ? 'Reading…'
+            : state.status === 'checking' ? `As of ${formatTime(state.asOf)}. Checking for changes…`
+              : state.asOf ? `As of ${formatTime(state.asOf)}${state.restored ? ' (restored session)' : ''}.` : '') : null,
+      applying ? h('progress', { id: 'apply-progress', max: applying.total, value: applying.done, 'aria-label': 'Apply progress' }) : null,
       state && !stopped ? h('div', { class: 'bar' },
-        h('vscode-button', { id: 'refresh', secondary: true, disabled: busy || state.status !== 'ready' && state.status !== 'failed', onClick: () => board.refresh() }, 'Refresh'),
-        h('vscode-button', { id: 'discard', secondary: true, disabled: busy, onClick: () => board.discard() }, 'Discard session')) : null);
-    const content = state?.view !== undefined && !stopped ? render(state.view, board, busy, state) : null;
+        h('vscode-button', { id: 'refresh', secondary: true, disabled: locked() || state.status !== 'ready' && state.status !== 'failed', onClick: () => board.refresh() }, 'Refresh'),
+        h('vscode-button', { id: 'discard', secondary: true, disabled: locked(), onClick: () => board.discard() }, 'Discard session')) : null);
+    const content = state?.view !== undefined && !stopped ? render(state.view, board, locked(), state)
+      : state && !stopped && loading ? loading(state) : null;
     root.replaceChildren(header, ...banners(), content ?? '');
     if (focusId) document.getElementById(focusId)?.focus();
   }
@@ -191,7 +273,8 @@ export function startBoard({ root, render }) {
       try {
         const before = state?.tick;
         await load(before);
-        if (state.tick !== before && !busy) paint();
+        // Painted while a request runs too, so an Apply shows its progress as each target finishes.
+        if (state.tick !== before) paint();
       } catch (err) {
         if (err.status === 404) {
           stopped = true;

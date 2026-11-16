@@ -1,12 +1,10 @@
 import * as vscode from 'vscode';
 import { extractJsonObject } from '../../utils/extractJsonObject';
 
-/** What `@jira` can still do: the report imports. Anything else is `other` and gets the imports-only notice. */
+/** What `@jira` can still do: the email import. Anything else is `other` and gets the imports-only notice. */
 export type Operation =
   | 'createFromEmail'
   | 'addEmailComment'
-  | 'importVeracode'
-  | 'importWaltzReport'
   | 'other';
 
 export interface ParsedIntent {
@@ -15,12 +13,10 @@ export interface ParsedIntent {
 }
 
 export const INTENT_PROMPT = `Parse this Jira command and respond with ONLY a JSON object. No markdown, no explanation.
-Schema: {"operation":"createFromEmail"|"addEmailComment"|"importVeracode"|"importWaltzReport"|"other","projectKey":string|null}
+Schema: {"operation":"createFromEmail"|"addEmailComment"|"other","projectKey":string|null}
 - createFromEmail: create a Jira ticket from an email (.eml file); triggered by "create from email", "ticket from email"
 - addEmailComment: import an email (.eml) from the chat; if a ticket key is in the prompt (e.g. PROJ-42) adds the email as a comment, otherwise shows a preview to create or comment; triggered by "add email", "add email to", "import email", "email to ticket", "add comment from mail", "create ticket from mail", "create from mail"
-- importVeracode: import a Veracode Detailed Report XML export and create Jira tickets from its flaws; triggered by "import veracode", "veracode report", "create tickets from veracode", "veracode scan"; projectKey is the project key if one is named
-- importWaltzReport: import a Waltz/SCA OSS report .xlsx export and create Jira tickets from its vulnerable components; triggered by "import oss report", "import waltz report", "oss report", "sca report"; projectKey is the project key if one is named
-- other: anything else, e.g. showing, creating, commenting on, moving or searching tickets, cleanup, workflows or reports
+- other: anything else, e.g. importing a Veracode or Waltz (OSS) report, showing, creating, commenting on, moving or searching tickets, cleanup, workflows or reports
 
 Command: `;
 
@@ -63,7 +59,7 @@ export async function parseIntent(
   }
   if (!jsonText) throw new Error(`Model did not return a JSON object. Response: ${raw.slice(0, 200)}`);
   const parsed = JSON.parse(jsonText) as Partial<ParsedIntent>;
-  const operations: readonly Operation[] = ['createFromEmail', 'addEmailComment', 'importVeracode', 'importWaltzReport'];
+  const operations: readonly Operation[] = ['createFromEmail', 'addEmailComment'];
   return {
     operation: operations.includes(parsed.operation as Operation) ? parsed.operation as Operation : 'other',
     projectKey: typeof parsed.projectKey === 'string' ? parsed.projectKey : null,

@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parseImportReviewReply, parseMergeRunReply, buildImportHelp, buildCommandsLine, importCommandCaps, buildImportOverview, buildTicketedGroupScreen,
+  parseImportReviewReply, buildImportHelp, buildCommandsLine, importCommandCaps, buildImportOverview, buildTicketedGroupScreen,
   buildImportDoneSummary, formatTicketedRowResult, emptyImportOutcomes, IMPORT_COMMANDS,
-  type ImportReplyContext, type ReviewSession, type ReviewRowBase, type ReviewTableColumn, type MergeRun, buildCloseMergePrompt,
+  type ImportReplyContext, type ReviewSession, type ReviewRowBase, type ReviewTableColumn,
 } from '../participant/sessionState';
 
 const helpOf = (view: 'overview' | 'new' | 'ticketed' | 'stale', c: ImportReplyContext): string => buildImportHelp(view, importCommandCaps(c));
@@ -83,38 +83,6 @@ describe('reload report (R13)', () => {
   });
 });
 
-describe('replies a waiting merge reads (R7, R11)', () => {
-  const run = (over: Partial<MergeRun>): MergeRun => ({ survivor: 'PROJ-12', sources: ['PROJ-15'], steps: [], ...over });
-
-  it('after a failed step, retry and ignore, and cancel to stop here', () => {
-    const r = run({ awaiting: 'decision' });
-    expect(parseMergeRunReply('retry', r)).toEqual({ kind: 'retry' });
-    expect(parseMergeRunReply('Ignore', r)).toEqual({ kind: 'ignore' });
-    expect(parseMergeRunReply('cancel', r)).toEqual({ kind: 'cancel' });
-    expect(parseMergeRunReply('banana', r)).toEqual({ kind: 'invalid' });
-  });
-
-  it('a confirmation word is not a decision', () => {
-    expect(parseMergeRunReply('ok', run({ awaiting: 'decision' }))).toEqual({ kind: 'invalid' });
-  });
-
-  it('asking for a target: a number or a name picks it, back stops', () => {
-    const options = [{ kind: 'status' as const, status: 'Closed' }, { kind: 'status' as const, status: 'Done' }];
-    const r = run({ awaiting: 'target', closeTargetOptions: options });
-    expect(parseMergeRunReply('2', r)).toEqual({ kind: 'target', option: options[1] });
-    expect(parseMergeRunReply('closed', r)).toEqual({ kind: 'target', option: options[0] });
-    expect(parseMergeRunReply('back', r)).toEqual({ kind: 'cancel' });
-    expect(parseMergeRunReply('9', r)).toEqual({ kind: 'invalid' });
-  });
-
-  it('asking for a resolution: a number or name picks it and none sets no resolution', () => {
-    const r = run({ awaiting: 'resolution', resolutionOptions: ['Fixed', 'Done'] });
-    expect(parseMergeRunReply('2', r)).toEqual({ kind: 'resolution', resolution: 'Done' });
-    expect(parseMergeRunReply('none', r)).toEqual({ kind: 'resolution', resolution: null });
-    expect(parseMergeRunReply('cancel', r)).toEqual({ kind: 'cancel' });
-  });
-});
-
 describe('vocabulary and screens', () => {
   interface R extends ReviewRowBase { label: string }
   const columns: ReviewTableColumn<R>[] = [{ header: 'Name', accessor: r => r.label }];
@@ -165,94 +133,6 @@ describe('vocabulary and screens', () => {
 
   it('a merged row shows where its ticket went', () => {
     expect(formatTicketedRowResult({ status: 'done', action: 'merge', into: 'PROJ-12' })).toContain('merged into PROJ-12');
-  });
-});
-
-describe('buildCloseMergePrompt (close mode confirmation)', () => {
-  const survivor = { key: 'PROJ-1301', summary: 'XSS in Bar.java', status: 'Open' };
-  const source = { key: 'PROJ-1190', summary: 'XSS in Bar.java', status: 'Open' };
-  const base = { survivor, itemNoun: 'flaw', survivorLost: [] as string[], survivorElsewhere: [] as string[], newItems: [] as string[], warnings: [] as string[] };
-
-  it('Covers AE3: with nothing to move it says the kept ticket stays as it is', () => {
-    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: [], unlisted: [], elsewhere: [] }] });
-    expect(out).toContain('### Merge 1 ticket into PROJ-1301');
-    expect(out).toContain('PROJ-1190 has no flaws PROJ-1301 lacks, so PROJ-1301 stays as it is.');
-    expect(out).toMatch(/merge(%20| )PROJ-1190(%20| )into(%20| )PROJ-1301(%20| )confirm/i);
-    expect(out).toMatch(/nothing is written until/i);
-  });
-
-  it('Covers AE4: names the items that move and says the kept ticket is rebuilt from the report', () => {
-    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: ['4711', '4712'], unlisted: [], elsewhere: [] }] });
-    expect(out).toContain('PROJ-1190 also records 2 flaws (4711, 4712)');
-    expect(out).toContain('rebuilding its title, description and labels from the report (text added by hand is replaced)');
-  });
-
-  it('Covers AE5: names items the report no longer lists and says they are not moved', () => {
-    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: [], unlisted: ['4690'], elsewhere: [] }] });
-    expect(out).toContain('4690');
-    expect(out).toMatch(/no longer in the report/);
-    expect(out).toMatch(/named in the comment on PROJ-1190/);
-  });
-
-  it('Covers AE5: says a flaw still in the report but outside the kept ticket\'s rows is not moved, without calling it gone', () => {
-    const out = buildCloseMergePrompt({ ...base, sources: [{ ticket: source, movable: [], unlisted: [], elsewhere: ['4800'] }] });
-    expect(out).toMatch(/4800 is still in the report but not part of PROJ-1301's rows/);
-    expect(out).not.toMatch(/no longer in the report/);
-  });
-
-  it('Covers AE4: says report items no ticket records yet are added by the rebuild, and does not claim the kept ticket stays as it is', () => {
-    const out = buildCloseMergePrompt({ ...base, newItems: ['4900'], sources: [{ ticket: source, movable: [], unlisted: [], elsewhere: [] }] });
-    expect(out).toMatch(/4900 is in the report but on no ticket yet, so PROJ-1301 is rebuilt to include it/);
-    expect(out).not.toMatch(/stays as it is/);
-  });
-
-  it('says a flaw the kept ticket records and the report still lists, outside its rows, will stop showing', () => {
-    const out = buildCloseMergePrompt({ ...base, survivorElsewhere: ['4800'], sources: [{ ticket: source, movable: ['4711'], unlisted: [], elsewhere: [] }] });
-    expect(out).toMatch(/stop showing 4800, which it records and the report still lists, but outside PROJ-1301's rows/);
-    expect(out).not.toMatch(/4800.*no longer lists/);
-  });
-
-  it('warns when rebuilding the kept ticket will stop showing a flaw it records', () => {
-    const out = buildCloseMergePrompt({ ...base, survivorLost: ['4500'], sources: [{ ticket: source, movable: ['4711'], unlisted: [], elsewhere: [] }] });
-    expect(out).toMatch(/stop showing 4500/);
-  });
-
-  it('shows warnings, defuses Jira-sourced markup, and says "duplicate" nowhere', () => {
-    const out = buildCloseMergePrompt({
-      ...base, warnings: ['PROJ-1190 is already resolved.'],
-      sources: [{ ticket: { ...source, summary: 'click [here](http://evil.example)' }, movable: [], unlisted: [], elsewhere: [] }],
-    });
-    expect(out).toContain('⚠ PROJ-1190 is already resolved.');
-    expect(out).not.toContain('](http://evil.example)');
-    expect(out.toLowerCase()).not.toContain('duplicate');
-  });
-});
-
-describe('buildCloseMergePrompt neutralizes every link syntax in Jira-sourced text', () => {
-  const survivor = { key: 'PROJ-1301', summary: 'Kept', status: 'Open' };
-  const cmd = 'command:workbench.action.chat.open?%7B%22query%22%3A%22%40jira%20done%22%7D';
-  const attacks: Array<[string, string]> = [
-    ['inline link', `[click](${cmd})`],
-    ['image', `![x](${cmd})`],
-    ['reference-style link', `[click][ref]\n\n[ref]: ${cmd}`],
-    ['angle-bracket autolink', `<${cmd}>`],
-    ['raw HTML anchor', `<a href="${cmd}">go</a>`],
-    ['backslash-escaped bracket', `\\[click\\](${cmd})`],
-    ['newline then heading and list', 'x\n# Heading\n- item'],
-  ];
-
-  it.each(attacks)('%s in a ticket summary leaves no live link, HTML or new block', (_name, payload) => {
-    const out = buildCloseMergePrompt({
-      survivor, itemNoun: 'flaw', survivorLost: [], survivorElsewhere: [], newItems: [], warnings: [],
-      sources: [{ ticket: { key: 'PROJ-1190', summary: payload, status: payload }, movable: [], unlisted: [], elsewhere: [] }],
-    });
-    // The only links on the page are the command links this module builds itself.
-    const links = [...out.matchAll(/\]\(([^)]*)\)/g)].map(m => m[1]);
-    expect(links.filter(l => l.includes('%7B%22query%22%3A%22%40jira%20done'))).toEqual([]);
-    // Every `<` is escaped: preceded by an odd number of backslashes, so it renders as text.
-    expect(out).not.toMatch(/(?<!\\)(?:\\\\)*<[a-zA-Z/]/);
-    expect(out).not.toMatch(/^\s*\[[^\]]*\]:\s*\S+/m);
-    expect(out.split('\n').some(line => /^(#{1,6} |- )(?!Merge |PROJ|\*\*)/.test(line) && line.includes('Heading'))).toBe(false);
   });
 });
 

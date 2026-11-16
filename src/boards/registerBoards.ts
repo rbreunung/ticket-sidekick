@@ -1,6 +1,12 @@
 import * as vscode from 'vscode';
+import * as os from 'os';
 import * as path from 'path';
+import { ConfigService } from '../services/ConfigService';
 import { TicketService } from '../services/TicketService';
+import { TemplateService } from '../templates/TemplateService';
+import { createVeracodeDescriptor } from '../imports/veracode';
+import { createWaltzDescriptor } from '../imports/waltz';
+import { veracodeSettings, waltzSettings } from '../services/importSettings';
 import { registerKind } from '../sessions/boardKind';
 import { SessionManager } from '../sessions/sessionManager';
 import { SessionStore } from '../sessions/sessionStore';
@@ -10,6 +16,11 @@ import { resolveCsvDelimiter } from '../utils/securityOverviewCsv';
 import type { JiraAccess } from '../tools/jiraTools/jiraAccess';
 import { SESSIONS_BOARD } from './boardMessages';
 import { BOARD_VIEW_TYPE, BoardPanels } from './boardPanels';
+import { importKind } from './import/kind';
+import { importJiraDeps } from './import/jiraDeps';
+import type { ImportDescriptors } from './import/read';
+import { IMPORT_KIND, type ReportKind } from './import/recipe';
+import { IMPORT_START_BOARD, ImportStartScreen, reportReaderOf, type ReportReader } from './import/startScreen';
 import { SECURITY_REPORT_KIND, securityReportKind, type SecurityReportDeps } from './securityReport/kind';
 import { ticketListJiraDeps } from './ticketList/jiraDeps';
 import { checkCleanupRules, describeRuleProblem, type RuleProblem } from './ticketList/cleanupSource';
@@ -24,6 +35,7 @@ export const BOARD_COMMANDS = {
   ticketList: 'ticket-sidekick.boards.ticketList',
   cleanup: 'ticket-sidekick.boards.cleanup',
   sessions: 'ticket-sidekick.boards.sessions',
+  importBoard: 'ticket-sidekick.openImportBoard',
 } as const;
 
 const DEFAULT_RETENTION_DAYS = 14;
@@ -33,6 +45,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export function retentionDays(): number {
   const value = vscode.workspace.getConfiguration('ticketSidekick').get<unknown>('sessions.retentionDays');
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 365 ? value : DEFAULT_RETENTION_DAYS;
+}
+
+/** The Veracode and Waltz descriptors over the settings, shared by the start screen and the import board. */
+function importDescriptors(workspaceFolder: () => string | undefined, log: (level: 'info' | 'warn' | 'error', message: string, details?: Record<string, unknown>) => void): ImportDescriptors {
+  return {
+    veracode: createVeracodeDescriptor(veracodeSettings, { reviewColumns: [], onDiag: log }),
+    waltz: createWaltzDescriptor(waltzSettings(workspaceFolder), { reviewColumns: [], onDiag: log }),
+  };
 }
 
 export interface RegisteredBoards {
@@ -59,13 +79,27 @@ export function registerBoards(
     now: () => Date.now(),
     onDiag: log,
   };
+  const workspaceFolder = () => vscode.workspace.workspaceFolders?.find(f => f.uri.scheme === 'file')?.uri.fsPath;
   const ticketListDeps = ticketListJiraDeps({
     getJira,
-    workspaceFolder: () => vscode.workspace.workspaceFolders?.find(f => f.uri.scheme === 'file')?.uri.fsPath,
+    workspaceFolder,
     now: () => Date.now(),
     onDiag: log,
   });
-  const kinds = [registerKind(securityReportKind, () => securityReportDeps), registerKind(ticketListKind, () => ticketListDeps)];
+  const descriptors = importDescriptors(workspaceFolder, (level, message, details) => logDiag('boards.import', level, message, details));
+  const importDeps = importJiraDeps({
+    getJira,
+    workspaceFolder,
+    descriptors,
+    now: () => Date.now(),
+    csvDelimiter: () => resolveCsvDelimiter(vscode.workspace.getConfiguration('ticketSidekick').get('jira.overviewCsvDelimiter')),
+    onDiag: (level, message, details) => logDiag('boards.import', level, message, details),
+  });
+  const kinds = [
+    registerKind(securityReportKind, () => securityReportDeps),
+    registerKind(ticketListKind, () => ticketListDeps),
+    registerKind(importKind, () => importDeps),
+  ];
 
   // Per workspace, outside the repository; the global folder only when no folder is open.
   const storeDir = path.join((context.storageUri ?? context.globalStorageUri).fsPath, 'sessions');
@@ -104,7 +138,44 @@ export function registerBoards(
 
   // The pages are plain files shipped with the extension and loaded by the tab itself.
   const pagesRoot = vscode.Uri.joinPath(context.extensionUri, 'out', 'board-pages');
-  const panels = new BoardPanels(manager, kinds.map(k => k.kind.kind), pagesRoot, message => log('error', 'A board request failed', { error: message }));
+  const configService = new ConfigService(context);
+  const readers: Record<ReportKind, ReportReader> = { veracode: reportReaderOf(descriptors.veracode), waltz: reportReaderOf(descriptors.waltz) };
+  /** VS Code's open dialog for a report of this kind, starting in Downloads. */
+  const pickReportFile = async (filter: ReportReader['fileFilter']) => {
+    const uris = await vscode.window.showOpenDialog({
+      canSelectMany: false,
+      filters: { [filter.label]: filter.extensions },
+      defaultUri: vscode.Uri.file(path.join(os.homedir(), 'Downloads')),
+      title: `Select ${filter.label} (${filter.extensions.map(e => `.${e}`).join(', ')})`,
+    });
+    return uris?.[0]?.fsPath;
+  };
+  const importStart = new ImportStartScreen({
+    jira: getJira,
+    defaultProject: () => securityReportDeps.defaultProject(),
+    templateSetting: kind => configService.getImportTemplate(kind),
+    writeTemplateSetting: (kind, name) => configService.setImportTemplate(kind, name),
+    writeDefaultProject: key => configService.setDefaultProject(key),
+    templates: () => {
+      const folder = workspaceFolder();
+      return folder ? new TemplateService(folder).loadTemplates().templates : [];
+    },
+    reportReader: kind => readers[kind],
+    pickReportFile: (_kind, filter) => pickReportFile(filter),
+    openSetting: async key => { await vscode.commands.executeCommand('workbench.action.openSettings', key); },
+    // The stored list, not a lookup: looking a session up would start its background check.
+    hasSession: async id => (await manager.list()).some(s => s.kind === IMPORT_KIND && s.id === id),
+    discardSession: id => manager.discard(id),
+    openImport: async recipe => {
+      const opened = await panels.open(IMPORT_KIND, recipe);
+      return opened.ok ? { ok: true, title: opened.title } : opened;
+    },
+    onDiag: (level, message, details) => logDiag('boards.importStart', level, message, details),
+  });
+  const panels = new BoardPanels(
+    manager, kinds.map(k => k.kind.kind), pagesRoot, message => log('error', 'A board request failed', { error: message }), importStart,
+    kind => pickReportFile(readers[kind].fileFilter),
+  );
   /** Opens a board from the Command Palette and says why when it cannot. */
   const openFromCommand = async (kind: string, input: unknown) => {
     const opened = await panels.open(kind, input);
@@ -159,6 +230,7 @@ export function registerBoards(
       await openFromCommand(TICKET_LIST_KIND, { cleanupRule: rule, ...(fixVersion.trim() ? { fixVersion: fixVersion.trim() } : {}) });
     }),
     vscode.commands.registerCommand(BOARD_COMMANDS.sessions, () => openFromCommand(SESSIONS_BOARD, {})),
+    vscode.commands.registerCommand(BOARD_COMMANDS.importBoard, () => openFromCommand(IMPORT_START_BOARD, {})),
     { dispose: () => clearInterval(timer) },
     vscode.commands.registerCommand(BOARD_COMMANDS.clearSessions, async () => {
       const choice = await vscode.window.showWarningMessage(

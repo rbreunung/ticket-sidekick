@@ -1,9 +1,9 @@
 import { randomBytes } from 'crypto';
 import type { DiagLogger } from '../utils/diagTypes';
-import type { CheckMode, ExportedFile, RegisteredKind } from './boardKind';
+import type { ApplyProgressReport, CheckMode, ExportedFile, RegisteredKind } from './boardKind';
 import { sessionIdFor } from './sessionId';
 import type { SessionStore } from './sessionStore';
-import { SessionError, type ApplyLineResult, type Conflict, type PlanLine, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
+import { SessionError, type ApplyLineResult, type Conflict, type DerivedPart, type PlanLine, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
 
 // Owns every session of this window: opens or restores it, runs its actions one after another,
 // checks it against the sources, and guards its writes. A write needs a plan id that only a
@@ -31,8 +31,12 @@ export interface BoardState {
   conflicts: Conflict[];
   notice?: string;
   error?: string;
+  /** What kind of failure `error` is, when the board kind names it (e.g. `report-not-found`), so the page can offer the way out. */
+  errorCode?: string;
   /** The last check against the sources failed on a board that writes: nothing is applied until one passes. */
   writesBlocked: boolean;
+  /** Set while an Apply runs: how many of its targets are finished. The page disables its controls meanwhile. */
+  applying?: { done: number; total: number };
   view?: unknown;
 }
 
@@ -60,6 +64,7 @@ export interface SessionManagerDeps {
 
 const DEFAULT_PLAN_TTL_MS = 10 * 60 * 1000;
 const DROP_CONFLICT = 'conflict/drop';
+const REBUILT_NOTICE = 'This board was rebuilt after an update: the stored session came from another version of Ticket Sidekick, and its earlier choices were not kept.';
 
 interface Entry {
   id: string;
@@ -72,6 +77,8 @@ interface Entry {
   stored: boolean;
   notice?: string;
   error?: string;
+  errorCode?: string;
+  applying?: { done: number; total: number };
   queue: Promise<unknown>;
   waiters: Set<() => void>;
 }
@@ -83,8 +90,21 @@ interface PendingPlan {
   expires: number;
 }
 
+/** Whether a check found what the session already shows: the same data, fingerprints and working state. */
+function unchanged(session: Session<unknown, unknown, unknown>, merged: { derived: DerivedPart<unknown>; working: unknown }): boolean {
+  return JSON.stringify(merged.derived.data) === JSON.stringify(session.derived.data)
+    && JSON.stringify(merged.derived.fingerprints) === JSON.stringify(session.derived.fingerprints)
+    && JSON.stringify(merged.working) === JSON.stringify(session.working);
+}
+
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** The failure's name when a board kind gives its error one (`boardErrorCode`). */
+function errorCodeOf(err: unknown): string | undefined {
+  const code = (err as { boardErrorCode?: unknown } | null)?.boardErrorCode;
+  return typeof code === 'string' ? code : undefined;
 }
 
 export class SessionManager {
@@ -130,17 +150,47 @@ export class SessionManager {
     }
   }
 
-  /** Finds the session in memory or in the cache; a cached one of another format is discarded. */
+  /** A new entry that builds its session from `recipe`. */
+  private building(id: string, reg: RegisteredKind, recipe: unknown, notice?: string): Entry {
+    const entry: Entry = {
+      id, reg, recipe, status: 'building', tick: 1, restored: false, stored: false,
+      queue: Promise.resolve(), waiters: new Set(), notice,
+    };
+    this.entries.set(id, entry);
+    void this.enqueue(entry, () => this.build(entry));
+    return entry;
+  }
+
+  /** A stored session of another format: rebuilt from its recipe when that still holds, else discarded. */
+  private async rebuild(reg: RegisteredKind, id: string, recipe: unknown): Promise<Entry | undefined> {
+    const { kind } = reg;
+    let checked: { ok: true; recipe: unknown } | { ok: false; reason: string } = { ok: false, reason: 'the board cannot rebuild a stored session' };
+    if (kind.revalidate) {
+      try {
+        checked = await kind.revalidate(recipe, await reg.deps());
+      } catch (err) {
+        checked = { ok: false, reason: messageOf(err) };
+      }
+    }
+    if (!checked.ok) {
+      await this.deps.store.delete(id);
+      this.log('info', 'Discarded a stored session of another format', { kind: kind.kind, reason: checked.reason });
+      return undefined;
+    }
+    // Another caller may have rebuilt it while this one checked the recipe.
+    const raced = this.entries.get(id);
+    if (raced) return raced;
+    this.log('info', 'Rebuilt a stored session of another format', { kind: kind.kind });
+    return this.building(id, reg, checked.recipe, REBUILT_NOTICE);
+  }
+
+  /** Finds the session in memory or in the cache; a cached one of another format is rebuilt or discarded. */
   private async find(reg: RegisteredKind, id: string): Promise<Entry | undefined> {
     const known = this.entries.get(id);
     if (known) return known.reg === reg ? known : undefined;
     const stored = await this.deps.store.load(id);
     if (!stored || stored.session.kind !== reg.kind.kind) return undefined;
-    if (stored.session.formatVersion !== reg.kind.formatVersion) {
-      await this.deps.store.delete(id);
-      this.log('info', 'Discarded a stored session of another format', { kind: reg.kind.kind });
-      return undefined;
-    }
+    if (stored.session.formatVersion !== reg.kind.formatVersion) return this.rebuild(reg, id, stored.session.recipe);
     // Another caller may have loaded it while this one waited for the file.
     const raced = this.entries.get(id);
     if (raced) return raced;
@@ -167,9 +217,11 @@ export class SessionManager {
       await this.persist(entry);
       entry.status = 'ready';
       entry.error = undefined;
+      entry.errorCode = undefined;
     } catch (err) {
       entry.status = 'failed';
       entry.error = messageOf(err);
+      entry.errorCode = errorCodeOf(err);
     }
     this.changed(entry);
   }
@@ -180,22 +232,29 @@ export class SessionManager {
     if (!session) return this.build(entry);
     entry.status = 'checking';
     entry.error = undefined;
+    entry.errorCode = undefined;
     this.changed(entry);
     try {
       const { kind } = entry.reg;
       const fresh = await kind.read(session.recipe, await entry.reg.deps());
       const merged = kind.reconcile(session, fresh, mode);
-      // A conflict stays until the developer resolves or drops it; a later check must not erase it.
-      const fresher = new Set(merged.conflicts.map(c => c.id));
-      entry.session = {
-        ...session, derived: merged.derived, working: merged.working,
-        conflicts: [...session.conflicts.filter(c => !fresher.has(c.id)), ...merged.conflicts],
-        revision: session.revision + 1, lastUsedAt: this.deps.now(),
-      };
+      if (merged.conflicts.length === 0 && unchanged(session, merged)) {
+        // Nothing changed: only the read time moves, and the revision stays, so an open preview stays valid.
+        entry.session = { ...session, derived: { ...session.derived, readAt: merged.derived.readAt }, lastUsedAt: this.deps.now() };
+      } else {
+        // A conflict stays until the developer resolves or drops it; a later check must not erase it.
+        const fresher = new Set(merged.conflicts.map(c => c.id));
+        entry.session = {
+          ...session, derived: merged.derived, working: merged.working,
+          conflicts: [...session.conflicts.filter(c => !fresher.has(c.id)), ...merged.conflicts],
+          revision: session.revision + 1, lastUsedAt: this.deps.now(),
+        };
+      }
       await this.persist(entry);
     } catch (err) {
       // The stored state stays on show; the board says the check failed.
       entry.error = messageOf(err);
+      entry.errorCode = errorCodeOf(err);
     }
     entry.status = 'ready';
     this.changed(entry);
@@ -209,7 +268,10 @@ export class SessionManager {
     if (!validated.ok) return validated;
     const id = sessionIdFor(reg.kind.kind, reg.kind.sourceKey(validated.recipe));
     const title = reg.kind.title(validated.recipe);
-    const formatBefore = (await this.deps.store.load(id))?.session.formatVersion;
+    const formatBefore = this.entries.has(id) ? undefined : (await this.deps.store.load(id))?.session.formatVersion;
+    const otherFormat = formatBefore !== undefined && formatBefore !== reg.kind.formatVersion;
+    // A stored session of another format is rebuilt from this request, which is what the board is opened with now.
+    if (otherFormat) await this.deps.store.delete(id);
     const existing = await this.find(reg, id);
     if (existing) {
       const { reopen } = reg.kind;
@@ -227,15 +289,8 @@ export class SessionManager {
       }
       return { ok: true, id, title };
     }
-    const entry: Entry = {
-      id, reg, recipe: validated.recipe, status: 'building', tick: 1, restored: false, stored: false,
-      queue: Promise.resolve(), waiters: new Set(),
-      notice: formatBefore !== undefined && formatBefore !== reg.kind.formatVersion
-        ? 'The stored session came from another version of Ticket Sidekick and was discarded.'
-        : undefined,
-    };
-    this.entries.set(id, entry);
-    void this.enqueue(entry, () => this.build(entry));
+    if (otherFormat) this.log('info', 'Rebuilt a stored session of another format', { kind: reg.kind.kind });
+    this.building(id, reg, validated.recipe, otherFormat ? REBUILT_NOTICE : undefined);
     return { ok: true, id, title };
   }
 
@@ -252,7 +307,9 @@ export class SessionManager {
       id: entry.id, kind: kind.kind, title: kind.title(entry.recipe), status: entry.status, tick: entry.tick,
       revision: session?.revision ?? 0, asOf: session?.derived.readAt, restored: entry.restored, stored: entry.stored,
       conflicts: session?.conflicts ?? [], notice: entry.notice, error: entry.error,
+      ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
       writesBlocked: this.writesBlocked(entry),
+      ...(entry.applying ? { applying: { ...entry.applying } } : {}),
       view: session ? kind.view(session) : undefined,
     };
   }
@@ -329,7 +386,8 @@ export class SessionManager {
       const { kind } = entry.reg;
       if (!kind.plan || !kind.apply) throw new SessionError(400, 'This board does not write.');
       this.requireWritable(entry);
-      const planned = kind.plan(session, action);
+      const prepared = kind.prepare ? await kind.prepare(session, action, await entry.reg.deps()) : undefined;
+      const planned = kind.plan(session, action, prepared);
       if (!planned.ok) throw new SessionError(400, planned.reason);
       this.sweepPlans();
       const planId = randomBytes(24).toString('hex');
@@ -356,7 +414,41 @@ export class SessionManager {
       if (plan.risky && !(await this.deps.confirm({ title: plan.title, lines: plan.lines }))) {
         throw new SessionError(409, 'Not applied: the confirmation was declined.');
       }
-      const applied = await kind.apply(session, plan, await entry.reg.deps());
+      // Each finished target is saved before the next write, without raising the revision: the
+      // page shows the progress, and a board restored after an interruption knows what is done.
+      entry.applying = { done: 0, total: plan.lines.length };
+      this.changed(entry);
+      let saved = Promise.resolve();
+      let progressed = false;
+      const progress = (report: ApplyProgressReport<unknown>): Promise<void> => {
+        // Saved one after the other, even when a kind reports again before the last save finished.
+        saved = saved.then(async () => {
+          // A session discarded meanwhile is not written back.
+          if (!entry.session || this.entries.get(entry.id) !== entry) return;
+          progressed = true;
+          entry.session = { ...entry.session, working: report.working, lastUsedAt: this.deps.now() };
+          entry.applying = { done: report.done, total: report.total };
+          await this.persist(entry);
+          this.changed(entry);
+        });
+        return saved;
+      };
+      let applied;
+      try {
+        applied = await kind.apply(session, plan, await entry.reg.deps(), progress);
+        await saved;
+      } catch (err) {
+        await saved.catch(() => undefined);
+        entry.applying = undefined;
+        // What was saved meanwhile is a change: a preview of the session before it is no longer valid.
+        if (progressed && entry.session && this.entries.get(entry.id) === entry) {
+          entry.session = { ...entry.session, revision: session.revision + 1 };
+          await this.persist(entry);
+        }
+        this.changed(entry);
+        throw err;
+      }
+      entry.applying = undefined;
       for (const result of applied.results) {
         this.log(result.outcome === 'done' ? 'info' : 'warn', `Board write ${result.outcome}: ${result.target}`, {
           kind: kind.kind, plan: plan.title, reason: result.reason,
@@ -367,10 +459,60 @@ export class SessionManager {
         conflicts: [...session.conflicts, ...(applied.conflicts ?? [])],
         revision: session.revision + 1, lastUsedAt: this.deps.now(),
       };
-      await this.persist(entry);
+      // A session discarded while the Apply ran stays discarded: the results still go back to the page.
+      if (this.entries.get(entry.id) === entry) await this.persist(entry);
       this.changed(entry);
       return { results: applied.results, state: this.toState(entry) };
     });
+  }
+
+  /**
+   * Gives a session another source of the same kind, e.g. its report file at a new place: the kind's
+   * `revalidate` checks the new recipe, the session moves to the id of the new source (stored there,
+   * the old file deleted) and is checked against the new source. Refused when another session
+   * already has that id. The working state stays; previews of the old id are no longer valid.
+   */
+  async relocate(kindName: string, id: string, recipe: unknown): Promise<{ id: string; state: BoardState }> {
+    const entry = await this.entry(kindName, id);
+    const { kind } = entry.reg;
+    const revalidate = kind.revalidate;
+    if (!revalidate) throw new SessionError(400, 'This board cannot change its source.');
+    const moved = await this.enqueue(entry, async (): Promise<Entry> => {
+      const session = entry.session;
+      if (!session || entry.status === 'building') throw new SessionError(409, 'The board is still loading.');
+      if (this.entries.get(id) !== entry) throw new SessionError(404, 'This session no longer exists. Ask for the board again.');
+      const checked = await revalidate(recipe, await entry.reg.deps());
+      if (!checked.ok) throw new SessionError(400, checked.reason);
+      const newId = sessionIdFor(kind.kind, kind.sourceKey(checked.recipe));
+      const next: Session = { ...session, id: newId, recipe: checked.recipe, revision: session.revision + 1, lastUsedAt: this.deps.now() };
+      for (const [planId, pending] of this.plans) if (pending.sessionId === id) this.plans.delete(planId);
+      if (newId === id) {
+        entry.recipe = checked.recipe;
+        entry.session = next;
+        await this.persist(entry);
+        this.changed(entry);
+        return entry;
+      }
+      const other = this.entries.get(newId)?.session ?? (await this.deps.store.load(newId))?.session;
+      if (other) {
+        throw new SessionError(409, `Another board already uses that source: "${kind.title(other.recipe)}" (${kind.sourceLabel(other.recipe)}). Open or discard that one first.`);
+      }
+      const target: Entry = {
+        id: newId, reg: entry.reg, recipe: checked.recipe, session: next, status: 'ready', tick: entry.tick + 1,
+        restored: entry.restored, stored: false, notice: entry.notice, error: entry.error, errorCode: entry.errorCode,
+        queue: Promise.resolve(), waiters: new Set(),
+      };
+      this.entries.set(newId, target);
+      await this.persist(target);
+      this.entries.delete(id);
+      await this.deps.store.delete(id);
+      this.log('info', 'Moved a session to another source', { kind: kind.kind });
+      // A page still waiting on the old id wakes and finds it gone.
+      this.changed(entry);
+      return target;
+    });
+    await this.enqueue(moved, () => this.check(moved));
+    return { id: moved.id, state: this.toState(moved) };
   }
 
   /** Saves a file built from the session through the window's save dialog. */

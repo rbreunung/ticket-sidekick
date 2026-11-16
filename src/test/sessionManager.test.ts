@@ -14,10 +14,42 @@ interface Recipe { project: string }
 interface Derived { tickets: Record<string, string> }
 interface Working { selected: string[] }
 type Action = { type: 'select'; key: string } | { type: 'close' };
-interface Deps { tickets: Record<string, string>; reads: { count: number }; failRead?: boolean; modes?: string[] }
+interface Deps {
+  tickets: Record<string, string>;
+  reads: { count: number };
+  failRead?: boolean;
+  modes?: string[];
+  /** Apply stops with an error after this many targets, as if the window closed mid-write. */
+  stopAfter?: number;
+  /** Called after each saved progress report, while the Apply still runs. */
+  onProgressSaved?: () => Promise<void>;
+  /** Apply reports its first two targets without waiting for the first save. */
+  reportWithoutWaiting?: boolean;
+  /** Projects a stored recipe no longer resolves to. */
+  gone?: string[];
+  /** What the kind's `prepare` reads before a close's preview: a ticket's owner, or an error. */
+  owner?: string | Error;
+  prepares?: number;
+}
 
-function makeKind(formatVersion = 1): BoardKind<Recipe, Derived, Working, Action, { tickets: Record<string, string>; selected: string[] }, Deps> {
+function makeKind(formatVersion = 1, options: { revalidate?: boolean; prepare?: boolean } = {}): BoardKind<Recipe, Derived, Working, Action, { tickets: Record<string, string>; selected: string[] }, Deps> {
   return {
+    ...(options.revalidate ? {
+      revalidate: async (recipe: unknown, deps: Deps) => {
+        const project = (recipe as { project?: unknown })?.project;
+        return typeof project === 'string' && !(deps.gone ?? []).includes(project)
+          ? { ok: true as const, recipe: { project } }
+          : { ok: false as const, reason: 'The project is gone.' };
+      },
+    } : {}),
+    ...(options.prepare ? {
+      prepare: async (_session: unknown, action: Action, deps: Deps) => {
+        if (action.type !== 'close') return undefined;
+        deps.prepares = (deps.prepares ?? 0) + 1;
+        if (deps.owner instanceof Error) throw deps.owner;
+        return deps.owner;
+      },
+    } : {}),
     kind: 'demo',
     formatVersion,
     title: r => `Demo: ${r.project}`,
@@ -50,21 +82,36 @@ function makeKind(formatVersion = 1): BoardKind<Recipe, Derived, Working, Action
       if (!(action.key in session.derived.data.tickets)) return { ok: false, reason: `${action.key} is not on the board.` };
       return { ok: true, working: { selected: [...session.working.selected, action.key] } };
     },
-    plan: (session, action) => {
+    plan: (session, action, prepared) => {
       if (action.type !== 'close') return { ok: false, reason: 'Unknown action.' };
       const keys = session.working.selected;
       if (keys.length === 0) return { ok: false, reason: 'Nothing is selected.' };
-      return { ok: true, plan: { title: `Close ${keys.length} ticket(s)`, lines: keys.map(k => ({ target: k, change: 'Closed' })), risky: true, payload: keys } };
+      return { ok: true, plan: { title: `Close ${keys.length} ticket(s)${prepared ? ` owned by ${String(prepared)}` : ''}`, lines: keys.map(k => ({ target: k, change: 'Closed' })), risky: true, payload: keys } };
     },
-    apply: async (session, plan, deps) => {
+    apply: async (session, plan, deps, progress) => {
       const tickets = { ...session.derived.data.tickets };
-      const results = (plan.payload as string[]).map(key => {
+      const keys = plan.payload as string[];
+      const results = [];
+      const unsaved: Promise<void>[] = [];
+      for (const key of keys) {
+        if (deps.stopAfter !== undefined && results.length === deps.stopAfter) throw new Error('The window closed.');
         // The target is read again; one that moved since the board read it is refused.
-        if (deps.tickets[key] !== tickets[key]) return { target: key, outcome: 'refused' as const, reason: 'Changed in Jira.' };
-        deps.tickets[key] = 'Closed';
-        tickets[key] = 'Closed';
-        return { target: key, outcome: 'done' as const };
-      });
+        if (deps.tickets[key] !== tickets[key]) {
+          results.push({ target: key, outcome: 'refused' as const, reason: 'Changed in Jira.' });
+        } else {
+          deps.tickets[key] = 'Closed';
+          tickets[key] = 'Closed';
+          results.push({ target: key, outcome: 'done' as const });
+        }
+        // The finished targets leave the selection, so a new plan covers only the rest.
+        const report = progress?.({ working: { selected: keys.slice(results.length) }, done: results.length, total: keys.length });
+        if (deps.reportWithoutWaiting && results.length === 1 && report) {
+          unsaved.push(report);
+          continue;
+        }
+        await Promise.all([...unsaved.splice(0), report]);
+        await deps.onProgressSaved?.();
+      }
       return { results, derived: { ...session.derived, data: { tickets } }, working: { selected: [] } };
     },
     view: session => ({ tickets: session.derived.data.tickets, selected: session.working.selected }),
@@ -77,10 +124,10 @@ let confirmations: string[];
 let confirmAnswer: boolean;
 let clock: number;
 
-function manager(formatVersion = 1): SessionManager {
+function manager(formatVersion = 1, options: { revalidate?: boolean; prepare?: boolean } = {}): SessionManager {
   return new SessionManager({
     store: new SessionStore(dir),
-    kinds: [registerKind(makeKind(formatVersion), () => source)],
+    kinds: [registerKind(makeKind(formatVersion, options), () => source)],
     now: () => clock,
     confirm: async plan => { confirmations.push(plan.title); return confirmAnswer; },
     saveFile: async () => true,
@@ -241,6 +288,67 @@ describe('restart', () => {
     expect(rebuilt.restored).toBe(false);
     expect(rebuilt.notice).toMatch(/another version/);
   });
+
+  it('rebuilds a stored session of another format from what it was opened with, and says so', async () => {
+    const first = manager(1, { revalidate: true });
+    const state = await openReady(first);
+    await first.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
+
+    const updated = manager(2, { revalidate: true });
+    const rebuilt = await ready(updated, state.id);
+    expect(rebuilt.status).toBe('ready');
+    expect(rebuilt.title).toBe('Demo: PROJ');
+    expect(rebuilt.restored).toBe(false);
+    expect(rebuilt.notice).toMatch(/rebuilt after an update/);
+    // The earlier choices are not kept.
+    expect(rebuilt.view).toMatchObject({ selected: [] });
+    const stored = await new SessionStore(dir).load(state.id);
+    expect(stored?.session.formatVersion).toBe(2);
+  });
+
+  it('gives "no longer exists" for a stored session of another format whose recipe no longer holds', async () => {
+    const state = await openReady(manager(1, { revalidate: true }));
+    source.gone = ['PROJ'];
+    await expect(manager(2, { revalidate: true }).state('demo', state.id)).rejects.toMatchObject({ status: 404, message: expect.stringContaining('no longer exists') });
+    expect(await new SessionStore(dir).load(state.id)).toBeUndefined();
+  });
+});
+
+describe('moving a session to another source', () => {
+  it('moves the session with its working state to the id of the new source, and checks it there', async () => {
+    const m = manager(1, { revalidate: true });
+    let state = await openReady(m);
+    state = await m.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
+    const reads = source.reads.count;
+
+    const moved = await m.relocate('demo', state.id, { project: 'OTHER' });
+
+    expect(moved.id).toBe(sessionIdFor('demo', 'OTHER'));
+    expect(moved.state).toMatchObject({ title: 'Demo: OTHER', view: { selected: ['PROJ-1'] } });
+    expect(source.reads.count).toBe(reads + 1);
+    await expect(m.state('demo', state.id)).rejects.toMatchObject({ status: 404 });
+    expect(await new SessionStore(dir).load(state.id)).toBeUndefined();
+    expect((await new SessionStore(dir).load(moved.id))?.session.recipe).toEqual({ project: 'OTHER' });
+    // Asking for the new source finds the moved session.
+    expect(await m.open('demo', { project: 'OTHER' })).toMatchObject({ ok: true, id: moved.id });
+  });
+
+  it('refuses a source another session already has, naming that session, and leaves both as they were', async () => {
+    const m = manager(1, { revalidate: true });
+    const first = await openReady(m, 'PROJ');
+    const second = await openReady(m, 'OTHER');
+    await expect(m.relocate('demo', first.id, { project: 'other' })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('Demo: OTHER') });
+    expect((await m.state('demo', first.id)).title).toBe('Demo: PROJ');
+    expect((await m.state('demo', second.id)).title).toBe('Demo: OTHER');
+  });
+
+  it('refuses a recipe the board does not accept, and a board that cannot change its source', async () => {
+    const m = manager(1, { revalidate: true });
+    const state = await openReady(m);
+    await expect(m.relocate('demo', state.id, { project: 42 })).rejects.toMatchObject({ status: 400 });
+    const plain = manager(1);
+    await expect(plain.relocate('demo', state.id, { project: 'OTHER' })).rejects.toMatchObject({ status: 400 });
+  });
 });
 
 describe('writing from a board', () => {
@@ -325,6 +433,158 @@ describe('writing from a board', () => {
     const { results } = await m.apply('demo', state.id, preview.planId);
     expect(results).toEqual([{ target: 'PROJ-1', outcome: 'done' }, { target: 'PROJ-2', outcome: 'refused', reason: 'Changed in Jira.' }]);
     expect(source.tickets['PROJ-2']).toBe('In Review');
+  });
+});
+
+describe('a check that finds nothing new', () => {
+  it('keeps the revision, so a preview made before it can still be applied', async () => {
+    confirmAnswer = true;
+    const m = manager();
+    let state = await openReady(m);
+    state = await m.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    const refreshed = await m.refresh('demo', state.id);
+    expect(refreshed.revision).toBe(state.revision);
+    const { results } = await m.apply('demo', state.id, preview.planId);
+    expect(results).toEqual([{ target: 'PROJ-1', outcome: 'done' }]);
+  });
+
+  it('raises the revision when the check found a change, so the older preview is refused', async () => {
+    const m = manager();
+    let state = await openReady(m);
+    state = await m.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    source.tickets = { ...source.tickets, 'PROJ-9': 'Open' };
+    expect((await m.refresh('demo', state.id)).revision).toBe(state.revision + 1);
+    await expect(m.apply('demo', state.id, preview.planId)).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('a read before the preview', () => {
+  it('reads what the preview must show before the plan is built, and the plan shows it', async () => {
+    source.owner = 'Alice';
+    const m = manager(1, { prepare: true });
+    let state = await openReady(m);
+    state = await m.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    expect(preview.title).toBe('Close 1 ticket(s) owned by Alice');
+    expect(source.prepares).toBe(1);
+  });
+
+  it('refuses the preview when that read fails, and builds no plan', async () => {
+    source.owner = new Error('Jira answered 404');
+    const m = manager(1, { prepare: true });
+    let state = await openReady(m);
+    state = await m.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
+    await expect(m.preview('demo', state.id, state.revision, { type: 'close' })).rejects.toThrow('Jira answered 404');
+    // The board stays usable: once the read works, the preview does too.
+    source.owner = 'Bob';
+    expect((await m.preview('demo', state.id, state.revision, { type: 'close' })).title).toBe('Close 1 ticket(s) owned by Bob');
+  });
+});
+
+describe('an Apply in progress', () => {
+  const seven = () => Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`PROJ-${i + 1}`, 'Open']));
+
+  async function selectedAll(m: SessionManager) {
+    let state = await openReady(m);
+    for (const key of Object.keys(source.tickets)) state = await m.action('demo', state.id, state.revision, { type: 'select', key });
+    return state;
+  }
+
+  it('keeps the targets written before an interruption, and a new plan covers only the rest', async () => {
+    source.tickets = seven();
+    const m = manager();
+    const state = await selectedAll(m);
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    source.stopAfter = 4;
+    await expect(m.apply('demo', state.id, preview.planId)).rejects.toThrow('The window closed.');
+    source.stopAfter = undefined;
+
+    const stored = await new SessionStore(dir).load(state.id);
+    expect(stored?.session.working).toEqual({ selected: ['PROJ-5', 'PROJ-6', 'PROJ-7'] });
+
+    const restarted = manager();
+    const restored = await ready(restarted, state.id);
+    expect(restored.restored).toBe(true);
+    const again = await restarted.preview('demo', state.id, restored.revision, { type: 'close' });
+    expect(again.lines.map(l => l.target)).toEqual(['PROJ-5', 'PROJ-6', 'PROJ-7']);
+  });
+
+  it('reports applying with done and total while it runs, without raising the revision until the end', async () => {
+    source.tickets = { 'PROJ-1': 'Open', 'PROJ-2': 'Open', 'PROJ-3': 'Open' };
+    const m = manager();
+    const state = await selectedAll(m);
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    const seen: { revision: number; applying: unknown; selected: unknown }[] = [];
+    source.onProgressSaved = async () => {
+      const now = await m.state('demo', state.id);
+      seen.push({ revision: now.revision, applying: now.applying, selected: (now.view as { selected: string[] }).selected });
+    };
+    const { state: after } = await m.apply('demo', state.id, preview.planId);
+    expect(seen).toEqual([
+      { revision: state.revision, applying: { done: 1, total: 3 }, selected: ['PROJ-2', 'PROJ-3'] },
+      { revision: state.revision, applying: { done: 2, total: 3 }, selected: ['PROJ-3'] },
+      { revision: state.revision, applying: { done: 3, total: 3 }, selected: [] },
+    ]);
+    expect(after.revision).toBe(state.revision + 1);
+    expect(after.applying).toBeUndefined();
+  });
+
+  it('raises the revision once when an Apply stops after saving some targets, so an older preview is refused', async () => {
+    const m = manager();
+    const state = await selectedAll(m);
+    const first = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    const second = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    source.stopAfter = 1;
+    await expect(m.apply('demo', state.id, first.planId)).rejects.toThrow('The window closed.');
+    const now = await m.state('demo', state.id);
+    expect(now.revision).toBe(state.revision + 1);
+    expect(now.applying).toBeUndefined();
+    await expect(m.apply('demo', state.id, second.planId)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('does not store again a session discarded while its Apply ran', async () => {
+    source.tickets = { 'PROJ-1': 'Open', 'PROJ-2': 'Open' };
+    const m = manager();
+    const state = await selectedAll(m);
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    let discarded = false;
+    source.onProgressSaved = async () => {
+      if (discarded) return;
+      discarded = true;
+      await m.discard(state.id);
+    };
+    await m.apply('demo', state.id, preview.planId);
+    expect(await new SessionStore(dir).load(state.id)).toBeUndefined();
+  });
+
+  it('does not store again a session discarded before its Apply failed', async () => {
+    source.tickets = { 'PROJ-1': 'Open', 'PROJ-2': 'Open', 'PROJ-3': 'Open' };
+    const m = manager();
+    const state = await selectedAll(m);
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    let discarded = false;
+    source.onProgressSaved = async () => {
+      if (discarded) return;
+      discarded = true;
+      await m.discard(state.id);
+    };
+    source.stopAfter = 2;
+    await expect(m.apply('demo', state.id, preview.planId)).rejects.toThrow('The window closed.');
+    expect(await new SessionStore(dir).load(state.id)).toBeUndefined();
+  });
+
+  it('saves two progress reports in a row one after the other, and the session stays stored', async () => {
+    const m = manager();
+    const state = await selectedAll(m);
+    const preview = await m.preview('demo', state.id, state.revision, { type: 'close' });
+    source.reportWithoutWaiting = true;
+    source.stopAfter = 2;
+    await expect(m.apply('demo', state.id, preview.planId)).rejects.toThrow('The window closed.');
+    expect((await m.state('demo', state.id)).stored).toBe(true);
+    const stored = await new SessionStore(dir).load(state.id);
+    expect(stored?.session.working).toEqual({ selected: ['PROJ-3'] });
   });
 });
 

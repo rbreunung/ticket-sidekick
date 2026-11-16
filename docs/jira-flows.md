@@ -1,11 +1,11 @@
 # Jira Feature Flows
 
-> **Deprecated surface.** `@jira` is deprecated and runs only the report imports (emails, Veracode, Waltz) since 2026-11-14. Every other request gets a fixed notice (`JIRA_ONLY_IMPORTS_NOTICE` in `src/participant/session/jiraCommands.ts`) pointing to `/ts-jira` and Agent mode. New work is built as extension tools and boards; see [`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md). The imports themselves are documented in [`docs/report-import.md`](report-import.md).
+> **Deprecated surface.** `@jira` is deprecated. Since 2026-11-14 it runs only the report imports, and since 2026-11-15 only the email import: Veracode and Waltz reports are imported on the import board (`src/boards/import/`). Every other request, a Veracode or Waltz import request included, gets a fixed notice (`JIRA_ONLY_IMPORTS_NOTICE` in `src/participant/session/jiraCommands.ts`) pointing to the import board, `/ts-jira` and Agent mode. New work is built as extension tools and boards; see [`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md). The imports themselves are documented in [`docs/report-import.md`](report-import.md).
 
 The code lives in:
 
-- [`src/participant/JiraParticipant.ts`](../src/participant/JiraParticipant.ts) — the imports-only handler: the import sessions, the help screen, the intent parse (`createFromEmail`, `addEmailComment`, `importVeracode`, `importWaltzReport` or `other`) and the notice.
-- [`src/participant/jira/`](../src/participant/jira/) — the import handlers, `cleanupHandler.ts` (the stale-ticket close of an import), `overviewHandler.ts` (the import `export` reply) and `ticketContext.ts`.
+- [`src/participant/JiraParticipant.ts`](../src/participant/JiraParticipant.ts) — the email-only handler: the email import sessions, the help screen, the intent parse (`createFromEmail`, `addEmailComment` or `other`) and the notice.
+- [`src/participant/jira/`](../src/participant/jira/) — the email import (`emailHandler.ts`) over the shared chat flow (`reportImportHandler.ts`, `importReviewScreen.ts`, `importCreate.ts`), `defaultProjectNotice.ts` and `ticketContext.ts`.
 - [`src/participant/sessionState.ts`](../src/participant/sessionState.ts) — pure session-state types and helpers, including `pickEmailOption()`.
 
 ## Where the removed flows went
@@ -19,6 +19,7 @@ The code lives in:
 | bulk transition, bulk field update | the ticket list board |
 | cleanup by `cleanupRules` | the ticket list board loaded from a rule (`src/boards/ticketList/cleanupSource.ts`) |
 | `/security-report` | the security report board |
+| Veracode and Waltz report imports, with their two Command Palette commands | the import board (`Ticket Sidekick: Open import board`, `jira_open_board` with board `import`); see [`docs/report-import.md`](report-import.md#import-board-veracode--waltz) |
 | description and comment preview | dropped |
 
 The rules the cleanup board keeps from `@jira run cleanup` are below.
@@ -53,24 +54,19 @@ Each session below is looked up by its `workspaceState` key; liveness is checked
 | Session | workspaceState key | Liveness check |
 | --- | --- | --- |
 | `AwaitIssueTypeSession` | `jira.session.awaitIssueType` | metadata — `jiraSession.kinds: ['await-issue-type']` |
-| `StaleCloseSession` | `jira.session.staleResolution` | metadata — `jiraSession.kinds: ['stale-resolution-selection']` |
 | `EmailCleanupSession` | `jira.session.emailCleanup` | metadata — `jiraSession.kinds: ['email-cleanup']` |
 | `EmailContentSession` | `jira.session.emailContent` | metadata — `jiraSession.kinds: ['email-content']` |
 | `EmailTemplateSelectionSession` | `jira.session.emailTemplateSelection` | metadata — `jiraSession.kinds: ['email-template']` |
 | `EmailReviewSession` | `jira.session.emailReview` | metadata — `jiraSession.kinds: ['email-review']` |
-| `VeracodeTemplateSelectionSession` | `jira.session.veracodeTemplateSelection` | metadata — `jiraSession.kinds: ['veracode-template']` |
-| `VeracodeReviewSession` | `jira.session.veracodeReview` | metadata — `jiraSession.kinds: ['veracode-review']` |
-| `WaltzTemplateSelectionSession` | `jira.session.waltzTemplateSelection` | metadata — `jiraSession.kinds: ['waltz-template']` |
-| `WaltzReviewSession` | `jira.session.waltzReview` | metadata — `jiraSession.kinds: ['waltz-review']` |
 
-Detection order in the Jira handler is the order of this table. A stored `AwaitIssueTypeSession` from an older build whose `resume` is a ticket create, not an import, is cleared with the expired-session message.
+Detection order in the Jira handler is the order of this table. The Veracode and Waltz sessions (`jira.session.veracodeTemplateSelection`, `veracodeReview`, `waltzTemplateSelection`, `waltzReview`) and the stale close's `StaleCloseSession` (`jira.session.staleResolution`) went with their chat imports; a value an older build left under one of those keys is never read. A stored `AwaitIssueTypeSession` from an older build whose `resume` is a ticket create, not an import, is cleared with the expired-session message.
 
-The shared issue-type ask (`AwaitIssueTypeSession`) asks for an issue type when an import's template names none. Its `resume` carries the identity of what the user already picked (a template name and the rest of the originating session); `descriptorKind` (`'veracode' | 'waltz' | 'email'`) picks which importer resumes. See `src/participant/jira/ticketContext.ts` (`resolveIssueTypeOrPrompt`/`streamAwaitIssueType`).
+The shared issue-type ask (`AwaitIssueTypeSession`) asks for an issue type when an import's template names none. Its `resume` carries the identity of what the user already picked (a template name and the rest of the originating session); only a `descriptorKind` of `'email'` is resumed; one stored for a Veracode or Waltz import by an older build is cleared as expired. See `src/participant/jira/ticketContext.ts` (`resolveIssueTypeOrPrompt`/`streamAwaitIssueType`).
 
 ### Clickable replies
 
 Every reply a session above can currently only be answered by typing — a numbered pick, a confirm/cancel word, or a per-row batch-review toggle — also renders as a clickable element wrapping that exact text (`buildChatCommandLink()` in `sessionState.ts`), so clicking resubmits the identical reply a typed message would have sent; typing continues to work unchanged. The shared issue-type ask (`AwaitIssueTypeSession`) is the one exception — their cancel word must be the literal `(c)` (`isExplicitCancelToken()`), so their clickable "Cancel" resubmits `(c)` rather than the word "cancel".
 
-The Veracode/Waltz/email import review screens render each row's inclusion state as its own per-row toggle link — clicking flips that row's `included` flag and re-renders the table; typing the same row numbers/keys does the same thing. They run one group's action at a time from that group's own screen (see [`docs/report-import.md`](report-import.md#overview-and-group-screens-all-three-importers)).
+The email import review screens render each row's inclusion state as its own per-row toggle link — clicking flips that row's `included` flag and re-renders the table; typing the same row numbers/keys does the same thing. They run one group's action at a time from that group's own screen (see [`docs/report-import.md`](report-import.md#overview-and-group-screens-all-three-importers)).
 
-Any response containing one of these links is a trusted `vscode.MarkdownString` (`trustedChatMarkdown()` in `src/utils/chatMarkdown.ts`, enabled only for `workbench.action.chat.open`). Every externally-influenced string combined into such a response — a ticket summary, a custom field value, an email subject, a Veracode/Waltz finding — is neutralized first via `neutralizeMarkdownLinks()` (`sessionState.ts`), which also runs automatically inside `buildChatCommandLink()` on its own `label` argument. Without this, a crafted `[text](command:...)` sequence in that content could render as a second, attacker-chosen live command once the response is trusted.
+Any response containing one of these links is a trusted `vscode.MarkdownString` (`trustedChatMarkdown()` in `src/utils/chatMarkdown.ts`, enabled only for `workbench.action.chat.open`). Every externally-influenced string combined into such a response — a ticket summary, a custom field value, an email subject — is neutralized first via `neutralizeMarkdownLinks()` (`sessionState.ts`), which also runs automatically inside `buildChatCommandLink()` on its own `label` argument. Without this, a crafted `[text](command:...)` sequence in that content could render as a second, attacker-chosen live command once the response is trusted.

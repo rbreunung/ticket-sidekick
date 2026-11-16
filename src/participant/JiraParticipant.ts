@@ -6,32 +6,24 @@ import { logDiag } from '../utils/diagLog';
 import { trustedChatMarkdown } from '../utils/chatMarkdown';
 import type { ParsedIntent } from './jira/llmHelpers';
 import { parseIntent } from './jira/llmHelpers';
-import { getActiveJiraSession, AWAIT_ISSUE_TYPE_SESSION_KEY, STALE_RESOLUTION_SESSION_KEY } from './jira/ticketContext';
+import { getActiveJiraSession, AWAIT_ISSUE_TYPE_SESSION_KEY } from './jira/ticketContext';
 import {
   handleCreateFromEmail, handleAddEmailFromChat, handleEmailContentSession,
   handleEmailTemplateSelection, handleEmailReviewReply, handleEmailCleanupReply, handleEmailAwaitIssueType, EMAIL_CLEANUP_SESSION_KEY,
 } from './jira/emailHandler';
 import {
-  handleImportVeracodeReport, handleVeracodeTemplateSelection, handleVeracodeReviewReply, handleVeracodeAwaitIssueType, handleVeracodeStaleClose,
-} from './jira/veracodeHandler';
-import {
-  handleImportWaltzReport, handleWaltzTemplateSelection, handleWaltzReviewReply, handleWaltzAwaitIssueType, handleWaltzStaleClose,
-} from './jira/waltzHandler';
-import {
   isGreetingOrEmpty, buildJiraHelp, isSessionExpired, SESSION_EXPIRED_MESSAGE, parseAwaitFreeTextReply, buildChatCommandLink,
   JIRA_ONLY_IMPORTS_NOTICE,
-  type AwaitIssueTypeSession, type StaleCloseSession, type JiraSessionKind,
+  type AwaitIssueTypeSession, type JiraSessionKind,
   type EmailContentSession, type EmailTemplateSelectionSession, type EmailReviewSession, type EmailCleanupSession,
-  type VeracodeTemplateSelectionSession, type VeracodeReviewSession,
-  type WaltzTemplateSelectionSession, type WaltzReviewSession,
 } from './sessionState';
 
-// `@jira` is deprecated and now runs only the report imports (emails, Veracode, Waltz). Every
-// other Jira task is done with the Jira tools, the /ts-jira skills and the boards; a request for
-// one of them gets one fixed notice and touches nothing in Jira.
+// `@jira` is deprecated and now runs only the email import. Veracode and Waltz reports are imported
+// on the import board; every other Jira task is done with the Jira tools, the /ts-jira skills and the
+// boards. A request for one of them gets one fixed notice and touches nothing in Jira.
 
 /** The intent operations `@jira` still runs. */
-const IMPORT_OPERATIONS = new Set<ParsedIntent['operation']>(['createFromEmail', 'addEmailComment', 'importVeracode', 'importWaltzReport']);
+const IMPORT_OPERATIONS = new Set<ParsedIntent['operation']>(['createFromEmail', 'addEmailComment']);
 
 /** Runs an import step and shows its failure in chat instead of letting it escape the handler. */
 async function guarded(stream: vscode.ChatResponseStream, work: () => Promise<vscode.ChatResult | void>): Promise<vscode.ChatResult | void> {
@@ -106,7 +98,8 @@ export function createJiraParticipant(
     if (active.includes('await-issue-type')) {
       const session = ws.get<AwaitIssueTypeSession>(AWAIT_ISSUE_TYPE_SESSION_KEY);
       if (session) {
-        if (isSessionExpired(session) || session.resume.kind !== 'reportImport') {
+        // Only the email import still asks here; a Veracode or Waltz import stored before the import board is gone.
+        if (isSessionExpired(session) || session.resume.kind !== 'reportImport' || session.resume.descriptorKind !== 'email') {
           await ws.update(AWAIT_ISSUE_TYPE_SESSION_KEY, undefined);
           stream.markdown(SESSION_EXPIRED_MESSAGE);
           return;
@@ -127,26 +120,7 @@ export function createJiraParticipant(
         await ws.update(AWAIT_ISSUE_TYPE_SESSION_KEY, undefined);
         const { resume } = session;
         const issueType = parsed.value;
-        return guarded(stream, () => {
-          if (resume.descriptorKind === 'veracode') return handleVeracodeAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
-          if (resume.descriptorKind === 'waltz') return handleWaltzAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
-          return handleEmailAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl);
-        });
-      }
-    }
-
-    // A Veracode or Waltz import's stepped close of stale tickets (issue type, target, resolution).
-    if (active.includes('stale-resolution-selection')) {
-      const ask = ws.get<StaleCloseSession>(STALE_RESOLUTION_SESSION_KEY);
-      if (ask) {
-        if (isSessionExpired(ask)) {
-          await ws.update(STALE_RESOLUTION_SESSION_KEY, undefined);
-          stream.markdown(SESSION_EXPIRED_MESSAGE);
-          return;
-        }
-        return guarded(stream, () => (ask.descriptorKind === 'veracode'
-          ? handleVeracodeStaleClose(request.prompt, ask, ticketService, stream, ws, config.baseUrl)
-          : handleWaltzStaleClose(request.prompt, ask, ticketService, stream, ws, config.baseUrl)));
+        return guarded(stream, () => handleEmailAwaitIssueType(resume, issueType, jiraClient, ticketService, stream, ws, config.baseUrl));
       }
     }
 
@@ -180,14 +154,6 @@ export function createJiraParticipant(
         s => handleEmailTemplateSelection(request.prompt, s, jiraClient, ticketService, stream, ws, config.baseUrl)),
       () => importSession<EmailReviewSession>('email-review', 'jira.session.emailReview',
         s => handleEmailReviewReply(request.prompt, s, ticketService, stream, ws, config.baseUrl)),
-      () => importSession<VeracodeTemplateSelectionSession>('veracode-template', 'jira.session.veracodeTemplateSelection',
-        s => handleVeracodeTemplateSelection(request.prompt, s, jiraClient, ticketService, stream, ws, config.baseUrl)),
-      () => importSession<VeracodeReviewSession>('veracode-review', 'jira.session.veracodeReview',
-        s => handleVeracodeReviewReply(request.prompt, s, ticketService, stream, ws, config.baseUrl)),
-      () => importSession<WaltzTemplateSelectionSession>('waltz-template', 'jira.session.waltzTemplateSelection',
-        s => handleWaltzTemplateSelection(request.prompt, s, jiraClient, ticketService, stream, ws, config.baseUrl)),
-      () => importSession<WaltzReviewSession>('waltz-review', 'jira.session.waltzReview',
-        s => handleWaltzReviewReply(request.prompt, s, ticketService, stream, ws, config.baseUrl)),
     ];
     for (const screen of screens) {
       const outcome = await screen();
@@ -217,12 +183,9 @@ export function createJiraParticipant(
       stream.markdown(JIRA_ONLY_IMPORTS_NOTICE);
       return;
     }
-    switch (intent.operation) {
-      case 'createFromEmail': return handleCreateFromEmail(request, stream, token, jiraClient, ticketService, configService, ws);
-      case 'addEmailComment': return handleAddEmailFromChat(request, stream, token, jiraClient, ticketService, configService, ws);
-      case 'importVeracode': return handleImportVeracodeReport(request, stream, token, jiraClient, ticketService, ws, intent.projectKey);
-      default: return handleImportWaltzReport(request, stream, token, jiraClient, ticketService, ws, intent.projectKey);
-    }
+    return intent.operation === 'createFromEmail'
+      ? handleCreateFromEmail(request, stream, token, jiraClient, ticketService, configService, ws)
+      : handleAddEmailFromChat(request, stream, token, jiraClient, ticketService, configService, ws);
   };
 
   const participant = vscode.chat.createChatParticipant('ticket-sidekick.jira', handler);

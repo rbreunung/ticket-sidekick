@@ -42,7 +42,7 @@ export const MAX_REPORT_BYTES = SHARED_MAX_REPORT_BYTES;
 // Defense-in-depth: fast-xml-parser does not resolve external entities, but we
 // reject DOCTYPE/ENTITY declarations outright so a malicious file is never even parsed.
 // `maxBytes` defaults to the shared constant so every existing single-argument call (including the
-// pure unit tests) keeps working unchanged; a configured caller (veracodeHandler.ts, extension.ts)
+// pure unit tests) keeps working unchanged; a configured caller (src/imports/veracode.ts)
 // passes its own resolved limit explicitly.
 export function assertSafeVeracodeXml(raw: string, maxBytes: number = MAX_REPORT_BYTES): void {
   if (Buffer.byteLength(raw, 'utf8') > maxBytes) {
@@ -591,7 +591,7 @@ export interface VeracodeReviewRow {
   // U4/R6-R7: the folded group itself, kept so the full ticket description — expensive to build
   // (markdownToJiraWiki() across every member flaw's own description/recommendation/CWE) — is
   // built lazily via buildGroupDescriptionWiki() only for a row the user actually confirms into
-  // creation (veracodeHandler.ts's buildTicketFields), rather than eagerly for every "new"
+  // creation (src/imports/veracode.ts's buildTicketFields), rather than eagerly for every "new"
   // candidate the report matched, most of which a paged review screen never even shows.
   sourceGroup: VeracodeFlaw[];
   existingTicketKey: string | null;

@@ -4,10 +4,17 @@
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import type { RowChange } from '../../utils/reportImport';
 import { formatKeyLink } from '../../services/TicketService';
-import { isComponentEntry, type AcceptedEntry } from '../../utils/waltzAccepted';
-import { AcceptedHidden, ActionLabels, actionLabelOf, ImportResultGroup, ImportReviewView, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, emptyImportOutcomes, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
+import { AcceptedHidden, ActionLabels, actionLabelOf, ReviewRowBase, ReviewSession, ReviewSessionStale, TicketedAction, TicketedRowResult, isTicketedRowFinished, selectedStaleIssueTypes, ticketedRowActions, ticketedTargetKey } from './importTypes';
 import { ReviewTableColumn, cmdLink, countedNoun, neutralizeMarkdownLinks, pluralNoun, renderReviewTable, safeCellText } from './primitives';
-import { buildReviewPage, type ReviewPageNav } from './reviewPaging';
+import { type ReviewPageNav } from './reviewPaging';
+import {
+  buildReviewPage, clampGroupPage, clampStalePage, ensureImportViewState, groupTotalPages, staleTotalPages, GROUP_PAGE_SIZE,
+} from '../../imports/rows';
+
+export {
+  applyTicketedActionChange, clampStalePage, clampTicketedPage, computeImportResultGroups, ensureImportViewState, initImportViewState,
+  staleTotalPages, ticketedTotalPages, GROUP_PAGE_SIZE,
+} from '../../imports/rows';
 import { HELP_WORD, buildCommandsLine, buildHelpLink, offeredTicketedActions, type ImportCommandCaps } from './importCommands';
 
 // ---------------------------------------------------------------------------------------------
@@ -51,45 +58,6 @@ export const UNACCEPT_COMPONENT_WORD = 'unaccept-component';
 // Pre-overview-hub spelling of the update action — still accepted on the Already-ticketed screen so
 // a user (or a clicked link in an older transcript) typing the old words is not rejected.
 export const LEGACY_UPDATE_COMMAND = 'update existing tickets';
-
-/** The result groups that have at least one row — the basis for R1 (evaluated once, at build). */
-export function computeImportResultGroups<TRow extends ReviewRowBase>(
-  allRows: TRow[],
-  stale?: ReviewSessionStale,
-): ImportResultGroup[] {
-  const groups: ImportResultGroup[] = [];
-  if (allRows.some(r => r.existingTicketKey === null)) groups.push('new');
-  if (allRows.some(r => r.existingTicketKey !== null)) groups.push('ticketed');
-  if (stale && (stale.groups.some(g => g.tickets.length > 0) || stale.ineligible.length > 0)) groups.push('stale');
-  return groups;
-}
-
-/**
- * KTD7: fixes the session's groups, single-group flag and initial view once, when the session is
- * built. Exactly one group (or none) → that group opens directly with "Done" and there is no
- * overview (R4); two or three → the overview comes first (R1).
- */
-export function initImportViewState<TRow extends ReviewRowBase>(session: ReviewSession<TRow>): ReviewSession<TRow> {
-  const groups = computeImportResultGroups(session.allRows, session.staleTickets);
-  const singleGroup = groups.length <= 1;
-  const view: ImportReviewView = singleGroup ? (groups[0] ?? 'new') : 'overview';
-  return { ...session, groups, singleGroup, view, outcomes: emptyImportOutcomes() };
-}
-
-/** Fills in view state for a session built without it (e.g. by a test or an older call site). */
-export function ensureImportViewState<TRow extends ReviewRowBase>(session: ReviewSession<TRow>): ReviewSession<TRow> {
-  if (session.view !== undefined && session.groups !== undefined && session.singleGroup !== undefined && session.outcomes !== undefined) {
-    return session;
-  }
-  const initial = initImportViewState(session);
-  return {
-    ...session,
-    view: session.view ?? initial.view,
-    groups: session.groups ?? initial.groups,
-    singleGroup: session.singleGroup ?? initial.singleGroup,
-    outcomes: session.outcomes ?? initial.outcomes,
-  };
-}
 
 /** Live per-group counts the screens and parsers share. */
 export interface ImportGroupCounts {
@@ -184,17 +152,6 @@ function exportLine(): string {
   return cmdLink('Export', IMPORT_COMMANDS.export);
 }
 
-/** The link that re-prints the screen the session is on (the `show` reply). */
-function showLine(): string {
-  return cmdLink('Show', IMPORT_COMMANDS.show);
-}
-
-/** What ends an `export` preview, so the screen the user came from is not printed over it: the way on, as a link. */
-export function buildExportFollowUp(singleGroup: boolean, canShow = false): string {
-  const exit = singleGroup ? cmdLink('Done', IMPORT_COMMANDS.done) : cmdLink('Back to overview', IMPORT_COMMANDS.back);
-  return canShow ? `${showLine()} · ${exit}` : exit;
-}
-
 /** What the command catalog needs from a screen's options and rows. */
 function commandCapsOf<TRow extends ReviewRowBase>(s: ReviewSession<TRow>, opts: ImportScreenOptions): ImportCommandCaps {
   const open = s.allRows.filter(r => r.existingTicketKey !== null && !isTicketedRowFinished(r));
@@ -221,22 +178,6 @@ function buildPageLine(page: number, totalPages: number): string {
   if (page < totalPages - 1) controls.push(cmdLink('next', 'next'));
   if (totalPages >= 3) controls.push('`page <n>`');
   return `_Page ${page + 1} of ${totalPages}._ ${controls.join(' · ')}`;
-}
-
-/**
- * What ends a `search` reply: the replies that act on a found ticket (only the ones this screen and importer accept), then the
- * way back to the screen. An A id in the results resolves to that row's main ticket; any ticket key works with `merge … into`.
- */
-export function buildSearchFollowUp(view: 'new' | 'ticketed', opts: { canFold: boolean; canMergeTickets: boolean }, hasResults: boolean): string {
-  const lines: string[] = [];
-  if (hasResults && view === 'new' && opts.canFold) {
-    lines.push('Add New rows to a ticket from the list with `merge 1 2 into A3` (or `merge 1 2 into PROJ-12`); `add 1 2 to PROJ-12` does the same.');
-  }
-  if (hasResults && view === 'ticketed' && opts.canMergeTickets) {
-    lines.push('Merge tickets from the list with `merge A5 into A3`; the ticket after `into` is kept.');
-  }
-  lines.push(showLine());
-  return lines.join('\n\n');
 }
 
 /** Waltz ticket merge (KTD10): the screens no longer match Jira or the ignore list; the link starts the reload. */
@@ -400,24 +341,6 @@ export function formatTicketedRowResult(result: TicketedRowResult, baseUrl?: str
   }
 }
 
-/**
- * U4/R8: sets `action` on one already-ticketed row (`target` = its id) or on every row (`'all'`).
- * Only unfinished rows that offer the action change; everything else (new rows, finished rows, rows
- * not offering it) is returned untouched. Pure — the handler applies it to `rows` and `allRows`.
- */
-export function applyTicketedActionChange<TRow extends ReviewRowBase>(
-  rows: TRow[],
-  target: string | 'all',
-  action: TicketedAction,
-): TRow[] {
-  return rows.map(r => {
-    if (r.existingTicketKey === null || isTicketedRowFinished(r)) return r;
-    if (target !== 'all' && r.id !== target) return r;
-    if (!ticketedRowActions(r).allowedActions.includes(action)) return r;
-    return { ...r, action };
-  });
-}
-
 /** KTD9: every allowed action as its own link (sending `<row id> <action>`), the current one first and bold. */
 function ticketedActionCell(row: ReviewRowBase, baseUrl?: string, labels?: ActionLabels): string {
   if (row.result?.status === 'done') return formatTicketedRowResult(row.result, baseUrl, labels);
@@ -509,37 +432,6 @@ export function buildTicketedGroupScreen<TRow extends ReviewRowBase>(
   return lines.join('\n');
 }
 
-/** Rows shown per page on the Stale and Already-ticketed screens. Fixed, not a setting (KL16). */
-export const GROUP_PAGE_SIZE = 20;
-
-/** Every row the Stale screen lists: eligible tickets, then the ones that cannot be closed. */
-function staleRowCount(stale: ReviewSessionStale | undefined): number {
-  if (!stale) return 0;
-  return stale.groups.reduce((n, g) => n + g.tickets.length, 0) + stale.ineligible.length;
-}
-
-function groupTotalPages(rowCount: number): number {
-  return Math.max(1, Math.ceil(rowCount / GROUP_PAGE_SIZE));
-}
-
-/** The 0-based page `target` clamped to the pages `rowCount` rows fill. */
-function clampGroupPage(target: number, rowCount: number): number {
-  return Math.min(Math.max(0, target), groupTotalPages(rowCount) - 1);
-}
-
-export function staleTotalPages(stale: ReviewSessionStale | undefined): number {
-  return groupTotalPages(staleRowCount(stale));
-}
-
-/** The 0-based Stale page `target` clamped to the pages that exist. */
-export function clampStalePage(target: number, stale: ReviewSessionStale | undefined): number {
-  return clampGroupPage(target, staleRowCount(stale));
-}
-
-export function ticketedTotalPages<TRow extends ReviewRowBase>(allRows: TRow[]): number {
-  return groupTotalPages(allRows.filter(r => r.existingTicketKey !== null).length);
-}
-
 /**
  * The one-line answer to a paging word that has nowhere to go: `next` on the last page, `prev` on the first, or either on a
  * single page. Null when the move is possible or is a `page <n>` (which keeps clamping to the nearest page).
@@ -550,11 +442,6 @@ export function pageBoundaryAnswer(nav: ReviewPageNav, page: number, totalPages:
   if (nav.kind === 'next' && page >= totalPages - 1) return '_You are on the last page._';
   if (nav.kind === 'prev' && page <= 0) return '_You are on the first page._';
   return null;
-}
-
-/** The 0-based Already-ticketed page `target` clamped to the pages that exist. */
-export function clampTicketedPage<TRow extends ReviewRowBase>(target: number, allRows: TRow[]): number {
-  return clampGroupPage(target, allRows.filter(r => r.existingTicketKey !== null).length);
 }
 
 /** R5/R9: the Stale group — per-ticket toggles (off by default) and "Close N tickets". The target
@@ -649,24 +536,4 @@ export function buildImportScreen<TRow extends ReviewRowBase>(
     case 'stale': return withHiddenLine(buildStaleGroupScreen(s, opts));
     default: return buildImportOverview(s, opts);
   }
-}
-
-/** Accepted list (R7, R8): the entries numbered in file order, each with a link that removes it. */
-export function buildAcceptedList(entries: AcceptedEntry[]): string {
-  if (entries.length === 0) return '_The accepted list is empty._';
-  const text = (value: string): string => neutralizeMarkdownLinks(value).replace(/\s+/g, ' ').trim();
-  const flat = (value: string): string => value.replace(/\s+/g, ' ').trim();
-  // The link names the entry, not its position, so a link from an older list still removes what it showed.
-  const lines = entries.map((e, i) => {
-    const reason = e.reason ? ` — ${text(e.reason)}` : '';
-    if (isComponentEntry(e)) {
-      // The Remove reply reads the last word as the version, so a version with whitespace is removed by number instead.
-      const remove = /\s/.test(e.version.trim())
-        ? `remove with \`unaccept ${i + 1}\``
-        : cmdLink('Remove', `${UNACCEPT_COMPONENT_WORD} ${flat(e.component)} ${e.version.trim()}`);
-      return `${i + 1}. ${text(e.component)}:${text(e.version)} (whole component)${reason} — ${remove}`;
-    }
-    return `${i + 1}. ${text(e.component)} · ${text(e.cve)}${reason} — ${cmdLink('Remove', `unaccept ${flat(e.component)} ${e.cve.trim()}`)}`;
-  });
-  return ['### Accepted', '', ...lines].join('\n');
 }

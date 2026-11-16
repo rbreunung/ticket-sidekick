@@ -12,7 +12,7 @@ import { TRIGGER_CHARS } from './markdownToJiraWiki';
 // Type-only import: erased at compile time (no runtime `require`), so this does not create the
 // circular *runtime* import that sessionState.ts's own value import of this file (BATCH_LIMIT,
 // sanitizeCellText) would otherwise raise — only a value/side-effect import can cycle.
-import type { ReviewRowBase, TicketedAction } from '../participant/sessionState';
+import type { ReviewRowBase, TicketedAction } from '../imports/types';
 
 // Single source of truth for both importers (KTD4). Both currently hardcode the identical values
 // (20 MB / 50 tickets per run) independently; consuming these from here instead of the local
@@ -29,9 +29,9 @@ export const DEFAULT_DEDUP_CHUNK_SIZE = 40; // keeps generated JQL well under Ji
 
 /**
  * Turns a configured `ticketSidekick.<x>.maxReportSizeMB`/`maxBatchSizeMB` setting value into a
- * validated byte limit — the single source of truth every config-reading call site (extension.ts's
- * two command registrations, veracodeHandler.ts, waltzHandler.ts, emailHandler.ts) uses instead of
- * re-implementing the same range check four times. A non-finite value or one outside
+ * validated byte limit — the single source of truth every config-reading call site
+ * (src/services/importSettings.ts for Veracode and Waltz, emailHandler.ts for email) uses instead
+ * of re-implementing the same range check. A non-finite value or one outside
  * `[minMB, maxMB]` falls back to `defaultMB` rather than disabling the cap or throwing — a user
  * typo in settings.json must never leave an import unbounded.
  */
@@ -322,8 +322,7 @@ export function buildStaleSearchJql(projectKey: string, markerLabel: string): st
 /**
  * R1/R5: finds open tickets whose finding(s) are gone from the current report or excluded by the
  * importer's own remediation filter. Runs one search (marker-label + `resolution is EMPTY`,
- * capped at `BATCH_LIMIT` — R1's "found N, showing first 50" shape, mirroring
- * `handleRunCleanup`'s analogous query in cleanupHandler.ts) rather than the chunked multi-query
+ * capped at `BATCH_LIMIT` — R1's "found N, showing first 50" shape) rather than the chunked multi-query
  * shape `findAlreadyTicketed` uses for dedup, since this search is a single label/project filter,
  * not a large OR-list of dedup keys.
  *

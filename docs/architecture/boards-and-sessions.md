@@ -13,10 +13,11 @@ This page describes how Ticket Sidekick is built once the chat participants are 
 - **Tools:** the Jira tool catalog (`src/tools/jiraTools/`) is registered with VS Code as language model tools by `src/tools/registerJiraTools.ts`. That is the only route; no setting chooses one. Decision D21.
 - **Host:** a board is a webview in an editor tab the extension opens (`src/boards/boardPanels.ts`). The tab loads the page from the extension's own files and the page talks to the extension with `postMessage`. Decisions D18 and D20.
 - **Removed on 2026-11-13:** the MCP server with its lifecycle, keys, request guard and diagnostics command; the `ticketSidekick.jira.toolsFrom` setting; the local HTTP server and the `http.noProxy` requirement; the canvas program, the agent plugin and the `@github/copilot-sdk` and `@modelcontextprotocol/sdk` dependencies. Why: an organisation's Copilot policy blocked the MCP server while extension tools got through, VS Code 1.146 did not register an extension's canvas, and two routes for the same tools was a switch nobody wanted to operate.
-- **Built:** the session core, the board message handling, the security report board, the ticket list board (search with narrowing, paging, configurable columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules`, the out-of-date state), the sessions board, and of the plan's step 1 tools R40 to R42, plus spell check (R28) and template from a ticket (R29) as `/ts-jira-spell-check` and `/ts-jira-template` with their tools.
+- **Built:** the session core, the board message handling, the security report board, the ticket list board (search with narrowing, paging, configurable columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules`, the out-of-date state), the sessions board, the import board for Veracode and Waltz reports with its start screen (`src/boards/import/`, over the shared import engine in `src/imports/`), and of the plan's step 1 tools R40 to R42, plus spell check (R28) and template from a ticket (R29) as `/ts-jira-spell-check` and `/ts-jira-template` with their tools.
 - **Open points:** the full list, with the requirement each belongs to and the participant flow it blocks, is in [`migration-status.md`](migration-status.md).
-- **Removed on 2026-11-14:** every Step 1 flow of `@jira`; it runs only the report imports now.
-- **Not built:** the import board, the PR review board with its Bitbucket tool additions, and the removal of `@jira` (its imports) and `@bitbucket`.
+- **Removed on 2026-11-14:** every Step 1 flow of `@jira`.
+- **Removed on 2026-11-15:** `@jira`'s Veracode and Waltz imports and their two Command Palette commands; `@jira` runs only the email import now.
+- **Not built:** the email kind of the import board, the PR review board with its Bitbucket tool additions, and the removal of `@jira` (its email import) and `@bitbucket`.
 
 ## 1. The idea in one paragraph
 
@@ -88,7 +89,7 @@ Every board works with three kinds of information. The session keeps them apart,
 
 | Part | Examples (Veracode import) | Truth | Stored |
 | --- | --- | --- | --- |
-| **Recipe** | Kind, report path, project, template | The developer's request | Yes |
+| **Recipe** | Kind, report path, project, template, issue type | The developer's request | Yes |
 | **Derived** | Parsed rows, dedup matches, stale tickets, ticket descriptions read for comparison; for a review, the findings | Report file, Jira, Bitbucket, or a model run | Yes, with the time and fingerprint of what it was derived from |
 | **Working** | Merged rows, picked actions, selections, current screen, filters, a merge run with its finished and pending steps, results so far | Nowhere else | Yes |
 
@@ -129,7 +130,7 @@ classDiagram
 ```
 
 - **`id`** is derived from the kind and the normalised source, so there is one session per source (R54): the same report file, query, PR or project always maps to the same session.
-- **`revision`** increases with every change. The page sends the revision it last saw; an action based on an older revision is refused and the page reloads the state.
+- **`revision`** increases with every change. A check (background or Refresh) whose reading, fingerprints and working state equal the stored ones only moves `readAt` and keeps the revision, so a preview made before it stays valid. The page sends the revision it last saw; an action based on an older revision is refused and the page reloads the state.
 - **`fingerprints`** identify what the derived data came from: a report file's size, modification time and content hash; a PR's head commit; for Jira reads, the time.
 
 ---
@@ -151,7 +152,8 @@ stateDiagram-v2
   Previewing --> Applying: Apply, and native confirmation where required
   Applying --> Ready: results recorded
   Ready --> [*]: finished, discarded, expired, cleared
-  Restored --> [*]: format does not match, discarded with a notice
+  Restored --> Building: format does not match, recipe still holds: rebuilt with a notice
+  Restored --> [*]: format does not match, recipe no longer holds: discarded with a notice
 ```
 
 ### 4.1 Opening
@@ -166,6 +168,7 @@ stateDiagram-v2
 - After showing a stored session, the manager asks the board kind to **check** the sources in the background. Refresh runs the same check on demand. The manager tells `reconcile` which of the two it is (`CheckMode`: `background` or `refresh`).
 - The board kind's `reconcile` compares stored and fresh data and returns the updated derived data plus a list of **conflicts**: working state whose target changed or disappeared. A kind may instead keep the stored data after a background check and mark itself out of date: the ticket list does, allows only paging until Refresh, and on Refresh takes the fresh rows and keeps the selection of every ticket still listed.
 - A board shows a banner with the count, marks each conflict in place, can show the stored and the fresh value, and offers **resolve** (accept the fresh state and redo or keep the choice) or **drop** per conflict.
+- The import board keeps the out-of-date mark **per tab**: `read` gives each tab's slice its own fingerprint, a `background` check first discounts the changes the board's own recorded writes explain, a changed tab without unfinished choices takes its fresh slice at once, and a changed tab with unfinished choices is marked and offers only Refresh. Refresh keeps every choice whose rows still exist and names the dropped ones.
 - A PR review is never re-run by a check. The check only compares the PR's head commit and sets "the PR has moved since this review"; re-running is the developer's choice.
 
 ### 4.3 Writing (R3, R39, R57)
@@ -180,7 +183,9 @@ sequenceDiagram
   participant J as Jira / Bitbucket
   U->>P: chooses an action
   P->>M: preview(action, revision)
-  M->>K: plan(session, action)
+  M->>K: prepare(session, action), if the kind has it
+  K->>J: read what the plan must show (e.g. the target ticket)
+  M->>K: plan(session, action, prepared)
   K-->>M: write plan: exactly what will be written
   M-->>P: plan and plan id (single use, short-lived, in memory)
   U->>P: Apply
@@ -191,7 +196,11 @@ sequenceDiagram
   end
   M->>K: apply(plan)
   K->>J: read the targets again
-  K->>J: write the unchanged ones
+  loop each target
+    K->>J: write it, if unchanged
+    K->>M: progress(working, done, total)
+    M->>M: save the session, tell the page
+  end
   K-->>M: result per target, refused targets with the reason
   M-->>P: new state
   M->>M: log each write, save the session
@@ -200,6 +209,8 @@ sequenceDiagram
 - A write needs a **plan ID** that only `preview` issues. The manager keeps it in memory, tied to the session revision, and redeems it once. A page cannot write a risky change without the native confirmation, which no page or script can click.
 - **Risky** means: more than one ticket, closing a ticket, or anything posted to Bitbucket. The board kind's plan states it; the manager enforces it.
 - Before writing, the board kind reads each target again and refuses the ones that changed since the session last read them. A refused target becomes a conflict.
+- **Progress and the save per write.** `apply` reports each finished target through a `progress` callback and awaits it before the next write. The manager saves the reported working state without raising the revision and tells the page, which shows the progress and disables every control except its tabs. A board restored after an interrupted Apply therefore shows the finished targets as done, and its next plan leaves them out. Every board does this: the ticket list records each moved or updated ticket with Jira's `updated` after the write, and the import board its created tickets with their dedup keys and its written tickets.
+- **`prepare`.** A plan that must show something read from Jira (the import board's add-to-ticket target, the tickets of a ticket merge) gets it from the kind's optional `prepare`, which the manager awaits before the pure `plan`.
 - Multi-step runs (a ticket merge) are working state: each step is recorded as pending, done, failed or skipped before the next one starts, so a restart continues at the right step and never repeats a done one.
 - Every write is logged through `logDiag` (R5).
 
@@ -211,7 +222,7 @@ sequenceDiagram
 | Why not `workspaceState` | It loads every value into memory at start and is meant for small values; an import session can be megabytes. |
 | Writing | After each change, debounced, to a temporary file that is then renamed, so a crash never leaves a half-written session. |
 | Contents | Never credentials. Vulnerability rows, ticket text and PR findings are stored, as decided; the manual says so and names the clear command. |
-| Format | Each board kind has a `formatVersion`. A file whose version differs is deleted when found and the board says the stored session was discarded. No migration code. |
+| Format | Each board kind has a `formatVersion`. A file whose version differs is rebuilt from its stored recipe when the kind's `revalidate` accepts that recipe: the board is built again and says it was rebuilt after an update, and the earlier working state is not kept. A kind without `revalidate`, or a recipe that fails it, deletes the file and the board says the stored session was discarded. No migration code. |
 | Expiry | At start and once a day, sessions not used for `ticketSidekick.sessions.retentionDays` (default 14) are deleted. |
 | Removal | Finish or Discard on the board, Delete on the sessions board, and the command "Ticket Sidekick: Clear stored sessions". |
 | Size | A session over a fixed limit is kept in memory only, and the board says it will not survive a restart. |
@@ -230,21 +241,25 @@ A board kind is the only place that knows one board's rules. It is a plain objec
 | --- | --- |
 | `kind`, `formatVersion`, `title(recipe)` | Identity and cache version |
 | `validate(input, deps)` | Turns the open input into a recipe, or the reason the board cannot open |
+| `revalidate?(recipe, deps)` | Checks a stored recipe after a format change, without reading an open request or the settings that choose a source; a pass rebuilds the board from it. Also checks the new recipe of `relocate` |
 | `sourceKey(recipe)`, `sourceLabel(recipe)` | The normalised source the session ID is derived from, and its short description for the sessions board |
 | `initialWorking(recipe)`, `reopen?(session, recipe)` | The working state of a new session, and of a session asked for again with a new request (for example another proposed change) |
 | `read(recipe, deps)` | Reads the sources. Used to build a new session and to check a stored one |
 | `reconcile(session, fresh)` | **Pure.** Lays the stored working state over a fresh reading and returns the conflicts |
 | `reduce(session, action)` | **Pure.** Applies a non-writing action (select, merge rows, pick an action, filter, change screen) and returns the new working state or a refusal |
-| `plan?(session, action)` | **Pure.** Returns the write plan for a writing action: targets, what is written, and whether it is risky. Kinds without writes omit it |
-| `apply?(session, plan, deps)` | Reads the targets again, writes the unchanged ones, and returns the result per target |
+| `prepare?(session, action, deps)` | Reads what a writing action's plan must show; its result goes to `plan` |
+| `plan?(session, action, prepared)` | **Pure.** Returns the write plan for a writing action: targets, what is written, and whether it is risky. Kinds without writes omit it |
+| `apply?(session, plan, deps, progress)` | Reads the targets again, writes the unchanged ones, reports each finished one through `progress`, and returns the result per target |
 | `exportFile?(session, format, deps)` | A file the developer saves from the board |
 | `view(session)` | The data the page gets: never more than it shows |
 
-The interface is `BoardKind` in `src/sessions/boardKind.ts`.
+The interface is `BoardKind` in `src/sessions/boardKind.ts`. Besides the kind's members, `SessionManager.relocate(kind, id, recipe)` gives a session another source of the same kind: `revalidate` checks the new recipe, the session moves to the new source's id (saved there, the old file deleted, open previews dropped), and a check runs. It refuses when another session already has that id. The import board uses it for "Pick the file again".
 
 `reduce`, `plan` and `reconcile` being pure is what keeps the boards testable as scenarios in Vitest, the way `sessionState.ts` is today. The existing import, cleanup and review logic moves behind these members; its parsers, builders and services are reused, and only the reply parsing and chat rendering are dropped.
 
-Built kinds: `security-report`, `ticket-list` (a JQL query, a saved filter or a cleanup rule as its source; the cleanup rules are in `src/boards/ticketList/cleanupSource.ts`). Planned: `import` (Veracode, Waltz, email, as descriptors like today), `review`. The sessions board is not a kind: it lists sessions and has its own requests.
+Built kinds: `security-report`, `ticket-list` (a JQL query, a saved filter or a cleanup rule as its source; the cleanup rules are in `src/boards/ticketList/cleanupSource.ts`) and `import` (Veracode and Waltz, each through its `ReportImportDescriptor`; see below). Planned: the email kind of `import`, and `review`. The sessions board and the import start screen are not kinds: they have no session and their own requests.
+
+**The import board as built.** `src/boards/import/kind.ts` is one kind for both report kinds; the recipe's kind picks the descriptor (`src/imports/veracode.ts` or `waltz.ts`). The rules live in the shared engine `src/imports/` (vscode-free, logging through `onDiag`), which the email chat import also calls. The kind passes every action, `prepare`, plan, apply, export and view to **area handlers**, one module per area (`newTab.ts`, `ticketedTab.ts`, `staleTab.ts`, `acceptedTab.ts`, `mergeTab.ts`, `searchExport.ts`, listed in `registry.ts`); a plan's payload names the handler that applies it, and a handler can block every other handler's plans (`blocksPlans`, used while a ticket merge is unfinished). Choices are keyed by row key (the sorted dedup keys) or ticket key, never by row id. Accept, unaccept and reload report are plans with `risky: false`. A missing report file (`ReportNotFoundError`) and a failed dedup search (`DedupFailedError`) make `read` throw, so the stored reading stays and writes are blocked; a failed stale search only marks the Stale tab unavailable. The rules the board keeps from the chat are in [`../report-import.md`](../report-import.md#import-board-veracode--waltz).
 
 ---
 
@@ -266,7 +281,9 @@ extension → page    { id, ok: true, data }  or  { id, ok: false, status, error
 | `apply` with `planId` | Redeems a plan ID |
 | `save` with `format` | For boards that export: writes a file through VS Code's save dialog |
 | `discard` | Deletes the session |
+| `pick-file` | The import board only: "Pick the file again". The path comes from VS Code's native open dialog, never from the page; the session moves with `relocate` and the tab follows it to the new id |
 | `list`, `delete`, `delete-all`, `open` | The sessions board only: list stored sessions, delete one or all, reopen one in its own tab |
+| `view`, `kind`, `pick-file`, `template`, `issue-type`, `open`, `start-over`, `open-setting` | The import start screen only (`ImportStartScreen.handle`): the native file dialog, the template setting write and the Settings screen are supplied by the host, so the page names no path, setting key or session |
 
 - **The tab names the session, not the page.** `BoardPanels` binds each tab's message listener to the board kind and session ID it opened the tab with. A request carries no session ID, and one a page adds is not read, so a page cannot reach another session.
 - `status` on a refusal follows HTTP numbers because the shared client tells cases apart by them: 400 malformed, 404 gone, 409 changed meanwhile, 500 unexpected (fixed sentence to the page, detail to the log).
@@ -320,7 +337,7 @@ src/
     registerBoards.ts  wires it to vscode: store folder, confirmation, save dialog, retention, commands
     securityReport/    one folder per board kind: kind.ts, and what only it needs
     ticketList/
-    import/            planned
+    import/            the import board: kind, read, recipe, one handler per area, start screen
     review/            planned
   tools/
     toolDefinition.ts  ToolDefinition, defineTool, callTool, ToolFailure (vscode-free)
@@ -329,7 +346,8 @@ src/
     jiraToolManifest.ts      the package.json entries, generated from the catalog
     registerJiraTools.ts     registers the catalog with vscode.lm and builds the tool dependencies (imports vscode)
     bitbucketTools.ts        the Bitbucket language model tools
-  services/, jira/, bitbucket/, utils/, templates/   unchanged
+  imports/             the shared report import engine and the Veracode and Waltz descriptors (vscode-free)
+  services/, jira/, bitbucket/, utils/, templates/   unchanged; services/importSettings.ts reads the import settings
   participant/         deprecated: @jira and @bitbucket, removed step by step
 board-pages/           page sources: shared client and style, one folder per board; copied to out/board-pages
 skills/                /ts-jira, /ts-jira-create, /ts-jira-brief
@@ -353,7 +371,7 @@ skills/                /ts-jira, /ts-jira-create, /ts-jira-brief
 2. Keep it to instructions: which tool or board, in which order. No logic the tools do not enforce.
 
 **A new board**
-1. Decide what is recipe, derived and working state. If there is no working state and the data is cheap to read, it is still a session, just a small one.
+1. Decide what is recipe, derived and working state. If there is no working state and the data is cheap to read, it is still a session, just a small one. Give the kind a `revalidate` so a format change rebuilds it, and report each finished write through `apply`'s `progress`.
 2. Write the board kind in `src/boards/<kind>/` with scenario tests for `reduce`, `plan` and `reconcile`.
 3. Register it in `registerBoards.ts`, add it to the open-board tool's `board` values and its inputs, and add a Command Palette command.
 4. Add `board-pages/<kind>/page.js`, built from the shared client and style. The folder name is the kind's name; no HTML file is needed.
@@ -363,7 +381,7 @@ skills/                /ts-jira, /ts-jira-create, /ts-jira-brief
 **A new action on an existing board**
 1. Add it to the board kind's `reduce` (no write) or `plan` and `apply` (write), with tests.
 2. Add the control to the page.
-3. If it changes stored data, raise the board kind's `formatVersion`.
+3. If it changes stored data, raise the board kind's `formatVersion`. A stored session of the old format is then rebuilt from its recipe if the kind has `revalidate`, and discarded otherwise.
 
 ---
 
@@ -389,6 +407,8 @@ Logged in full, with rejected alternatives, in `copilot-harness-migration.md` fr
 | D20 | A board page is loaded by the webview itself and talks to the extension over the webview message channel; the local server, its keys and the `http.noProxy` requirement are removed, and so is the canvas route | Maintainer |
 | D21 | The Jira tools are VS Code language model tools only; the MCP server and the `toolsFrom` setting are removed | Maintainer |
 | D22 | `@jira` and `@bitbucket` are deprecated now and documented as such; they are removed when the import and review boards exist | Maintainer |
+| D23 | A stored session of another format is rebuilt from its stored recipe when the kind's `revalidate` accepts it, with a notice and without the earlier choices; still never migrated (narrows D17) | Maintainer |
+| D24 | Every board saves its session after each write of an Apply, so an interrupted Apply resumes with only the rest | Maintainer |
 
 ---
 

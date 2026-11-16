@@ -8,7 +8,7 @@ describe('buildJiraHelp', () => {
     const lines = help.split('\n');
     expect(lines[0]).toBe('**Ticket Sidekick `@jira` · v0.8.4 — Help**');
     expect(lines[lines.length - 1]).toBe('`help` prints this list again.');
-    expect(help).toContain('`@jira` now only imports reports');
+    expect(help).toContain('`@jira` now only imports emails');
   });
 
   it('lists the groups in order, each with at least one bullet', () => {
@@ -30,9 +30,11 @@ describe('buildJiraHelp', () => {
     expect(help).not.toContain('command:');
   });
 
-  it('lists only the report imports', () => {
-    expect(JIRA_COMMAND_ENTRIES.map(e => e.id)).toEqual(['email', 'veracode', 'waltz']);
+  it('lists only the email import and points Veracode and Waltz reports to the import board', () => {
+    expect(JIRA_COMMAND_ENTRIES.map(e => e.id)).toEqual(['email']);
     expect(help).not.toContain('/security-report');
+    expect(help).not.toContain('import veracode report');
+    expect(help).toContain('`Ticket Sidekick: Open import board`');
   });
 
   it('keeps the version text inert', () => {

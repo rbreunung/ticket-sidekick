@@ -1,3 +1,5 @@
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { z } from 'zod';
 import { defineTool } from '../toolDefinition';
 import { narrowQuery, resolveFilter } from './findTickets';
@@ -9,10 +11,13 @@ import { OPEN_BOARD_TOOL } from './toolNames';
 // answer says only whether it opened, so a list of tickets or a report never enters the chat.
 
 const openBoardShape = {
-  board: z.enum(['security-report', 'ticket-list', 'sessions']).describe(
+  board: z.enum(['security-report', 'ticket-list', 'sessions', 'import']).describe(
     'security-report: a project\'s open Veracode and Waltz tickets by release. ticket-list: the tickets of a JQL query or saved filter, '
-    + 'where the user selects tickets and moves them or sets a field, or a cleanup rule\'s tickets. sessions: the stored board sessions of this workspace.',
+    + 'where the user selects tickets and moves them or sets a field, or a cleanup rule\'s tickets. sessions: the stored board sessions of this workspace. '
+    + 'import: imports a Veracode Detailed Report or a Waltz OSS Report into Jira tickets.',
   ),
+  kind: z.enum(['veracode', 'waltz']).optional().describe('import: the report kind, veracode (Detailed Report XML) or waltz (OSS Report .xlsx).'),
+  path: z.string().optional().describe('import: the report file, a path in the workspace or an absolute path or file URI, e.g. a file dragged into the chat.'),
   project: z.string().optional().describe('security-report: the Jira project key, e.g. PROJ. Leave out to use the default project.'),
   jql: z.string().optional().describe('ticket-list: a JQL query, e.g. project = PROJ AND status = Done.'),
   filter: z.string().optional().describe('ticket-list: a saved filter\'s id or name, in place of jql.'),
@@ -34,14 +39,56 @@ const openBoardShape = {
   }).optional().describe('ticket-list: a change the user asked for. The board shows it as proposed and writes nothing until the user applies it.'),
 };
 
+/** The board name of the import start screen (`IMPORT_START_BOARD` in src/boards/import/startScreen.ts). */
+const IMPORT_START_BOARD = 'import-start';
+
+/** The title of the import start screen (`IMPORT_START_TITLE` in src/boards/import/startScreen.ts). */
+const IMPORT_START_TITLE = 'Open import';
+
+/**
+ * Whether a path names a file on another machine: a UNC path (`\\server\share`, `//server/share`)
+ * or a file URI with a host. The start screen reads the report as soon as it opens, so a network
+ * path from a prompt would make VS Code connect to that machine (and on Windows send the user's
+ * credentials) before the user did anything. Such a report is picked in the file dialog instead.
+ */
+export function isNetworkPath(value: string): boolean {
+  const p = value.trim();
+  if (/^[\\/]{2}/.test(p)) return true;
+  if (/^file:/i.test(p)) {
+    try {
+      const host = new URL(p).hostname;
+      return host !== '' && host.toLowerCase() !== 'localhost';
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/** An absolute path for a report path, workspace-relative path or file URI; undefined when a relative path has no workspace to resolve against. */
+function reportPathOf(value: string, workspaceFolder: string | undefined): string | undefined {
+  let p = value.trim();
+  if (/^file:/i.test(p)) {
+    try {
+      p = fileURLToPath(p);
+    } catch {
+      return undefined;
+    }
+  }
+  if (path.isAbsolute(p)) return p;
+  return workspaceFolder ? path.resolve(workspaceFolder, p) : undefined;
+}
+
 export const openBoardTool = defineTool<JiraToolDeps, typeof openBoardShape>({
   name: OPEN_BOARD_TOOL,
   title: 'Open a Ticket Sidekick board',
   description:
-    'Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, or the stored sessions. '
+    'Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, the stored sessions, '
+    + 'or the import board for a Veracode or Waltz report. '
     + 'Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; '
     + 'do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. '
     + 'For a cleanup by a rule from .jira-templates.json, pass the rule\'s name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. '
+    + 'For a report import, pass board import with kind and path; the user reviews and creates the tickets on the board. '
     + 'The answer says only whether the board opened, never its content. Changes nothing in Jira.',
   inputSchema: openBoardShape,
   annotations: { readOnlyHint: true },
@@ -53,6 +100,20 @@ export const openBoardTool = defineTool<JiraToolDeps, typeof openBoardShape>({
     };
     if (args.board === 'security-report') return open({ project: args.project });
     if (args.board === 'sessions') return open({});
+    if (args.board === 'import') {
+      if (args.path && isNetworkPath(args.path)) {
+        return 'Not opened: the report is on another machine (a network path). Ask the user to copy it into the workspace or to choose it in the import board\'s file dialog.';
+      }
+      // The start screen, opened as the import board when the file reads and the template and project settings are complete.
+      const reportPath = args.kind && args.path ? reportPathOf(args.path, deps.workspaceFolders()[0]) : undefined;
+      const opened = await deps.openBoard(IMPORT_START_BOARD, { kind: args.kind, ...(reportPath ? { reportPath } : {}), openWhenReady: true });
+      if (!opened.ok) return `Not opened: ${opened.reason}`;
+      // Only whether the tab opened, plus whether the report was loaded, so the agent does not claim more than happened.
+      if (opened.title === IMPORT_START_TITLE) {
+        return `Opened in an editor tab: ${opened.title}. The report was not loaded: the user finishes the choices on the start screen.`;
+      }
+      return `Opened in an editor tab: ${opened.title}.`;
+    }
 
     const narrowing = { fixVersion: args.fixVersion, sprint: args.sprint, assignee: args.assignee, myTeam: args.myTeam };
     if (args.cleanupRule) {

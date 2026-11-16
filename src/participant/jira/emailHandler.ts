@@ -108,7 +108,7 @@ const emailDescriptor: ReportImportDescriptor<EmailImportItem, EmailReviewRow> =
       throw new Error(`Uploaded ${uploaded} of ${row.attachments.length} attachment(s); failed: ${failures.join('; ')}`);
     }
   },
-  // KTD9: matches veracodeHandler.ts's own onIssueTypeFetchFailed — this is the one warning that
+  // The same warning the import board's start screen shows (issueTypeFetchWarning) — this is the one warning that
   // always surfaces as a native pop-up regardless of entry point (chat or Command Palette), so the
   // Command Palette's ticket-sidekick.importEml command doesn't silently lose the warning it used to
   // show inline before this consolidation.

@@ -29,6 +29,19 @@ export interface Applied<D, W> {
   conflicts?: Conflict[];
 }
 
+/** What `apply` reports after each finished target: the working state that records what is done so far. */
+export interface ApplyProgressReport<W> {
+  working: W;
+  done: number;
+  total: number;
+}
+
+/**
+ * Saves the reported working state and tells the page. A kind awaits it before its next write, so a
+ * board restored after an interrupted Apply shows the finished targets as done.
+ */
+export type ApplyProgress<W> = (report: ApplyProgressReport<W>) => Promise<void>;
+
 export interface ExportedFile {
   fileName: string;
   /** The name and extension VS Code's save dialog filters by. */
@@ -39,11 +52,17 @@ export interface ExportedFile {
 
 export interface BoardKind<R, D, W, A, V, X> {
   kind: string;
-  /** Raise when the stored shape changes; sessions of another format are discarded. */
+  /** Raise when the stored shape changes; a session of another format is rebuilt from its recipe (see `revalidate`) or discarded. */
   formatVersion: number;
   title(recipe: R): string;
   /** Turns the open input into a recipe, or the reason the board cannot open. */
   validate(input: unknown, deps: X): Promise<Validated<R>>;
+  /**
+   * Checks that the recipe of a stored session of another format still holds, so the board can be
+   * rebuilt from it after an update. It reads neither an open request nor the settings that choose
+   * a source. A kind without it, or a recipe that fails, leaves the session discarded.
+   */
+  revalidate?(recipe: unknown, deps: X): Promise<Validated<R>>;
   /** The normalised source the session id is derived from. */
   sourceKey(recipe: R): string;
   /** A short description of the source for the sessions board. */
@@ -60,10 +79,15 @@ export interface BoardKind<R, D, W, A, V, X> {
   reconcile(session: Session<R, D, W>, fresh: DerivedPart<D>, mode: CheckMode): Reconciled<D, W>;
   /** A non-writing action: select, filter, pick, resolve or drop a conflict. */
   reduce(session: Session<R, D, W>, action: A): Reduced<W>;
-  /** The write plan for a writing action. Kinds without writes omit it. */
-  plan?(session: Session<R, D, W>, action: A): Planned;
-  /** Reads the targets again, writes the unchanged ones and reports each. */
-  apply?(session: Session<R, D, W>, plan: WritePlan, deps: X): Promise<Applied<D, W>>;
+  /**
+   * What a writing action needs to read before its plan can be shown, such as the target ticket of
+   * an add; its result is passed to `plan`. Kinds whose plans read nothing omit it.
+   */
+  prepare?(session: Session<R, D, W>, action: A, deps: X): Promise<unknown>;
+  /** The write plan for a writing action, given what `prepare` read. Kinds without writes omit it. */
+  plan?(session: Session<R, D, W>, action: A, prepared?: unknown): Planned;
+  /** Reads the targets again, writes the unchanged ones and reports each, through `progress` as each finishes. */
+  apply?(session: Session<R, D, W>, plan: WritePlan, deps: X, progress?: ApplyProgress<W>): Promise<Applied<D, W>>;
   /** A file the developer saves from the board, always built from the reading the board shows. */
   exportFile?(session: Session<R, D, W>, format: string, deps: X): Promise<ExportedFile>;
   /** What the page gets: never more than it shows. */

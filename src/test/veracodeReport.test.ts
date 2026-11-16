@@ -369,10 +369,6 @@ describe('buildLabels', () => {
   });
 });
 
-// chunkIssueIds/buildDedupJql/extractDedupMap/buildReviewRows were Veracode-local wrappers around
-// the shared primitives in reportImport.ts; they've been removed now that veracodeHandler.ts calls
-// those shared primitives directly (KTD2) — see reportImport.test.ts for their tests.
-
 // U1 — folding same-line flaws into a single grouped ticket. `makeFlaw` builds a full VeracodeFlaw
 // with sensible defaults so each test only needs to override the fields it cares about (rather than
 // relying on fixture XML, which can't easily express the missing-location / multi-CWE-at-one-line

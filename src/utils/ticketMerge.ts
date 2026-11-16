@@ -1,7 +1,7 @@
 // Report import ticket merge (rewrite mode: Waltz; close mode: Veracode): pure helpers (vscode-free) — the text a cancelled ticket is marked with, the reference
 // resolution, the step plan and the rule that decides between refreshing the review and marking it out of date.
 import { BATCH_LIMIT, MAX_SUMMARY_CHARS, clampSummary } from './reportImport';
-import { isTicketedRowFinished, ticketedTargetKey, type MergeStep, type ReviewRowBase, type SourceMove } from '../participant/session/importTypes';
+import { isTicketedRowFinished, ticketedTargetKey, type MergeStep, type ReviewRowBase, type SourceMove } from '../imports/types';
 
 const MERGED_PREFIX = /^\[Merged into [A-Z][A-Z0-9]+-\d+\] /;
 const BANNER = /^\{panel:title=Merged into [A-Z][A-Z0-9]+-\d+\}[\s\S]*?\{panel\}\n*/;

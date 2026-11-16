@@ -1,8 +1,7 @@
 // The security overview: Veracode and Waltz tickets grouped by Jira Fix Version, with the flags, counts and Jira
-// links the chat tables and the CSV are rendered from. Pure and vscode-free; both entry points (the standalone
-// command and the `export` reply in an import) assemble an {@link OverviewInput} and share everything else.
+// links the boards' tables and the CSV and Excel exports are rendered from. Pure and vscode-free; both entry points (the
+// security report board and the import board's export) assemble an {@link OverviewInput} and share everything else.
 import type { OverviewTicket, ProjectVersionInfo } from '../services/TicketService';
-import { neutralizeMarkdownLinks } from './chatPrimitives';
 import { quoteJqlValue } from './searchConstraints';
 import { readVeracodeFindings, type TicketFinding } from './veracodeFindingsTable';
 import { readWaltzComponents, type TicketComponent } from './waltzComponentsTable';
@@ -102,19 +101,6 @@ export interface Overview {
 
 /** The file formats the overview can be saved as. */
 export type OverviewFormat = 'csv' | 'xlsx';
-
-const FORMAT_WORDS = new Map<string, OverviewFormat>([['csv', 'csv'], ['xlsx', 'xlsx'], ['excel', 'xlsx']]);
-
-/** What a `@jira /security-report` prompt asks for: the project (an upper-case key, or a lone lower-case word) and the file format to save, if any (`csv`, or `xlsx` / `excel`; the first one named wins). */
-export function parseOverviewPrompt(prompt: string): { projectKey: string | null; format: OverviewFormat | null } {
-  const tokens = prompt.split(/[\s,;]+/).filter(Boolean);
-  const format = tokens.map(t => FORMAT_WORDS.get(t.toLowerCase())).find((f): f is OverviewFormat => f !== undefined) ?? null;
-  const rest = tokens.filter(t => !FORMAT_WORDS.has(t.toLowerCase()));
-  const upper = rest.find(t => /^[A-Z][A-Z0-9_]+$/.test(t));
-  if (upper) return { projectKey: upper, format };
-  const lone = rest.length === 1 && /^[A-Za-z][A-Za-z0-9_]+$/.test(rest[0]) ? rest[0].toUpperCase() : null;
-  return { projectKey: lone, format };
-}
 
 /** Today's date in local time as `YYYY-MM-DD`, which is how Due Dates and release dates compare. */
 export function localDate(now: Date = new Date()): string {
@@ -347,73 +333,4 @@ export function buildOverview(input: OverviewInput): Overview {
     hasReport: input.report !== undefined,
     unreadCount: input.tickets.filter(t => input.descriptions[t.key] == null).length,
   };
-}
-
-// --- Chat text ------------------------------------------------------------------------------------------
-
-const FLAG_TEXT: Record<Exclude<OverviewFlag, null>, string> = { overdue: '⚠ overdue', 'due-before-release': '⚠ due before release' };
-const MATCH_TEXT: Record<ReportMatch, string> = { tracked: 'tracked', stale: 'stale', 'in-report-no-ticket': 'in report, no ticket' };
-
-/** One table cell of untrusted text: no markup that could become a link, a break or another cell. */
-function chatCell(value: string): string {
-  return neutralizeMarkdownLinks(value).replace(/\r?\n|\r/g, ' ').replace(/\|/g, '/').trim();
-}
-
-function ticketCell(row: OverviewRow, baseUrl?: string): string {
-  if (row.ticketKey === null) return 'none';
-  const key = baseUrl ? `[${row.ticketKey}](${baseUrl}/browse/${row.ticketKey})` : row.ticketKey;
-  return row.status ? `${key} (${chatCell(row.status)})` : key;
-}
-
-function releaseTitle(table: OverviewTable): string {
-  if (table.fixVersion === null) return 'Not assigned to a release';
-  return table.releaseDate ? `${chatCell(table.fixVersion)} (releases ${table.releaseDate})` : `${chatCell(table.fixVersion)} (no release date)`;
-}
-
-function renderTable(table: OverviewTable, overview: Overview, baseUrl?: string): string[] {
-  const withSource = !overview.hasReport;
-  const headers = [...(withSource ? ['Source'] : []), 'Item', 'Rating', 'Ticket', 'Due', 'Flag', ...(overview.hasReport ? ['Report match'] : [])];
-  const lines = [`| ${headers.join(' | ')} |`, `| ${headers.map(() => '---').join(' | ')} |`];
-  for (const row of table.rows) {
-    const item = chatCell(row.summary) + (row.otherFixVersions.length > 0 ? ` _(also in ${row.otherFixVersions.map(chatCell).join(', ')})_` : '');
-    const cells = [
-      ...(withSource ? [row.source === 'veracode' ? 'Veracode' : 'Waltz'] : []),
-      item,
-      chatCell(row.rating) || '–',
-      ticketCell(row, baseUrl),
-      row.dueDate ?? '–',
-      row.flag ? FLAG_TEXT[row.flag] : '–',
-      ...(overview.hasReport ? [row.reportMatch ? MATCH_TEXT[row.reportMatch] + (row.edited ? ', edited' : '') : '–'] : []),
-    ];
-    lines.push(`| ${cells.join(' | ')} |`);
-  }
-  return lines;
-}
-
-/** The overview as chat markdown: a summary table by release, then one table per release. All report and Jira text is neutralized. */
-export function renderOverviewMarkdown(overview: Overview, baseUrl?: string): string {
-  if (overview.tables.length === 0) {
-    return overview.hasReport
-      ? '_Nothing to list: the report has no items to export._'
-      : '_No unresolved Veracode or Waltz tickets found in this project._';
-  }
-  const lines: string[] = [];
-  const bySource = `Veracode ${overview.bySource.veracode}, Waltz ${overview.bySource.waltz}`;
-  lines.push(`**Security overview — ${overview.ticketCount} unresolved ticket${overview.ticketCount === 1 ? '' : 's'}${overview.hasReport ? '' : ` (${bySource})`}**`, '');
-  lines.push('| Fix Version | Assigned | Overdue | Due before release | No Due Date |', '| --- | --- | --- | --- | --- |');
-  for (const t of overview.tables) {
-    const assigned = t.fixVersion === null ? `${t.counts.items} item${t.counts.items === 1 ? '' : 's'}` : String(t.counts.tickets);
-    lines.push(`| ${releaseTitle(t)} | ${assigned} | ${t.counts.overdue} | ${t.counts.dueBeforeRelease} | ${t.counts.noDueDate} |`);
-  }
-  lines.push('');
-  for (const table of overview.tables) {
-    lines.push(`**${releaseTitle(table)}**${table.jira?.url ? ` · [${table.counts.tickets} ticket${table.counts.tickets === 1 ? '' : 's'} in Jira](${table.jira.url})` : ''}`);
-    if (table.jira?.fellBack) lines.push('_Too many tickets for a key list, so this link searches by label and Fix Version instead._');
-    if (table.noTicket > 0) lines.push(`_${table.noTicket} item${table.noTicket === 1 ? ' has' : 's have'} no ticket yet, so no Jira list can show ${table.noTicket === 1 ? 'it' : 'them'}._`);
-    lines.push('', ...renderTable(table, overview, baseUrl), '');
-  }
-  if (overview.unreadCount > 0) {
-    lines.push(`_${overview.unreadCount} ticket${overview.unreadCount === 1 ? '' : 's'} could not be read in full, so ${overview.unreadCount === 1 ? 'its' : 'their'} detail is limited to the title and labels._`);
-  }
-  return lines.join('\n');
 }

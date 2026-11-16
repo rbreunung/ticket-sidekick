@@ -21,7 +21,7 @@ export interface TestRow extends ReportImportRow {
 }
 
 export const descriptor: ReportImportDescriptor<TestItem, TestRow> = {
-  descriptorKind: 'veracode', // arbitrary — this generic test descriptor isn't a real importer
+  descriptorKind: 'email', // this generic test descriptor isn't a real importer
   scope: 'jira.testImport',
   importLabel: 'Test',
   itemNoun: 'item(s)',

@@ -364,10 +364,6 @@ describe('buildDescriptionWiki', () => {
   });
 });
 
-// chunkComponentLabels/buildDedupJql/extractDedupMap/buildReviewRows were Waltz-local wrappers
-// around the shared primitives in reportImport.ts; they've been removed now that waltzHandler.ts
-// calls those shared primitives directly — see reportImport.test.ts for their tests.
-
 describe('Waltz record labels', () => {
   it('builds lower-cased, sanitized CVE and rating labels', () => {
     expect(buildCveLabel('CVE-2021-44228')).toBe('oss-cve-cve-2021-44228');

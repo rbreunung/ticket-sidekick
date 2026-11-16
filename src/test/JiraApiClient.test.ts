@@ -400,6 +400,24 @@ describe('JiraApiClient', () => {
     });
   });
 
+  describe('listProjects', () => {
+    it('reads GET /project and keeps key, name and id of each project', async () => {
+      const mockFetch = makeFetch([
+        { id: '10000', key: 'PROJ', name: 'Sample Project', projectTypeKey: 'software' },
+        { id: '10001', key: 'SEC', name: 'Security' },
+        { id: '10002', name: 'No key' },
+      ]);
+      vi.stubGlobal('fetch', mockFetch);
+      const client = new JiraApiClient(BASE_CONFIG);
+      expect(await client.listProjects()).toEqual([
+        { id: '10000', key: 'PROJ', name: 'Sample Project' },
+        { id: '10001', key: 'SEC', name: 'Security' },
+      ]);
+      const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('https://jira.example.com/rest/api/2/project');
+    });
+  });
+
   describe('getProjectStatuses', () => {
     const statusPayload = [
       { name: 'Bug', subtask: false, statuses: [{ id: '1', name: 'Open' }, { id: '2', name: 'Closed' }] },

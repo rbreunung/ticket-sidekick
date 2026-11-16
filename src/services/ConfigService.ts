@@ -3,6 +3,9 @@ import type { BitbucketAuthType, BitbucketConfig, ReviewMode } from '../bitbucke
 
 type AuthType = 'datacenter' | 'cloud';
 
+/** The report kinds whose import takes its template from a setting (`ticketSidekick.<kind>.template`). */
+export type ImportTemplateKind = 'veracode' | 'waltz';
+
 export interface JiraConfig {
   baseUrl: string | undefined;
   authType: AuthType;
@@ -61,6 +64,24 @@ export class ConfigService {
       detailedDiagnostics: config.get<boolean>('bitbucket.detailedDiagnostics') ?? false,
       showTokenUsage: config.get<boolean>('bitbucket.showTokenUsage') ?? false,
     };
+  }
+
+  /** The template name an import of this report kind uses; empty when none is set. */
+  getImportTemplate(kind: ImportTemplateKind): string {
+    const value = vscode.workspace.getConfiguration('ticketSidekick').get<unknown>(`${kind}.template`);
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  /** Saves the template picked for this report kind: for the workspace when a folder is open, else for the user. */
+  async setImportTemplate(kind: ImportTemplateKind, name: string): Promise<void> {
+    const target = vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+    await vscode.workspace.getConfiguration('ticketSidekick').update(`${kind}.template`, name, target);
+  }
+
+  /** Saves the project picked on the import start screen: for the workspace when a folder is open, else for the user. */
+  async setDefaultProject(key: string): Promise<void> {
+    const target = vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+    await vscode.workspace.getConfiguration('ticketSidekick').update('jira.defaultProject', key, target);
   }
 
   async storeBitbucketToken(token: string): Promise<void> {

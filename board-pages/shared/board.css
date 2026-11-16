@@ -62,3 +62,33 @@ dialog.plan {
   overflow: auto;
 }
 dialog.plan::backdrop { background: rgba(0, 0, 0, 0.5); }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.tablist { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--vscode-widget-border); margin: 12px 0 0; }
+.tab {
+  font: inherit;
+  color: var(--vscode-foreground);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.tab[aria-selected='true'] {
+  background: var(--vscode-editorWidget-background);
+  border-color: var(--vscode-widget-border);
+  font-weight: 600;
+  position: relative;
+  top: 1px;
+}
+.tab:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+[role='tabpanel'] { padding: 8px 0; }
+[role='tabpanel']:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+.table-wrap { overflow-x: auto; }
+.result-failed, .result-refused { color: var(--vscode-errorForeground); }

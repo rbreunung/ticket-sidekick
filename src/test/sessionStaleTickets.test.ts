@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { WorkflowGraph } from '../services/WorkflowService';
 import { type ReviewRowBase } from '../participant/sessionState';
 import { buildStaleGroupScreen, initImportViewState, type ReviewSession } from '../participant/sessionState';
-import { buildStaleTargetOptions, formatStaleTargetOption, parseStaleTargetPick, parseStaleIssueTypePick, selectedStaleIssueTypes, staleTargetNeedsResolution, planStaleTransitions, type StaleTargetOption, type StaleTicketGroup } from '../participant/sessionState';
+import { buildStaleTargetOptions, selectedStaleIssueTypes, staleTargetNeedsResolution, planStaleTransitions, type StaleTargetOption, type StaleTicketGroup } from '../participant/sessionState';
 import { parseStaleTicketToggle, applyStaleTicketToggle, type ReviewSessionStale, type TransitionBatchTicket } from '../participant/sessionState';
 
 // U6: Stale review section — toggle-reply parsing/application and the rendered table.
@@ -151,6 +151,7 @@ describe('Stale-ticket review section (U6)', () => {
 
 // Stale-ticket target pick (docs/plans/2026-09-27-1949-feat-stale-ticket-target-pick-plan.md, U1).
 describe('buildStaleTargetOptions', () => {
+  const label = (o: StaleTargetOption): string => (o.kind === 'rule' ? `${o.ruleName} → ${o.targetState}` : o.status);
   const graph: WorkflowGraph = {
     'Open': [{ id: '1', name: 'Verify', to: 'Verification' }, { id: '2', name: 'Close', to: 'Done' }],
     'Verification': [{ id: '3', name: 'Accept', to: 'Done' }],
@@ -162,7 +163,7 @@ describe('buildStaleTargetOptions', () => {
       [{ name: 'Close released bugs', targetState: 'Done', resolution: 'Fixed' }], graph, ['Open'],
     );
 
-    expect(options.map(formatStaleTargetOption)).toEqual(['Close released bugs → Done', 'Done', 'Verification']);
+    expect(options.map(label)).toEqual(['Close released bugs → Done', 'Done', 'Verification']);
     expect(options[0]).toEqual({ kind: 'rule', ruleName: 'Close released bugs', targetState: 'Done', resolution: 'Fixed' });
   });
 
@@ -176,63 +177,11 @@ describe('buildStaleTargetOptions', () => {
   it('offers the union of statuses reachable from any selected ticket', () => {
     const options = buildStaleTargetOptions([], graph, ['Verification', 'Reopened', 'Verification']);
 
-    expect(options.map(formatStaleTargetOption)).toEqual(['Done', 'Rejected']);
+    expect(options.map(label)).toEqual(['Done', 'Rejected']);
   });
 
   it('is empty when no rule matches and no selected ticket can reach anything', () => {
     expect(buildStaleTargetOptions([], graph, ['Done'])).toEqual([]);
-  });
-});
-
-describe('parseStaleTargetPick', () => {
-  const options: StaleTargetOption[] = [
-    { kind: 'rule', ruleName: 'Close released bugs', targetState: 'Done', resolution: 'Fixed' },
-    { kind: 'status', status: 'Done' },
-    { kind: 'status', status: 'Verification' },
-  ];
-
-  it('picks by 1-based number', () => {
-    expect(parseStaleTargetPick('3', options)).toEqual({ kind: 'status', status: 'Verification' });
-  });
-
-  it('picks a plain status by case-insensitive name, and a rule by its name', () => {
-    expect(parseStaleTargetPick('done', options)).toEqual({ kind: 'status', status: 'Done' });
-    expect(parseStaleTargetPick('close released bugs', options)).toEqual(options[0]);
-  });
-
-  it('treats back and cancellation words as going back', () => {
-    expect(parseStaleTargetPick('back', options)).toBe('back');
-    expect(parseStaleTargetPick('cancel', options)).toBe('back');
-  });
-
-  it('picks an offered status whose name is also a cancel word instead of going back', () => {
-    const withCancelled: StaleTargetOption[] = [...options, { kind: 'status', status: 'Cancelled' }];
-    expect(parseStaleTargetPick('Cancelled', withCancelled)).toEqual({ kind: 'status', status: 'Cancelled' });
-    expect(parseStaleTargetPick('cancel', withCancelled)).toBe('back');
-  });
-
-  it('reports an unknown reply as invalid', () => {
-    expect(parseStaleTargetPick('Archived', options)).toBe('invalid');
-    expect(parseStaleTargetPick('9', options)).toBe('invalid');
-  });
-});
-
-describe('parseStaleIssueTypePick', () => {
-  const types = ['Bug', 'Vulnerability'];
-
-  it('picks by number or case-insensitive name', () => {
-    expect(parseStaleIssueTypePick('2', types)).toBe('Vulnerability');
-    expect(parseStaleIssueTypePick('bug', types)).toBe('Bug');
-  });
-
-  it('picks an issue type whose name is also a cancel word instead of going back', () => {
-    expect(parseStaleIssueTypePick('Stop', ['Bug', 'Stop'])).toBe('Stop');
-  });
-
-  it('goes back on back or cancel, and rejects an unknown type', () => {
-    expect(parseStaleIssueTypePick('back', types)).toBe('back');
-    expect(parseStaleIssueTypePick('cancel', types)).toBe('back');
-    expect(parseStaleIssueTypePick('Story', types)).toBe('invalid');
   });
 });
 
