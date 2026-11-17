@@ -1362,7 +1362,7 @@
     "exceljs": "^4.4.0",
     "fast-xml-parser": "^5.12.0",
     "minimatch": "^11.0.6",
-    "postal-mime": "^4.2.0",
+    "postal-mime": "^4.2.1",
     "zod": "^4.6.7"
   },
   "overrides": {
