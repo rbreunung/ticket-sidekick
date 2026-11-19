@@ -28,7 +28,7 @@ execution: code
 
 ## Product Contract
 
-Product Contract preservation: unchanged. Planning resolved the deferred questions on model access (KTD3), the verdict (KTD10), the screens for no findings and for a failed regular pass (U6), selection (U7), `showTokenUsage` (KTD11) and the PR split (Execution profile), and removed them from Outstanding Questions.
+Product Contract preservation: changed R6 and AE3, user-directed at the plan review: the goal is reworded only when the developer presses Reword. Planning resolved the deferred questions on model access (KTD3), the verdict (KTD10), the screens for no findings and for a failed regular pass (U6), selection (U7), `showTokenUsage` (KTD11) and the PR split (Execution profile), and removed them from Outstanding Questions.
 
 ### Summary
 
@@ -61,6 +61,7 @@ Today's review also asks the developer to choose the depth before seeing anythin
 - **No note field on findings.** (session-settled: user-directed — chosen over keeping the boards plan R21's note: the editable draft carries the developer's own words.) Governs R18, R20.
 - **The results screen is one column.** The next-pass choice sits above the findings. (session-settled: user-directed — chosen over tabs like the import board, and over a list with a detail pane, after text sketches of each.) Governs R16.
 - **Later passes see what the regular pass saw, read at the reviewed commit.** (session-settled: user-approved — chosen over reading newly requested files at the PR's newest head.) Governs R11, R24.
+- **Goal rewording runs only on an explicit Reword press.** (session-settled: user-directed — chosen over rewording on leaving the goal field, and over rewording on Start with a second Start; it settles a conflict between AE3 and the rule that no model call runs unasked.) Governs R6.
 - **A repeat request opens the stored review.** (session-settled: user-approved — chosen over opening on the first step with the stored review named, and over keeping several reviews per PR.) Governs R36.
 - **The critic labels instead of removing when the developer worked on a finding.** (session-settled: user-approved — chosen over keeping every rejected finding labelled, and over always removing.) Governs R37.
 - **A new commit on the PR never starts a review by itself.** (session-settled: user-approved — chosen over an automatic quick re-run, and over reviewing only the new commits.) Governs R25.
@@ -80,7 +81,7 @@ Today's review also asks the developer to choose the depth before seeing anythin
 **Requirements source**
 
 - R5. The first step offers three requirements sources: the Jira ticket, a goal, or none. The ticket is preselected when Jira is configured and the request names a key or the PR title carries one. Otherwise none is preselected. With Jira not configured, the ticket option is unavailable, with a one-line reason. The chosen source is checked as part of the regular pass.
-- R6. A typed goal is reworded by one model call into in-scope and out-of-scope points, shown in an editable box on the first step. The developer corrects it and presses Start. The check compares the diff against the text as it stands at Start. The rewording runs only once a model is chosen, and Start is locked while it runs. When it fails, the typed words stay and are used as they stand. Changing the typed goal after the points were corrected asks before the corrections are replaced.
+- R6. When the developer presses Reword, the typed goal is reworded by one model call into in-scope and out-of-scope points, shown in an editable box on the first step. The developer corrects it and presses Start. Without a rewording, Start uses the typed words as they stand. The check compares the diff against the text as it stands at Start. Reword is available only once a model is chosen, and Start is locked while a rewording runs. When it fails, the typed words stay and are used as they stand. Changing the typed goal after the points were corrected asks before the corrections are replaced.
 - R7. After a review, the developer can change the source or edit the goal and re-check. Only the requirements check runs again, on the stored diff, and replaces the coverage block. The findings are untouched.
 
 **Staged review**
@@ -153,7 +154,7 @@ Today's review also asks the developer to choose the depth before seeing anythin
 
 - AE1. **Covers R2, R3, R4.** Given the review model setting is empty, when the developer pastes a PR link in chat, then the board stops on its first step and asks for a model. No model call is made before the pick, and the next review does not ask for a model again.
 - AE2. **Covers R5.** Given a PR titled "PROJ-12 Add export" with Jira configured, when the board opens, then the ticket is preselected. When the developer picks none, no ticket is read and no coverage block appears.
-- AE3. **Covers R6.** Given the developer types the goal "only backend endpoint, export button later", when they leave the goal field, then one model call shows in-scope and out-of-scope points in an editable box. Nothing else runs until Start.
+- AE3. **Covers R6.** Given the developer types the goal "only backend endpoint, export button later", when they press Reword, then one model call shows in-scope and out-of-scope points in an editable box. Nothing else runs until Start. Leaving the goal field makes no model call.
 - AE4. **Covers R7.** Given a finished review with a coverage block, when the developer edits the goal and re-checks, then exactly one model call runs, the coverage is replaced and the findings are unchanged.
 - AE5. **Covers R9, R10.** Given the regular pass suggests no extra pass, when the board shows the findings, then it says no extra pass is suggested and still offers every extra pass to pick.
 - AE6. **Covers R11.** Given a finished review that ran the security pass, when the developer adds the critic pass the next day, then the critic runs on the full reviewed diff over the findings it has not checked yet, and the security pass is marked as run.
@@ -186,10 +187,6 @@ Today's review also asks the developer to choose the depth before seeing anythin
 ---
 
 ### Outstanding Questions
-
-#### Open decision from the plan review (2026-11-19)
-
-- **When does the goal rewording run?** AE3 says it runs when the developer leaves the goal field. Scope Boundaries says no rewording runs without the developer asking. A click on Start right after typing would be swallowed, because the rewording locks Start (R6). The recommended answer is an explicit Reword button: Start stays enabled and uses the typed words as they stand, until the developer presses Reword. This changes AE3 and U5's trigger, so it is the maintainer's call. U5 cannot be finished before it is answered.
 
 #### Deferred to Implementation
 
@@ -394,7 +391,8 @@ flowchart LR
 - **Test scenarios:**
   - Covers AE1. With the setting empty, opening a PR shows the first step with a model pick and makes no model call. After the pick, a second PR does not ask.
   - Covers AE2. A PR titled "PROJ-12 Add export" with Jira configured preselects the ticket. With Jira not configured, the ticket option is unavailable with its reason.
-  - Covers AE3. Leaving the goal field with a model chosen starts one rewording call, and Start stays locked until it ends.
+  - Covers AE3. Pressing Reword with a model chosen starts one rewording call, and Start stays locked until it ends. Leaving the goal field makes no call.
+  - Pressing Start with a typed goal and no rewording runs the check against the typed words.
   - A failed rewording keeps the typed words and shows an error line, and Start uses the typed words.
   - Changing the typed goal after the points were corrected asks before replacing them.
   - Covers AE11. Asking again for PR #482 opens the stored review. New review then asks for confirmation before resetting.
