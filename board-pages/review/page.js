@@ -1,4 +1,4 @@
-import { announce, h, startBoard } from '../shared/board.js';
+import { announce, api, h, startBoard } from '../shared/board.js';
 
 // The pull request review board, one column. The first step: the model, the requirements source
 // (a Jira ticket, a goal or none), the goal and its rewording, and an optional question; nothing runs
@@ -6,8 +6,11 @@ import { announce, h, startBoard } from '../shared/board.js';
 // (pull request, model, requirements source, passes run) with the token usage per pass, the banners
 // of the last run, the pass suggestion and picker, the requirements source (changeable, with the goal
 // and its rewording) and Re-check, the coverage block (or why the requirements check gave none), the
-// findings, and Run again. While a pass runs, the live region reads
-// its progress, e.g. "Security pass: 2 of 5 batches".
+// findings, and Run again. Each finding has Explain, a checkbox that selects it for Post and Copy
+// (and drafts its comment under it), the draft with Rewrite, Undo and Regenerate; after the list,
+// Post and Copy for Teams or as Markdown. Copy names only the format and the selected numbers: the
+// extension builds the text. While a pass runs, the live region reads its progress, e.g.
+// "Security pass: 2 of 5 batches".
 // The page keeps only what is being typed and not sent yet. Everything from Bitbucket, Jira or the
 // model is written as text.
 
@@ -26,11 +29,17 @@ const FIELD_ACTIONS = {
   'ticket-key': key => ({ type: 'ticket-key', key }),
 };
 
+/** The action that sends a field's text; a draft box is `draft-<number>`. */
+function fieldAction(id, text) {
+  const draft = /^draft-(\d+)$/.exec(id);
+  return draft ? { type: 'draft', number: Number(draft[1]), text } : FIELD_ACTIONS[id](text);
+}
+
 /** Sends a typed field to the session when the developer leaves it; no model call is made. */
 function fieldSaver(board, id) {
   return e => {
     const text = e.target.value;
-    saving = saving.then(() => board.act(FIELD_ACTIONS[id](text))).finally(() => { delete typed[id]; });
+    saving = saving.then(() => board.act(fieldAction(id, text))).finally(() => { delete typed[id]; });
   };
 }
 
@@ -38,7 +47,7 @@ function fieldSaver(board, id) {
 async function afterSaving(board, fields, then) {
   await saving;
   for (const [id, current] of Object.entries(fields)) {
-    if (typed[id] !== undefined && typed[id] !== current) await board.act(FIELD_ACTIONS[id](typed[id]));
+    if (typed[id] !== undefined && typed[id] !== current) await board.act(fieldAction(id, typed[id]));
     delete typed[id];
   }
   await then();
@@ -183,6 +192,101 @@ function requirementsBlock(r, board, off) {
   ];
 }
 
+// ---- the findings ------------------------------------------------------------------------------
+
+/** The last Copy's result line, shown after the Copy buttons and read out by the live region. */
+let copyLine;
+
+/** Every draft box's text in the session, so a typed draft is saved before a run, a selection or Post. */
+function draftFields(r) {
+  return Object.fromEntries(r.findings.filter(f => f.draft).map(f => [`draft-${f.number}`, f.draft.text]));
+}
+
+function draftBlock(f, r, board, off) {
+  const d = f.draft;
+  const n = f.number;
+  const rewriting = Boolean(board.running(`rewrite:${n}`));
+  const locked = off || rewriting || Boolean(d.posted);
+  const instructionId = `instruction-${n}`;
+  return h('div', { class: 'draft', id: `draft-block-${n}` },
+    h('label', { class: 'field' }, `Comment for #${n}`, fieldInput('textarea', `draft-${n}`, d.text, board, locked, { rows: 8, 'aria-label': `Comment for #${n}` })),
+    d.outdated && !d.posted ? h('p', { class: 'muted', id: `outdated-${n}` },
+      'The explanation changed since this draft was made. Regenerate rebuilds it from the finding and its explanation; your edits are lost. ',
+      h('vscode-button', { id: `regenerate-${n}`, secondary: true, disabled: locked, onClick: () => board.act({ type: 'regenerate', number: n }) }, 'Regenerate')) : null,
+    d.posted ? h('p', { id: `posted-${n}`, role: 'status' }, d.posted) : h('div', { class: 'bar' },
+      h('input', {
+        type: 'text', id: instructionId, size: 40, placeholder: 'How should the comment change?', 'aria-label': `Rewrite instruction for #${n}`,
+        value: typed[instructionId] ?? '', disabled: locked, onInput: e => { typed[instructionId] = e.target.value; },
+      }),
+      h('vscode-button', {
+        id: `rewrite-${n}`, secondary: true, disabled: locked,
+        onClick: () => afterSaving(board, draftFields(r), () => board.run({ type: 'rewrite', number: n, instruction: typed[instructionId] ?? '' })),
+      }, rewriting ? 'Rewriting…' : 'Rewrite'),
+      d.canUndo ? h('vscode-button', { id: `undo-${n}`, secondary: true, disabled: locked, onClick: () => board.act({ type: 'undo-rewrite', number: n }) }, 'Undo') : null),
+    d.rewriteError ? h('p', { id: `rewrite-error-${n}`, class: 'banner error', role: 'alert' }, d.rewriteError) : null,
+    d.postError ? h('p', { id: `post-error-${n}`, class: 'banner error', role: 'alert' }, d.postError) : null);
+}
+
+function findingItem(f, r, board, off) {
+  const n = f.number;
+  const explaining = Boolean(board.running(`explain:${n}`));
+  return h('li', { id: `finding-${n}`, value: n },
+    h('input', {
+      type: 'checkbox', id: `select-${n}`, checked: f.selected, disabled: off, 'aria-label': `Select #${n} for Post and Copy`,
+      onChange: e => afterSaving(board, draftFields(r), () => board.act({ type: 'select', numbers: [n], selected: Boolean(e.target.checked) })),
+    }), ' ',
+    h('span', { class: `severity severity-${f.severity}` }, `#${n} ${SEVERITY_TEXT[f.severity] ?? f.severity}`), ' ',
+    h('span', { class: 'location' }, f.location), ' ',
+    h('span', { class: 'title' }, f.title),
+    f.markers.length ? h('span', { class: 'muted markers' }, ` (${f.markers.join(', ')})`) : null,
+    ' ', h('vscode-button', {
+      id: `explain-${n}`, secondary: true, disabled: off || explaining,
+      onClick: () => afterSaving(board, draftFields(r), () => board.run({ type: 'explain', number: n })),
+    }, explaining ? 'Explaining…' : 'Explain'),
+    f.explanation ? h('pre', { id: `explanation-${n}`, class: 'coverage explanation' }, f.explanation) : null,
+    f.explainError ? h('p', { id: `explain-error-${n}`, class: 'banner error', role: 'alert' }, f.explainError) : null,
+    f.draft ? draftBlock(f, r, board, off) : null);
+}
+
+/** Copy names the format and the selected numbers; the extension builds the text from the session. */
+async function copy(board, r, format) {
+  const numbers = r.findings.filter(f => f.selected).map(f => f.number);
+  try {
+    const reply = await api('copy', { format, numbers });
+    copyLine = reply.outcome === 'copied'
+      ? { text: `Copied ${reply.count} finding${reply.count === 1 ? '' : 's'}.` }
+      : { text: `Not copied: ${reply.reason}`, error: true };
+  } catch (err) {
+    copyLine = { text: `Not copied: ${err.message}`, error: true };
+  }
+  board.repaint();
+}
+
+function findingsBlock(r, board, off) {
+  const all = r.findings.map(f => f.number);
+  const copyScope = r.copy?.scope === 'selected' ? `${r.copy.count} selected` : `all ${r.copy?.count ?? all.length}`;
+  const post = r.post ?? { count: 0, blocker: 'Select the findings to post.' };
+  return [
+    h('h2', {}, `Findings (${r.findings.length})`),
+    r.findings.length === 0 ? h('p', { id: 'no-issues' }, 'No issues found.') : [
+      h('label', { class: 'select-all' }, h('input', {
+        type: 'checkbox', id: 'select-all', checked: r.findings.every(f => f.selected), disabled: off,
+        onChange: e => afterSaving(board, draftFields(r), () => board.act({ type: 'select', numbers: all, selected: Boolean(e.target.checked) })),
+      }), ' Select all'),
+      h('ol', { id: 'findings', class: 'findings' }, r.findings.map(f => findingItem(f, r, board, off))),
+      h('div', { class: 'bar', id: 'findings-actions' },
+        h('vscode-button', {
+          id: 'post', disabled: off || post.count === 0,
+          onClick: () => afterSaving(board, draftFields(r), () => board.preview({ type: 'post' })),
+        }, `Post ${post.count} comment(s)`),
+        post.blocker ? h('span', { class: 'muted' }, post.blocker) : null,
+        h('vscode-button', { id: 'copy-teams', secondary: true, onClick: () => copy(board, r, 'teams') }, `Copy ${copyScope} for Teams`),
+        h('vscode-button', { id: 'copy-markdown', secondary: true, onClick: () => copy(board, r, 'markdown') }, `Copy ${copyScope} as Markdown`)),
+      copyLine ? h('p', { id: 'copy-result', class: copyLine.error ? 'banner error' : 'muted', role: copyLine.error ? 'alert' : null }, copyLine.text) : null,
+    ],
+  ];
+}
+
 function results(view, board, off) {
   const r = view.results;
   return h('section', { id: 'results', 'aria-label': 'Review' },
@@ -198,13 +302,7 @@ function results(view, board, off) {
     r.hasReview ? [
       r.picker ? passPicker(r.picker, board, off) : null,
       requirementsBlock(r, board, off),
-      h('h2', {}, `Findings (${r.findings.length})`),
-      r.findings.length === 0 ? h('p', { id: 'no-issues' }, 'No issues found.') : h('ol', { id: 'findings', class: 'findings' },
-        r.findings.map(f => h('li', { id: `finding-${f.number}`, value: f.number },
-          h('span', { class: `severity severity-${f.severity}` }, `#${f.number} ${SEVERITY_TEXT[f.severity] ?? f.severity}`), ' ',
-          h('span', { class: 'location' }, f.location), ' ',
-          h('span', { class: 'title' }, f.title),
-          f.markers.length ? h('span', { class: 'muted markers' }, ` (${f.markers.join(', ')})`) : null))),
+      findingsBlock(r, board, off),
     ] : null,
     h('div', { class: 'bar' },
       r.canRunAgain ? h('vscode-button', { id: 'run-again', disabled: off, onClick: () => board.run({ type: 'again' }) }, 'Run again') : null,
@@ -215,7 +313,7 @@ startBoard({
   root: document.getElementById('root'),
   loading: () => h('p', { class: 'muted' }, 'Reading the pull request…'),
   render: (view, board, locked) => {
-    announce(view.progress ?? '');
+    announce(view.progress ?? copyLine?.text ?? '');
     return h('div', {},
       headerLine(view),
       view.stage === 'first-step' ? [view.progress ? h('p', { id: 'progress-text', class: 'muted' }, view.progress) : null, firstStep(view, board, locked)]

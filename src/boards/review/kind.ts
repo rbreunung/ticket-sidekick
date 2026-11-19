@@ -17,6 +17,10 @@ import {
   EXTRA_STEPS, STEP_LABELS, extraPassesRun, interruptedWorking, joinNames, modelFor, modelIdOf, pickedSteps, recheckRun, regularRun,
   stepBlocker, stepName,
 } from './runs';
+import {
+  FINDING_ACTIONS, applyPost, beginFindingRun, draftOutdated, findingRun, isFindingRun, planPost, postableNumbers, reduceFindings, selectedNumbers,
+  type FindingAction, type FindingRunRequest, type PostAction,
+} from './findings';
 
 // The pull request review board. Its recipe is the pull request's address, so asking again for the
 // same pull request opens the stored review. Reading the source fetches only the pull request's
@@ -80,11 +84,20 @@ export interface StartedWith {
 /** A finding's explanation, by finding number. */
 export interface Explanation {
   text: string;
+  /** Raised by each new explanation of the finding, so a draft made from an earlier one shows as outdated. */
+  revision?: number;
 }
 
 /** A finding's draft comment, by finding number. */
 export interface Draft {
   text: string;
+  /** The explanation revision the draft was made from; 0 or absent: made without one. */
+  basedOn?: number;
+  /** The text before the last Rewrite, for Undo until the next edit or post. */
+  previous?: string;
+  posted?: { commentId: number };
+  /** Why the last post of this draft failed. */
+  postError?: string;
 }
 
 export interface ReviewWorking {
@@ -106,6 +119,12 @@ export interface ReviewWorking {
   notice?: string;
   /** Tokens of the requirements re-checks since the regular pass. */
   recheckTokens?: TokenTotals;
+  /** The findings selected for posting and copying, by number. */
+  selected?: number[];
+  /** The last failed Explain or Rewrite of a finding, by finding number; the earlier text stays. */
+  failures?: Record<string, { explain?: string; rewrite?: string }>;
+  /** Tokens of the explanations and rewrites since the regular pass. */
+  callTokens?: TokenTotals;
 }
 
 export type ReviewAction =
@@ -113,9 +132,23 @@ export type ReviewAction =
   | { type: 'new-review' }
   | { type: 'back-to-review' }
   | { type: 'pick-pass'; step: ReviewStep; picked: boolean }
-  | { type: 'keep-as-is' };
+  | { type: 'keep-as-is' }
+  | FindingAction
+  | PostAction;
 
-export type ReviewRunRequest = { type: 'reword' } | { type: 'start' } | { type: 'passes' } | { type: 'again' } | { type: 'recheck' };
+export type ReviewRunRequest = { type: 'reword' } | { type: 'start' } | { type: 'passes' } | { type: 'again' } | { type: 'recheck' } | FindingRunRequest;
+
+export interface DraftView {
+  text: string;
+  /** The finding's explanation changed since the draft was made: Regenerate rebuilds it. */
+  outdated: boolean;
+  /** The last Rewrite can be undone. */
+  canUndo: boolean;
+  /** Posted, e.g. "Posted as comment 300."; the draft can no longer be changed. */
+  posted?: string;
+  postError?: string;
+  rewriteError?: string;
+}
 
 export interface FindingView {
   number: number;
@@ -124,6 +157,10 @@ export interface FindingView {
   title: string;
   /** Low confidence, location unverified, probably a false alarm. */
   markers: string[];
+  selected: boolean;
+  explanation?: string;
+  explainError?: string;
+  draft?: DraftView;
 }
 
 export interface FirstStepView {
@@ -201,6 +238,12 @@ export interface ReviewResultsView {
   tokens: Array<{ pass: string; text: string }>;
   canRunAgain: boolean;
   findings: FindingView[];
+  /** How many findings are selected for Post and Copy. */
+  selectedCount: number;
+  /** How many selected drafts Post would post, and why it cannot now. */
+  post: { count: number; blocker?: string };
+  /** What Copy acts on: the selection, or every finding when nothing is selected. */
+  copy: { scope: 'selected' | 'all'; count: number };
 }
 
 export interface ReviewView {
@@ -283,7 +326,21 @@ function requirementsLine(outcome: RequirementsOutcome | undefined): string | un
   }
 }
 
-function findingView(f: StoredFinding, threshold: number): FindingView {
+function draftView(working: ReviewWorking, number: number): DraftView | undefined {
+  const draft = working.drafts[String(number)];
+  if (!draft) return undefined;
+  const rewriteError = working.failures?.[String(number)]?.rewrite;
+  return {
+    text: draft.text,
+    outdated: draftOutdated(working, number),
+    canUndo: draft.previous !== undefined,
+    ...(draft.posted ? { posted: `Posted as comment ${draft.posted.commentId}.` } : {}),
+    ...(draft.postError && !draft.posted ? { postError: `Not posted: ${draft.postError}` } : {}),
+    ...(rewriteError ? { rewriteError } : {}),
+  };
+}
+
+function findingView(f: StoredFinding, threshold: number, working: ReviewWorking, selected: number[]): FindingView {
   const markers: string[] = [];
   if (f.locationUnverified) markers.push('location unverified');
   else if (f.confidence !== undefined && f.confidence < threshold) markers.push('low confidence');
@@ -294,6 +351,10 @@ function findingView(f: StoredFinding, threshold: number): FindingView {
     location: f.locationUnverified ? f.file : f.line ? `${f.file}:${f.line}` : f.file,
     title: f.title,
     markers,
+    selected: selected.includes(f.id),
+    ...(working.explanations[String(f.id)] ? { explanation: working.explanations[String(f.id)].text } : {}),
+    ...(working.failures?.[String(f.id)]?.explain ? { explainError: working.failures[String(f.id)].explain } : {}),
+    ...(selected.includes(f.id) || working.drafts[String(f.id)] ? { draft: draftView(working, f.id) } : {}),
   };
 }
 
@@ -331,6 +392,10 @@ function resultsView(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking
   const recheck = recheckBlocker(session);
   const tokens = working.passes.filter(p => p.tokens.calls > 0).map(p => ({ pass: p.step === 'critic' ? 'Critic' : `${STEP_LABELS[p.step]} pass`, text: tokenText(p.tokens) }));
   if (working.recheckTokens && working.recheckTokens.calls > 0) tokens.push({ pass: 'Requirements re-check', text: tokenText(working.recheckTokens) });
+  if (working.callTokens && working.callTokens.calls > 0) tokens.push({ pass: 'Explain and Rewrite', text: tokenText(working.callTokens) });
+  const selected = selectedNumbers(working);
+  const postCount = postableNumbers(working).length;
+  const findingCount = review?.store.findings.length ?? 0;
   return {
     model: startedWith ? label(startedWith.modelId) : '',
     requirements: requirementsLabel(review?.requirements ?? startedWith?.requirements ?? { kind: 'none' }),
@@ -350,7 +415,13 @@ function resultsView(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking
     findings: (review?.store.findings ?? [])
       .slice()
       .sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.id - b.id)
-      .map(f => findingView(f, threshold)),
+      .map(f => findingView(f, threshold, working, selected)),
+    selectedCount: selected.length,
+    post: {
+      count: postCount,
+      ...(selected.length === 0 ? { blocker: 'Select the findings to post.' } : postCount === 0 ? { blocker: 'The selected comments are posted already.' } : {}),
+    },
+    copy: selected.length > 0 ? { scope: 'selected', count: selected.length } : { scope: 'all', count: findingCount },
   };
 }
 
@@ -446,7 +517,7 @@ const RUN_TYPES = new Set(['reword', 'start', 'passes', 'again', 'recheck']);
 
 function isRunRequest(request: unknown): request is ReviewRunRequest {
   const type = (request as { type?: unknown } | null)?.type;
-  return typeof type === 'string' && RUN_TYPES.has(type);
+  return typeof type === 'string' && (RUN_TYPES.has(type) || isFindingRun(request));
 }
 
 async function rewordRun(
@@ -584,6 +655,7 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
       const next = picked ? [...current, step as ReviewStep] : current.filter(s => s !== step);
       return { ok: true, working: { ...working, picked: EXTRA_STEPS.filter(s => next.includes(s)) } };
     }
+    if (typeof type === 'string' && FINDING_ACTIONS.has(type)) return reduceFindings(working, action as FindingAction);
     if (typeof type === 'string' && FIRST_STEP_ACTIONS.has(type)) {
       if (working.stage !== 'first-step' && !(SOURCE_ACTIONS.has(type) && working.review)) return { ok: false, reason: 'Press New review to change the first step.' };
       const reduced = reduceFirstStep(working.firstStep, action as FirstStepAction, contextOf(session));
@@ -594,6 +666,7 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
 
   beginRun(session, request): RunBegun<ReviewWorking> {
     if (!isRunRequest(request)) return { ok: false, reason: 'Unknown run.' };
+    if (isFindingRun(request)) return beginFindingRun(session, request);
     if (request.type === 'passes' || request.type === 'again' || request.type === 'recheck' || (request.type === 'reword' && session.working.stage === 'review')) {
       return beginResultsRun(session, request);
     }
@@ -609,6 +682,7 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
 
   async run(session, request, deps, progress, signal) {
     if (!isRunRequest(request)) throw new Error('Unknown run.');
+    if (isFindingRun(request)) return findingRun(session, request, deps, signal);
     switch (request.type) {
       case 'reword': return rewordRun(session, deps, signal);
       case 'start': return startRun(session, deps, progress, signal);
@@ -619,6 +693,14 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
   },
 
   interrupted: interruptedWorking,
+
+  // Post is the board's one write: the selected drafts as they are, after the native confirmation.
+  plan(session, action) {
+    if ((action as { type?: unknown } | null)?.type !== 'post') return { ok: false, reason: 'Unknown write.' };
+    return planPost(session);
+  },
+
+  apply: (session, plan, deps, progress) => applyPost(session, plan, deps, progress),
 
   view(session): ReviewView {
     const { recipe, derived, working } = session;

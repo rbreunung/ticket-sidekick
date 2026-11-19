@@ -179,6 +179,9 @@ export async function regularRun(
       delete next.picked;
       delete next.notice;
       delete next.recheckTokens;
+      delete next.selected;
+      delete next.failures;
+      delete next.callTokens;
       if (result.review) next.review = result.review;
       else delete next.review;
       return next;
@@ -306,6 +309,9 @@ export function interruptedWorking(working: ReviewWorking): ReviewWorking {
     delete result.requirements;
     delete result.picked;
     delete result.recheckTokens;
+    delete result.selected;
+    delete result.failures;
+    delete result.callTokens;
     return result;
   }
   const step = active.step === 'requirements' ? active.steps[0] : active.step;

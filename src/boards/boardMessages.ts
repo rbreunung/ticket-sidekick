@@ -1,8 +1,11 @@
 import { isSessionId } from '../sessions/sessionId';
 import type { SessionManager } from '../sessions/sessionManager';
-import { SessionError } from '../sessions/sessionTypes';
+import { SessionError, type Session } from '../sessions/sessionTypes';
 import { IMPORT_KIND, withReportPath, type ImportRecipe, type ReportKind } from './import/recipe';
 import { IMPORT_START_BOARD, type ImportStartScreen } from './import/startScreen';
+import { reviewCopyText } from './review/findings';
+import type { ReviewDerived, ReviewWorking } from './review/kind';
+import { REVIEW_KIND, type ReviewRecipe } from './review/recipe';
 import { REVIEW_START_BOARD, type ReviewStartScreen } from './review/startScreen';
 
 // What a board page may ask of the extension. A page lives in an editor tab (a webview) and talks
@@ -46,6 +49,8 @@ export interface BoardHost {
   followSession?(kind: string, fromId: string, toId: string, title: string): Promise<void>;
   /** Closes the tab that shows this session, after its session was discarded. */
   closeSession?(kind: string, id: string): void;
+  /** Puts text on the system clipboard; the text is always built by the extension. */
+  copyText?(text: string): Promise<void>;
 }
 
 export interface BoardRequest {
@@ -115,6 +120,30 @@ async function pickReportFileAgain(manager: SessionManager, { kind, id }: BoardT
   return { outcome: 'picked', id: moved.id, state: moved.state };
 }
 
+const COPY_FORMATS = new Set(['teams', 'markdown']);
+
+/**
+ * Copy on the review board: the page names the format and the selected finding numbers, and the
+ * text is built from the session. Any text the page sends along is not read.
+ */
+async function copyFindings(manager: SessionManager, { kind, id }: BoardTarget, body: Record<string, unknown>, host: BoardHost): Promise<unknown> {
+  if (kind !== REVIEW_KIND || !host.copyText) throw new BoardRequestError(404, 'Unknown request.');
+  const format = body.format;
+  if (typeof format !== 'string' || !COPY_FORMATS.has(format)) throw new BoardRequestError(400, 'Invalid format.');
+  const numbers = body.numbers ?? [];
+  if (!Array.isArray(numbers) || numbers.some(n => typeof n !== 'number' || !Number.isInteger(n))) throw new BoardRequestError(400, 'Invalid selection.');
+  const session = await manager.read(kind, id) as Session<ReviewRecipe, ReviewDerived, ReviewWorking> | undefined;
+  if (!session) throw new BoardRequestError(409, 'The board is still loading.');
+  const built = reviewCopyText(session, format as 'teams' | 'markdown', numbers as number[]);
+  if ('ok' in built) throw new BoardRequestError(400, built.reason);
+  try {
+    await host.copyText(built.text);
+  } catch (err) {
+    return { outcome: 'failed', reason: err instanceof Error ? err.message : String(err) };
+  }
+  return { outcome: 'copied', count: built.count };
+}
+
 async function sessionBoard(manager: SessionManager, target: BoardTarget, op: string, body: Record<string, unknown>, host: BoardHost): Promise<unknown> {
   const { kind, id } = target;
   switch (op) {
@@ -148,6 +177,8 @@ async function sessionBoard(manager: SessionManager, target: BoardTarget, op: st
       return { ok: true };
     case 'pick-file':
       return pickReportFileAgain(manager, target, host);
+    case 'copy':
+      return copyFindings(manager, target, body, host);
     default:
       throw new BoardRequestError(404, 'Unknown request.');
   }

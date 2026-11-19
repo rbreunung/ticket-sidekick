@@ -41,6 +41,11 @@ export class BoardPanels implements BoardHost {
     readonly reviewStart?: ReviewStartScreen,
   ) {}
 
+  /** The system clipboard, for the review board's Copy. */
+  async copyText(text: string): Promise<void> {
+    await vscode.env.clipboard.writeText(text);
+  }
+
   pickReportFile(kind: ReportKind): Promise<string | undefined> {
     return this.pickReport ? this.pickReport(kind) : Promise.resolve(undefined);
   }

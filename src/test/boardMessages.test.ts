@@ -155,6 +155,18 @@ describe('a board page and the extension', () => {
     expect(preview).toMatchObject({ status: 400, body: { error: 'This board does not write.' } });
   });
 
+  it('has no Copy: only the review board copies findings, and nothing reaches the clipboard', async () => {
+    const state = await openReady();
+    const copied: string[] = [];
+    host.copyText = async text => { copied.push(text); };
+    try {
+      expect(await ask(report(state.id), 'copy', { format: 'teams', numbers: [], text: 'anything' })).toMatchObject({ status: 404 });
+    } finally {
+      delete host.copyText;
+    }
+    expect(copied).toEqual([]);
+  });
+
   it('saves the full report through the save dialog', async () => {
     const state = await openReady();
     expect((await ask(report(state.id), 'save', { format: 'csv' })).body).toEqual({ outcome: 'saved' });

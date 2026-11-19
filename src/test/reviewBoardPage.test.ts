@@ -16,6 +16,9 @@ let page: FakePage;
 let stopped = false;
 let state: BoardState;
 let waiting: Array<() => void> = [];
+/** What the extension answers the page's Copy and Post preview. */
+let copyAnswer: unknown = { outcome: 'copied', count: 2 };
+let previewAnswer: unknown = { planId: 'p'.repeat(48), title: 'Post 1 comment(s)', lines: [{ target: '#2', change: 'Post inline' }], risky: true };
 
 afterEach(() => {
   stopped = true;
@@ -67,9 +70,12 @@ function results(extra: Partial<ReviewResultsView> = {}): ReviewResultsView {
     tokens: [{ pass: 'Regular pass', text: '1,200 input and 300 output tokens in 3 call(s)' }],
     statuses: [], hasReview: true, canRecheck: false, canRunAgain: true, picker: picker(),
     findings: [
-      { number: 2, severity: 'critical', location: 'src/a.ts:4', title: 'SQL built from input', markers: [] },
-      { number: 1, severity: 'suggestion', location: 'src/b.ts', title: 'Maybe a race', markers: ['location unverified'] },
+      { number: 2, severity: 'critical', location: 'src/a.ts:4', title: 'SQL built from input', markers: [], selected: false },
+      { number: 1, severity: 'suggestion', location: 'src/b.ts', title: 'Maybe a race', markers: ['location unverified'], selected: false },
     ],
+    selectedCount: 0,
+    post: { count: 0, blocker: 'Select the findings to post.' },
+    copy: { scope: 'all', count: 2 },
     ...extra,
   };
 }
@@ -113,6 +119,8 @@ async function loadBoard(initial: BoardState): Promise<void> {
       return state;
     }
     if (op === 'action' || op === 'run') return state;
+    if (op === 'copy') return copyAnswer;
+    if (op === 'preview') return previewAnswer;
     throw { status: 404, message: 'Unknown request.' };
   });
   vi.resetModules();
@@ -199,8 +207,8 @@ describe('the review board page: results', () => {
     expect(must('pr-line').textContent).toBe('PROJ/app#482 Add export by Jane Smith');
     expect(must('review-header').textContent).toBe('Model: GPT (copilot) · Requirements: Jira ticket PROJ-12 · Passes run: Regular');
     expect(must('coverage').textContent).toBe('Requirements coverage (PROJ-12)\n- Export as CSV: met');
-    expect(must('finding-2').textContent).toBe('#2 Critical src/a.ts:4 SQL built from input');
-    expect(must('finding-1').textContent).toBe('#1 Suggestion src/b.ts Maybe a race (location unverified)');
+    expect(must('finding-2').textContent.trim()).toBe('#2 Critical src/a.ts:4 SQL built from input Explain');
+    expect(must('finding-1').textContent.trim()).toBe('#1 Suggestion src/b.ts Maybe a race (location unverified) Explain');
     const order = page.root.elements().map(el => el.id).filter(id => ['review-header', 'coverage', 'findings'].includes(id));
     expect(order).toEqual(['review-header', 'coverage', 'findings']);
   });
@@ -372,6 +380,116 @@ describe('the review board page: passes and runs', () => {
     expect(byId('run-progress')).toBeFalsy();
     expect(must('run-selected').disabled).toBe(true);
     expect(must('pass-security').disabled).toBeFalsy();
+  });
+});
+
+describe('the review board page: findings, drafts, Post and Copy', () => {
+  const stage = 'review' as const;
+  type F = ReviewResultsView['findings'][number];
+  const f2 = (extra: Partial<F> = {}): F => ({ number: 2, severity: 'critical', location: 'src/a.ts:4', title: 'SQL built from input', markers: [], selected: false, ...extra });
+  const f1 = (extra: Partial<F> = {}): F => ({ number: 1, severity: 'suggestion', location: 'src/b.ts', title: 'Maybe a race', markers: [], selected: false, ...extra });
+  const draft = (extra: Partial<NonNullable<F['draft']>> = {}): NonNullable<F['draft']> => ({ text: 'Draft of #2', outdated: false, canUndo: false, ...extra });
+  const selected2 = (extra: Partial<ReviewResultsView> = {}, d: Partial<NonNullable<F['draft']>> = {}, f: Partial<F> = {}) => results({
+    findings: [f2({ selected: true, draft: draft(d), ...f }), f1()],
+    selectedCount: 1, post: { count: 1 }, copy: { scope: 'selected', count: 1 }, ...extra,
+  });
+
+  it('Explain starts one run for its finding, shows Explaining… while it runs and the answer as text after', async () => {
+    await loadBoard(boardState(view({ stage, results: results() })));
+    await click(must('explain-2'));
+    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'explain', number: 2 } }]);
+    await push({ running: [{ size: 'call', what: 'explain:2', label: 'the explanation of #2', done: 0, total: 1 }] });
+    expect(must('explain-2').disabled).toBe(true);
+    expect(must('explain-2').textContent).toBe('Explaining…');
+    expect(must('explain-1').disabled).toBeFalsy();
+    expect(must('select-1').disabled).toBeFalsy();
+    await push({ running: undefined, view: view({ stage, results: results({ findings: [f2({ explanation: '<b>Because</b> [x](https://evil.example)' }), f1({ explainError: 'Explain failed: rate limited' })] }) }) });
+    expect(must('explanation-2').textContent).toBe('<b>Because</b> [x](https://evil.example)');
+    expect(must('explanation-2').elements().length).toBe(0);
+    expect(must('explain-error-1').textContent).toBe('Explain failed: rate limited');
+  });
+
+  it('a checkbox selects one finding and select all selects every finding, each as an action', async () => {
+    await loadBoard(boardState(view({ stage, results: results() })));
+    expect(must('post').disabled).toBe(true);
+    expect(must('copy-teams').textContent).toBe('Copy all 2 for Teams');
+    const box = must('select-2');
+    box.checked = true;
+    box.dispatch('change');
+    await settle();
+    const all = must('select-all');
+    all.checked = true;
+    all.dispatch('change');
+    await settle();
+    expect(posted('action')).toEqual([
+      { revision: 1, action: { type: 'select', numbers: [2], selected: true } },
+      { revision: 1, action: { type: 'select', numbers: [2, 1], selected: true } },
+    ]);
+  });
+
+  it('shows the draft under its finding; it is saved on leaving the box, and an outdated draft offers Regenerate', async () => {
+    await loadBoard(boardState(view({ stage, results: selected2({}, { outdated: true }) })));
+    expect(must('draft-2').value).toBe('Draft of #2');
+    expect(must('finding-2').textContent).toMatch(/explanation changed/);
+    await type(must('draft-2'), 'My comment');
+    await click(must('regenerate-2'));
+    expect(posted('action')).toEqual([
+      { revision: 1, action: { type: 'draft', number: 2, text: 'My comment' } },
+      { revision: 1, action: { type: 'regenerate', number: 2 } },
+    ]);
+    expect(must('post').textContent).toBe('Post 1 comment(s)');
+    expect(must('copy-markdown').textContent).toBe('Copy 1 selected as Markdown');
+  });
+
+  it('Rewrite saves a typed draft first, then runs with the typed instruction; the box is locked while it runs, and Undo and the error line show after', async () => {
+    await loadBoard(boardState(view({ stage, results: selected2() })));
+    await type(must('draft-2'), 'Hand-edited', false);
+    await type(must('instruction-2'), 'Make it shorter', false);
+    await click(must('rewrite-2'));
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'draft', number: 2, text: 'Hand-edited' } }]);
+    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'rewrite', number: 2, instruction: 'Make it shorter' } }]);
+    await push({ running: [{ size: 'call', what: 'rewrite:2', label: 'the rewrite', done: 0, total: 1 }] });
+    expect(must('draft-2').disabled).toBe(true);
+    expect(must('rewrite-2').textContent).toBe('Rewriting…');
+    expect(must('select-1').disabled).toBeFalsy();
+    await push({ running: undefined, view: view({ stage, results: selected2({}, { text: 'Hand-edited', rewriteError: 'Rewrite failed: model unavailable' }) }) });
+    expect(must('rewrite-error-2').textContent).toBe('Rewrite failed: model unavailable');
+    await push({ view: view({ stage, results: selected2({}, { text: 'Shorter', canUndo: true }) }) });
+    await click(must('undo-2'));
+    expect(posted('action').at(-1)).toEqual({ revision: 1, action: { type: 'undo-rewrite', number: 2 } });
+  });
+
+  it('Post saves a typed draft, then asks for the preview; a posted draft is read-only and a failed one says why', async () => {
+    await loadBoard(boardState(view({ stage, results: selected2() })));
+    await type(must('draft-2'), 'Final words', false);
+    await click(must('post'));
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'draft', number: 2, text: 'Final words' } }]);
+    expect(posted('preview')).toEqual([{ revision: 1, action: { type: 'post' } }]);
+    await push({ view: view({ stage, results: results({ findings: [f2({ draft: draft({ posted: 'Posted as comment 100.' }) }), f1({ selected: true, draft: draft({ text: 'x', postError: 'Not posted: Bitbucket said 500' }) })] }) }) });
+    expect(must('draft-2').disabled).toBe(true);
+    expect(must('posted-2').textContent).toBe('Posted as comment 100.');
+    expect(must('post-error-1').textContent).toBe('Not posted: Bitbucket said 500');
+  });
+
+  it('Copy names the format and the selected numbers only, and says what was copied in the live region', async () => {
+    copyAnswer = { outcome: 'copied', count: 1 };
+    await loadBoard(boardState(view({ stage, results: selected2() })));
+    await click(must('copy-teams'));
+    expect(posted('copy')).toEqual([{ format: 'teams', numbers: [2] }]);
+    expect(must('copy-result').textContent).toBe('Copied 1 finding.');
+    expect(page.document.getElementById('board-live')?.textContent).toBe('Copied 1 finding.');
+    copyAnswer = { outcome: 'failed', reason: 'clipboard unavailable' };
+    await click(must('copy-markdown'));
+    expect(posted('copy').at(-1)).toEqual({ format: 'markdown', numbers: [2] });
+    expect(must('copy-result').textContent).toBe('Not copied: clipboard unavailable');
+  });
+
+  it('Copy with nothing selected sends no numbers, for every finding', async () => {
+    copyAnswer = { outcome: 'copied', count: 2 };
+    await loadBoard(boardState(view({ stage, results: results() })));
+    await click(must('copy-markdown'));
+    expect(posted('copy')).toEqual([{ format: 'markdown', numbers: [] }]);
+    expect(must('copy-result').textContent).toBe('Copied 2 findings.');
   });
 });
 

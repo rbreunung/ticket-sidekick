@@ -22,6 +22,7 @@ interface FakePanel {
 }
 
 const created: FakePanel[] = [];
+const clipboard: string[] = [];
 
 function fakePanel(title = ''): FakePanel {
   let receive: ((m: unknown) => unknown) | undefined;
@@ -46,6 +47,7 @@ function fakePanel(title = ''): FakePanel {
 vi.mock('vscode', () => ({
   ViewColumn: { Active: -1 },
   Uri: { joinPath: (base: { fsPath: string }, ...parts: string[]) => ({ fsPath: [base.fsPath, ...parts].join('/') }) },
+  env: { clipboard: { writeText: async (text: string) => { clipboard.push(text); } } },
   window: { createWebviewPanel: (_type: string, title: string) => { const p = fakePanel(title); created.push(p); return p; } },
 }));
 
@@ -243,6 +245,14 @@ describe('the import start screen', () => {
     expect(restored.disposed).toBe(false);
     await restored.send({ id: 1, op: 'view' });
     expect(restored.posted[0]).toMatchObject({ id: 1, ok: true });
+  });
+});
+
+describe('the clipboard', () => {
+  it('is VS Code\'s own: the review board\'s Copy writes the text the extension built there', async () => {
+    clipboard.length = 0;
+    await panels.copyText('PR #482 — Add export');
+    expect(clipboard).toEqual(['PR #482 — Add export']);
   });
 });
 

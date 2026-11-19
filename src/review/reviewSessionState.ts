@@ -243,6 +243,12 @@ export function normalizeShareText(value: string): string {
   return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+/** Longer untrusted text with its line breaks kept: control characters removed, spaces collapsed per line, at most one blank line in a row. */
+function shareParagraphLines(value: string): string[] {
+  const lines = value.replace(/\r\n?/g, '\n').split('\n').map((l) => normalizeShareText(l));
+  return lines.filter((l, i) => l !== '' || (i > 0 && lines[i - 1] !== '')).join('\n').trim().split('\n');
+}
+
 function countFindings(n: number): string {
   return `${n} finding${n !== 1 ? 's' : ''}`;
 }
@@ -256,7 +262,15 @@ function countFindings(n: number): string {
  */
 export function formatReviewForSharing(
   session: Pick<ReviewSession, 'prId' | 'prTitle' | 'prUrl' | 'prAuthor' | 'prTargetBranch' | 'findings'>,
-  options: { targets?: number[]; confidenceThreshold?: number; coverageText?: string } = {},
+  options: {
+    targets?: number[];
+    confidenceThreshold?: number;
+    coverageText?: string;
+    /** Keep the coverage block in a copy limited to some findings, as the review board does. */
+    coverageWithTargets?: boolean;
+    /** Plain-text explanations by finding id, shown under their finding with their line breaks kept. */
+    explanations?: Record<number, string>;
+  } = {},
 ): { text: string; copiedCount: number; totalCount: number; countLabel: string } {
   const threshold = options.confidenceThreshold ?? 0.7;
   const totalCount = session.findings.length;
@@ -278,7 +292,7 @@ export function formatReviewForSharing(
   ].join('\n');
 
   // The ticket check belongs to the whole review, so a copy limited to some findings leaves it out.
-  const coverage = options.targets || !options.coverageText ? '' : `\n\n${options.coverageText}`;
+  const coverage = (options.targets && !options.coverageWithTargets) || !options.coverageText ? '' : `\n\n${options.coverageText}`;
 
   if (copiedCount === 0) {
     return { text: `${header}${coverage}\n\nNo issues found.`, copiedCount, totalCount, countLabel };
@@ -292,6 +306,8 @@ export function formatReviewForSharing(
       `   Recommendation: ${normalizeShareText(f.recommendation)}`,
     ];
     if (typeof f.confidence === 'number' && f.confidence < threshold) lines.push('   (low confidence)');
+    const explanation = options.explanations?.[f.id];
+    if (explanation?.trim()) lines.push('   Explanation:', ...shareParagraphLines(explanation).map((l) => (l ? `   ${l}` : '')));
     return lines.join('\n');
   };
 
