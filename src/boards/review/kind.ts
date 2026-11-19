@@ -1,5 +1,6 @@
 import {
-  rewordGoal, runRegularPass, type PassOutcome, type RequirementsChoice, type RequirementsOutcome, type ReviewStep, type StagedReview, type StoredFinding,
+  rewordGoal, type PassOutcome, type PassStatus, type RequirementsChoice, type RequirementsOutcome, type ReviewStep, type StagedReview, type StoredFinding,
+  type TokenTotals,
 } from '../../review/engine';
 import { renderCoverageText } from '../../review/requirementsCoverage';
 import type { BoardKind, Reduced, RunBegun, RunFinished, RunProgress } from '../../sessions/boardKind';
@@ -12,6 +13,10 @@ import {
   rewordReplacesCorrections, sourceOf, startBlocker, ticketKeyOf, type FirstStep, type FirstStepAction, type FirstStepContext, type SourceId,
 } from './firstStep';
 import { REVIEW_KIND, reviewRecipeOf, type ReviewRecipe } from './recipe';
+import {
+  EXTRA_STEPS, STEP_LABELS, extraPassesRun, interruptedWorking, joinNames, modelFor, modelIdOf, pickedSteps, recheckRun, regularRun,
+  stepBlocker, stepName,
+} from './runs';
 
 // The pull request review board. Its recipe is the pull request's address, so asking again for the
 // same pull request opens the stored review. Reading the source fetches only the pull request's
@@ -35,9 +40,28 @@ export interface ReviewDerived {
   models: ReviewModels;
 }
 
-/** One pass as it ended, with the model it ran on. */
-export interface PassRecord extends PassOutcome {
+/** One pass as it ended, with the model it ran on and the run it was part of. */
+export interface PassRecord extends Omit<PassOutcome, 'status'> {
+  /** `interrupted`: a restart cut the pass off. */
+  status: PassStatus | 'interrupted';
   modelId: string;
+  /** Which run of this review it was part of; the board's banners are about the last run. */
+  run: number;
+}
+
+/** The pass run going on, saved so a restart finds it cut off. */
+export interface ActivePass {
+  /** The regular pass (Start, Run again) or the picked extra passes. */
+  what: 'regular' | 'passes';
+  steps: ReviewStep[];
+  /** The step running now and how far it is. */
+  step: ReviewStep | 'requirements';
+  done: number;
+  total: number;
+  modelId: string;
+  run: number;
+  /** For the regular pass: what it was started with, so Run again works after a restart. */
+  startedWith?: Omit<StartedWith, 'confidenceThreshold'>;
 }
 
 /** What the regular pass was started with. */
@@ -70,11 +94,23 @@ export interface ReviewWorking {
   requirements?: RequirementsOutcome;
   explanations: Record<string, Explanation>;
   drafts: Record<string, Draft>;
+  /** The extra passes picked; undefined means the suggestion. */
+  picked?: ReviewStep[];
+  active?: ActivePass;
+  /** Why the last run on the results did nothing, e.g. Run again declined. */
+  notice?: string;
+  /** Tokens of the requirements re-checks since the regular pass. */
+  recheckTokens?: TokenTotals;
 }
 
-export type ReviewAction = FirstStepAction | { type: 'new-review' } | { type: 'back-to-review' };
+export type ReviewAction =
+  | FirstStepAction
+  | { type: 'new-review' }
+  | { type: 'back-to-review' }
+  | { type: 'pick-pass'; step: ReviewStep; picked: boolean }
+  | { type: 'keep-as-is' };
 
-export type ReviewRunRequest = { type: 'reword' } | { type: 'start' };
+export type ReviewRunRequest = { type: 'reword' } | { type: 'start' } | { type: 'passes' } | { type: 'again' } | { type: 'recheck' };
 
 export interface FindingView {
   number: number;
@@ -104,17 +140,44 @@ export interface FirstStepView {
   storedReview: boolean;
 }
 
+export interface PassChoiceView {
+  step: ReviewStep;
+  label: string;
+  suggested: boolean;
+  /** It ran over every batch of this review. */
+  run: boolean;
+  picked: boolean;
+  available: boolean;
+  reason?: string;
+}
+
+export interface PassPickerView {
+  /** What the regular pass suggested, in words. */
+  suggestion: string;
+  choices: PassChoiceView[];
+  canRun: boolean;
+  runBlocker?: string;
+}
+
 export interface ReviewResultsView {
   model: string;
   requirements: string;
   passesRun: string[];
   /** The head commit moved since the review read the pull request. */
   outOfDate?: { reviewed: string; head: string };
-  /** How the last pass ended, when it did not go over every batch. */
-  status?: string;
+  /** How the passes of the last run ended, for each that did not go over every batch cleanly. */
+  statuses: string[];
+  notice?: string;
+  /** There is a review to show; false after a regular pass that found nothing it could read. */
+  hasReview: boolean;
+  picker?: PassPickerView;
+  /** Why the requirements check gave no coverage, in the coverage position. */
   requirementsLine?: string;
+  canRecheck: boolean;
   coverage?: string;
-  tokens?: string;
+  /** Token usage per pass. */
+  tokens: Array<{ pass: string; text: string }>;
+  canRunAgain: boolean;
   findings: FindingView[];
 }
 
@@ -129,22 +192,12 @@ export interface ReviewView {
   };
   firstStep?: FirstStepView;
   results?: ReviewResultsView;
+  /** The pass running now, e.g. "Security pass: 2 of 5 batches". */
+  progress?: string;
 }
 
-const STEP_LABELS: Record<ReviewStep, string> = {
-  regular: 'Regular', security: 'Security', performance: 'Performance', reliability: 'Reliability', maintainability: 'Maintainability', critic: 'Critic',
-};
 const SEVERITY_ORDER: Record<StoredFinding['severity'], number> = { critical: 0, warning: 1, suggestion: 2 };
 
-function hasWork(working: ReviewWorking): boolean {
-  return Object.keys(working.explanations).length > 0 || Object.keys(working.drafts).length > 0;
-}
-
-/** The model the runs use: the one picked on the board, else the setting's when it is available. */
-function modelIdOf(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>): string | undefined {
-  const { models } = session.derived.data;
-  return session.working.firstStep.modelId ?? (models.state === 'ready' ? models.setting : undefined);
-}
 
 function contextOf(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>): FirstStepContext {
   const { data } = session.derived;
@@ -168,30 +221,43 @@ function requirementsLabel(choice: RequirementsChoice): string {
   return 'none';
 }
 
+function capitalised(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function statusLine(pass: PassRecord): string | undefined {
-  const name = `The ${STEP_LABELS[pass.step].toLowerCase()} pass`;
+  const name = capitalised(stepName(pass.step));
+  const extra = pass.step !== 'regular';
+  const kept = pass.step === 'critic' ? 'its verdicts on them are kept' : 'their findings are kept';
+  const offered = extra ? ' It is not marked as run, so you can pick it again.' : '';
   switch (pass.status) {
     case 'stopped':
-      return `${name} was stopped: ${pass.batchesDone} of ${pass.batchesTotal} batches finished, and their findings are kept.`;
+      return `${name} was stopped: ${pass.batchesDone} of ${pass.batchesTotal} batches finished, and ${kept}.${offered}`;
+    case 'interrupted':
+      return extra
+        ? `${name} was cut off by a restart after ${pass.batchesDone} of ${pass.batchesTotal} batches. The batches it had not saved yet are lost.${offered}`
+        : `${name} was cut off by a restart after ${pass.batchesDone} of ${pass.batchesTotal} batches, before its findings were saved. Run again reviews the pull request.`;
     case 'failed':
-      return `${name} failed${pass.error ? `: ${pass.error}` : '.'}`;
+      return `${name} failed${pass.error ? `: ${pass.error}` : '.'}${pass.step === 'regular' ? ' No batch gave a readable reply, so there are no findings. Run again tries once more.' : ''}`;
     case 'nothing-to-review':
       return 'The pull request has nothing to review after the exclude patterns.';
     case 'commit-unreadable':
-      return `${name} did not run: ${pass.unreadablePath ?? 'a file'} can no longer be read at the reviewed commit.`;
+      return `${name} did not run: ${pass.unreadablePath ?? 'a file'} can no longer be read at the reviewed commit (a force-push may have removed it). It is not marked as run, and no finding changed. Run again reviews the pull request at its newest commit.`;
     default:
-      return pass.failedBatches > 0 ? `${pass.failedBatches} of ${pass.batchesTotal} batches failed; the findings of the others are shown.` : undefined;
+      return pass.failedBatches > 0
+        ? `${pass.failedBatches} of ${pass.batchesTotal} batches of ${stepName(pass.step)} had a part that failed; the findings of the others are shown.`
+        : undefined;
   }
 }
 
 function requirementsLine(outcome: RequirementsOutcome | undefined): string | undefined {
   switch (outcome?.status) {
     case 'ticket-unreadable':
-      return `The requirements check did not run: the ticket ${outcome.key} could not be read (${outcome.message}).`;
+      return `The requirements check did not run: the ticket ${outcome.key} could not be read (${outcome.message}). The findings stand.`;
     case 'failed':
-      return 'The requirements check failed.';
+      return 'The requirements check failed: the model call failed or its reply could not be read. The findings stand.';
     case 'stopped':
-      return 'The requirements check was stopped.';
+      return 'The requirements check was stopped. The findings stand.';
     default:
       return undefined;
   }
@@ -211,29 +277,67 @@ function findingView(f: StoredFinding, threshold: number): FindingView {
   };
 }
 
+function tokenText(t: TokenTotals): string {
+  return `${t.input.toLocaleString('en-US')} input and ${t.output.toLocaleString('en-US')} output tokens in ${t.calls} call(s)${t.estimated ? ' (estimated)' : ''}`;
+}
+
+function suggestionText(review: StagedReview): string {
+  const s = review.suggestion;
+  if (s.kind === 'suggested') return `Suggested: ${joinNames(s.personas.map(stepName))}.`;
+  if (s.kind === 'none-suggested') return 'No extra pass is suggested. You can still pick any of them.';
+  return 'No batch gave a usable recommendation, so nothing is suggested. You can still pick any pass.';
+}
+
+function pickerView(working: ReviewWorking, review: StagedReview): PassPickerView {
+  const picked = pickedSteps(working);
+  const suggested = review.suggestion.kind === 'suggested' ? review.suggestion.personas : [];
+  const choices = EXTRA_STEPS.map((step): PassChoiceView => {
+    const reason = stepBlocker(review, step);
+    return {
+      step, label: capitalised(stepName(step)), suggested: (suggested as ReviewStep[]).includes(step), run: review.store.stepsRun.includes(step),
+      picked: picked.includes(step), available: !reason, ...(reason ? { reason } : {}),
+    };
+  });
+  return { suggestion: suggestionText(review), choices, canRun: picked.length > 0, ...(picked.length === 0 ? { runBlocker: 'Pick at least one pass.' } : {}) };
+}
+
 function resultsView(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>, label: (id: string) => string): ReviewResultsView {
   const { working, derived } = session;
   const { review, startedWith } = working;
-  const last = working.passes[working.passes.length - 1];
+  const lastRun = working.passes[working.passes.length - 1]?.run;
   const threshold = startedWith?.confidenceThreshold ?? 0.7;
-  const tokens = working.passes.reduce((sum, p) => ({ input: sum.input + p.tokens.input, output: sum.output + p.tokens.output, calls: sum.calls + p.tokens.calls }), { input: 0, output: 0, calls: 0 });
-  const status = last ? statusLine(last) : undefined;
-  const line = requirementsLine(working.requirements);
+  const statuses = working.passes.filter(p => p.run === lastRun).map(statusLine).filter((line): line is string => line !== undefined);
+  const line = review ? requirementsLine(working.requirements) : undefined;
+  const tokens = working.passes.filter(p => p.tokens.calls > 0).map(p => ({ pass: p.step === 'critic' ? 'Critic' : `${STEP_LABELS[p.step]} pass`, text: tokenText(p.tokens) }));
+  if (working.recheckTokens && working.recheckTokens.calls > 0) tokens.push({ pass: 'Requirements re-check', text: tokenText(working.recheckTokens) });
   return {
     model: startedWith ? label(startedWith.modelId) : '',
     requirements: requirementsLabel(review?.requirements ?? startedWith?.requirements ?? { kind: 'none' }),
     passesRun: (review?.store.stepsRun ?? []).map(step => STEP_LABELS[step]),
     ...(review && review.snapshot.reviewedCommit !== derived.data.pr.headCommit
       ? { outOfDate: { reviewed: shortCommit(review.snapshot.reviewedCommit), head: shortCommit(derived.data.pr.headCommit) } } : {}),
-    ...(status ? { status } : {}),
+    statuses,
+    ...(working.notice ? { notice: working.notice } : {}),
+    hasReview: review !== undefined,
+    ...(review ? { picker: pickerView(working, review) } : {}),
     ...(line ? { requirementsLine: line } : {}),
+    canRecheck: line !== undefined && review !== undefined && review.requirements.kind !== 'none',
     ...(review?.coverage ? { coverage: renderCoverageText(review.coverage) } : {}),
-    ...(tokens.calls > 0 ? { tokens: `${tokens.input.toLocaleString('en-US')} input and ${tokens.output.toLocaleString('en-US')} output tokens in ${tokens.calls} call(s)` } : {}),
+    tokens,
+    canRunAgain: startedWith !== undefined,
     findings: (review?.store.findings ?? [])
       .slice()
       .sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.id - b.id)
       .map(f => findingView(f, threshold)),
   };
+}
+
+function progressText(working: ReviewWorking): string | undefined {
+  const { active } = working;
+  if (!active) return undefined;
+  if (active.step === 'requirements') return 'Requirements check: running';
+  const name = active.step === 'critic' ? 'Critic' : `${STEP_LABELS[active.step]} pass`;
+  return active.total > 0 ? `${name}: ${active.done} of ${active.total} batches` : `${name}: starting`;
 }
 
 function firstStepView(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>): FirstStepView {
@@ -293,35 +397,17 @@ async function readModels(deps: ReviewBoardDeps): Promise<ReviewModels> {
   return { setting, state: state.state, options: listed.map(m => ({ id: m.id, label: modelLabel(m) })) };
 }
 
+const RUN_TYPES = new Set(['reword', 'start', 'passes', 'again', 'recheck']);
+
 function isRunRequest(request: unknown): request is ReviewRunRequest {
   const type = (request as { type?: unknown } | null)?.type;
-  return type === 'reword' || type === 'start';
-}
-
-function withNotice(notice: string): RunFinished<ReviewWorking> {
-  return { update: w => ({ ...w, firstStep: { ...w.firstStep, notice } }) };
-}
-
-/** The model handle a run uses, after saving a model picked on the board to the setting. */
-async function modelFor(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>, deps: ReviewBoardDeps) {
-  const id = modelIdOf(session);
-  if (!id) return { problem: 'Pick the model first.' };
-  const handle = await deps.models.handle(id);
-  if (!handle) return { problem: `The model "${id}" is not available. Pick another one.` };
-  if (session.working.firstStep.modelId === id && deps.modelSettings.reviewModel().trim() !== id) {
-    try {
-      await deps.modelSettings.writeReviewModel(id);
-      deps.onDiag?.('info', 'Review model setting saved', { setting: REVIEW_MODEL_SETTING, modelId: id });
-    } catch (err) {
-      deps.onDiag?.('warn', 'Could not save the review model setting', { setting: REVIEW_MODEL_SETTING, error: err instanceof Error ? err.message : String(err) });
-    }
-  }
-  return { handle };
+  return typeof type === 'string' && RUN_TYPES.has(type);
 }
 
 async function rewordRun(
   session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>, deps: ReviewBoardDeps, signal: AbortSignal,
 ): Promise<RunFinished<ReviewWorking>> {
+  const notice = (text: string): RunFinished<ReviewWorking> => ({ update: w => ({ ...w, firstStep: { ...w.firstStep, notice: text } }) });
   const step = session.working.firstStep;
   if (rewordReplacesCorrections(step)) {
     const replace = await deps.confirm({
@@ -329,68 +415,72 @@ async function rewordRun(
       detail: 'Reword writes new points from the goal as it is typed now, and your corrections to the points are lost.',
       button: 'Reword',
     });
-    if (!replace) return withNotice('Not reworded: your corrected points were kept.');
+    if (!replace) return notice('Not reworded: your corrected points were kept.');
   }
   const model = await modelFor(session, deps);
-  if (!model.handle) return withNotice(model.problem);
+  if (!('handle' in model)) return notice(model.problem);
   const goal = step.goal;
   const result = await rewordGoal(goal, { model: model.handle, recordTokens: (id, figures) => deps.recordTokens(id, figures), signal, ...(deps.onDiag ? { onDiag: deps.onDiag } : {}) });
   return { update: w => ({ ...w, firstStep: rewordApplied(w.firstStep, goal, result) }) };
 }
 
-async function startRun(
+function workCount(working: ReviewWorking): string {
+  return `${Object.keys(working.explanations).length} explanation(s) and ${Object.keys(working.drafts).length} draft comment(s)`;
+}
+
+function startRun(
   session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>, deps: ReviewBoardDeps, progress: RunProgress<ReviewWorking>, signal: AbortSignal,
 ): Promise<RunFinished<ReviewWorking>> {
-  const { working, recipe } = session;
-  if (working.review && hasWork(working)) {
-    const replace = await deps.confirm({
+  const { working } = session;
+  return regularRun(session, deps, progress, signal, {
+    requirements: requirementsChoiceOf(working.firstStep, contextOf(session)),
+    question: working.firstStep.question.trim(),
+    confirm: {
       title: 'Replace the stored review?',
-      detail: `The stored review has ${Object.keys(working.explanations).length} explanation(s) and ${Object.keys(working.drafts).length} draft comment(s). A new review replaces them.`,
+      detail: `The stored review has ${workCount(working)}. A new review replaces them.`,
       button: 'Replace',
-    });
-    if (!replace) return withNotice('Not started: the stored review was kept. Back to the review shows it.');
-  }
-  const model = await modelFor(session, deps);
-  if (!model.handle) return withNotice(model.problem);
-  const bitbucket = await deps.bitbucket();
-  if (!bitbucket.configured) return withNotice(bitbucket.hint);
-  const jira = await deps.jira();
-  const { confidenceThreshold, ...settings } = await deps.settings();
-  const question = working.firstStep.question.trim();
-  const requirements = requirementsChoiceOf(working.firstStep, contextOf(session));
-  let reported = Promise.resolve();
-  const result = await runRegularPass({
-    target: { project: recipe.project, repo: recipe.repo, prId: recipe.prId },
-    requirements,
-    settings: { ...settings, ...(question ? { focus: question } : {}) },
-  }, {
-    model: model.handle,
-    recordTokens: (id, figures) => deps.recordTokens(id, figures),
-    client: bitbucket.client,
-    ...(jira ? { readTicket: key => jira.readRequirements(key) } : {}),
-    signal,
-    onProgress: p => {
-      if (p.step !== 'regular') return;
-      reported = reported.then(() => progress({ done: p.batchesDone, total: p.batchesTotal })).catch(() => undefined);
+      declined: 'Not started: the stored review was kept. Back to the review shows it.',
     },
-    ...(deps.onDiag ? { onDiag: deps.onDiag } : {}),
-    ...(deps.sleep ? { sleep: deps.sleep } : {}),
+    fromFirstStep: true,
   });
-  await reported;
-  if (result.outcome.status === 'finished') await deps.onReviewCompleted?.();
-  const record: PassRecord = { ...result.outcome, modelId: model.handle.id };
-  const startedWith: StartedWith = { modelId: model.handle.id, requirements, question, confidenceThreshold };
-  return {
-    update: w => {
-      const next: ReviewWorking = {
-        ...w, stage: 'review', firstStep: { ...w.firstStep }, startedWith, passes: [record], requirements: result.requirements, explanations: {}, drafts: {},
-      };
-      delete next.firstStep.notice;
-      if (result.review) next.review = result.review;
-      else delete next.review;
-      return next;
+}
+
+function runAgainRun(
+  session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>, deps: ReviewBoardDeps, progress: RunProgress<ReviewWorking>, signal: AbortSignal,
+): Promise<RunFinished<ReviewWorking>> {
+  const { working } = session;
+  const startedWith = working.startedWith!;
+  return regularRun(session, deps, progress, signal, {
+    requirements: startedWith.requirements,
+    question: startedWith.question,
+    confirm: {
+      title: 'Run the whole review again?',
+      detail: `The review has ${workCount(working)}. Running it again from the regular pass loses them.`,
+      button: 'Run again',
+      declined: 'Not run again: the review, its explanations and drafts were kept.',
     },
-  };
+    fromFirstStep: false,
+  });
+}
+
+function beginResultsRun(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>, request: ReviewRunRequest): RunBegun<ReviewWorking> {
+  const { working } = session;
+  if (working.stage !== 'review') return { ok: false, reason: 'Back to the review first.' };
+  if (request.type === 'again') {
+    return working.startedWith
+      ? { ok: true, size: 'pass', what: 'regular', label: 'the regular pass' }
+      : { ok: false, reason: 'There is no review to run again.' };
+  }
+  const review = working.review;
+  if (!review) return { ok: false, reason: 'There is no review. Run again reviews the pull request.' };
+  if (request.type === 'recheck') {
+    return review.requirements.kind === 'none'
+      ? { ok: false, reason: 'The review has no requirements source to check.' }
+      : { ok: true, size: 'call', what: 'recheck', label: 'the requirements re-check', total: 1 };
+  }
+  const steps = pickedSteps(working);
+  if (steps.length === 0) return { ok: false, reason: 'Pick at least one pass.' };
+  return { ok: true, size: 'pass', what: 'passes', label: joinNames(steps.map(stepName)) };
 }
 
 export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, ReviewAction, ReviewView, ReviewBoardDeps> = {
@@ -432,6 +522,17 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
       if (!working.review && working.passes.length === 0) return { ok: false, reason: 'There is no stored review.' };
       return { ok: true, working: { ...working, stage: 'review' } };
     }
+    if (type === 'pick-pass' || type === 'keep-as-is') {
+      if (working.stage !== 'review' || !working.review) return { ok: false, reason: 'There is no review to add a pass to.' };
+      if (type === 'keep-as-is') return { ok: true, working: { ...working, picked: [] } };
+      const { step, picked } = action as { step?: unknown; picked?: unknown };
+      if (!EXTRA_STEPS.includes(step as ReviewStep) || typeof picked !== 'boolean') return { ok: false, reason: 'Unknown pass.' };
+      const reason = stepBlocker(working.review, step as ReviewStep);
+      if (picked && reason) return { ok: false, reason };
+      const current = pickedSteps(working);
+      const next = picked ? [...current, step as ReviewStep] : current.filter(s => s !== step);
+      return { ok: true, working: { ...working, picked: EXTRA_STEPS.filter(s => next.includes(s)) } };
+    }
     if (typeof type === 'string' && FIRST_STEP_ACTIONS.has(type)) {
       if (working.stage !== 'first-step') return { ok: false, reason: 'Press New review to change the first step.' };
       const reduced = reduceFirstStep(working.firstStep, action as FirstStepAction, contextOf(session));
@@ -442,6 +543,7 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
 
   beginRun(session, request): RunBegun<ReviewWorking> {
     if (!isRunRequest(request)) return { ok: false, reason: 'Unknown run.' };
+    if (request.type === 'passes' || request.type === 'again' || request.type === 'recheck') return beginResultsRun(session, request);
     if (session.working.stage !== 'first-step') return { ok: false, reason: 'Press New review to start another review.' };
     const ctx = contextOf(session);
     if (request.type === 'reword') {
@@ -454,8 +556,16 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
 
   async run(session, request, deps, progress, signal) {
     if (!isRunRequest(request)) throw new Error('Unknown run.');
-    return request.type === 'reword' ? rewordRun(session, deps, signal) : startRun(session, deps, progress, signal);
+    switch (request.type) {
+      case 'reword': return rewordRun(session, deps, signal);
+      case 'start': return startRun(session, deps, progress, signal);
+      case 'again': return runAgainRun(session, deps, progress, signal);
+      case 'recheck': return recheckRun(session, deps, signal);
+      case 'passes': return extraPassesRun(session, pickedSteps(session.working), deps, progress, signal);
+    }
   },
+
+  interrupted: interruptedWorking,
 
   view(session): ReviewView {
     const { recipe, derived, working } = session;
@@ -466,6 +576,7 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
       stage: working.stage,
       model: modelView(session, label),
       ...(working.stage === 'first-step' ? { firstStep: firstStepView(session) } : { results: resultsView(session, label) }),
+      ...(working.active ? { progress: progressText(working) } : {}),
     };
   },
 };

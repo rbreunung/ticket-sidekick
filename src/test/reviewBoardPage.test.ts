@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { asBoardRequest } from '../boards/boardMessages';
-import type { FirstStepView, ReviewResultsView, ReviewView } from '../boards/review/kind';
+import type { FirstStepView, PassPickerView, ReviewResultsView, ReviewView } from '../boards/review/kind';
 import type { BoardState } from '../sessions/sessionManager';
 import { installFakePage, removeFakePage, settle, type FakeElement, type FakePage } from './helpers/fakeDom';
 
@@ -64,12 +64,23 @@ function results(extra: Partial<ReviewResultsView> = {}): ReviewResultsView {
   return {
     model: 'GPT (copilot)', requirements: 'Jira ticket PROJ-12', passesRun: ['Regular'],
     coverage: 'Requirements coverage (PROJ-12)\n- Export as CSV: met',
-    tokens: '1,200 input and 300 output tokens in 3 call(s)',
+    tokens: [{ pass: 'Regular pass', text: '1,200 input and 300 output tokens in 3 call(s)' }],
+    statuses: [], hasReview: true, canRecheck: false, canRunAgain: true, picker: picker(),
     findings: [
       { number: 2, severity: 'critical', location: 'src/a.ts:4', title: 'SQL built from input', markers: [] },
       { number: 1, severity: 'suggestion', location: 'src/b.ts', title: 'Maybe a race', markers: ['location unverified'] },
     ],
     ...extra,
+  };
+}
+
+function picker(extra: Partial<PassPickerView> = {}): PassPickerView {
+  const choice = (step: PassPickerView['choices'][number]['step'], label: string) => ({ step, label, suggested: false, run: false, picked: false, available: true });
+  return {
+    suggestion: 'No extra pass is suggested. You can still pick any of them.',
+    choices: [choice('security', 'The security pass'), choice('performance', 'The performance pass'), choice('reliability', 'The reliability pass'),
+      choice('maintainability', 'The maintainability pass'), choice('critic', 'The critic')],
+    canRun: false, runBlocker: 'Pick at least one pass.', ...extra,
   };
 }
 
@@ -217,6 +228,106 @@ describe('the review board page: results', () => {
   it('says so when there are no findings', async () => {
     await loadBoard(boardState(view({ stage: 'review', results: results({ findings: [] }) })));
     expect(page.root.textContent).toContain('No issues found.');
+  });
+});
+
+describe('the review board page: passes and runs', () => {
+  const stage = 'review' as const;
+
+  it('with no extra pass suggested, says so and still offers all five passes; a tick is sent as an action', async () => {
+    await loadBoard(boardState(view({ stage, results: results() })));
+    expect(must('pass-suggestion').textContent).toBe('No extra pass is suggested. You can still pick any of them.');
+    const boxes = ['security', 'performance', 'reliability', 'maintainability', 'critic'].map(step => must(`pass-${step}`));
+    expect(boxes.every(b => !b.disabled && !b.checked)).toBe(true);
+    expect(must('run-selected').disabled).toBe(true);
+    const order = page.root.elements().map(el => el.id).filter(id => ['review-header', 'pass-picker', 'coverage', 'findings'].includes(id));
+    expect(order).toEqual(['review-header', 'pass-picker', 'coverage', 'findings']);
+
+    boxes[0].checked = true;
+    boxes[0].dispatch('change');
+    await settle();
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'pick-pass', step: 'security', picked: true } }]);
+  });
+
+  it('marks a pass already run, and Run selected starts one run; Keep as is is an action', async () => {
+    const p = picker({ suggestion: 'Suggested: the security pass.', canRun: true });
+    p.choices[0] = { ...p.choices[0], run: true, available: false, reason: 'Run already.' };
+    p.choices[4] = { ...p.choices[4], picked: true };
+    await loadBoard(boardState(view({ stage, results: results({ picker: { ...p, runBlocker: undefined } }) })));
+    expect(must('pass-security').disabled).toBe(true);
+    expect(must('pass-security-run').textContent).toBe(' (run)');
+    expect(must('pass-critic').checked).toBe(true);
+    await click(must('run-selected'));
+    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'passes' } }]);
+    await click(must('keep-as-is'));
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'keep-as-is' } }]);
+  });
+
+  it('while a pass runs, every other control is locked, Stop is enabled, and the live region reads the pass progress', async () => {
+    const p = picker({ canRun: true });
+    await loadBoard(boardState(view({ stage, results: results({ picker: { ...p, runBlocker: undefined }, requirementsLine: 'The requirements check failed.', canRecheck: true }) })));
+    await push({
+      running: [{ size: 'pass', what: 'passes', label: 'the security pass', done: 2, total: 5 }],
+      view: view({ stage, progress: 'Security pass: 2 of 5 batches', results: results({ picker: { ...p, runBlocker: undefined }, requirementsLine: 'The requirements check failed.', canRecheck: true }) }),
+    });
+    for (const id of ['run-selected', 'keep-as-is', 'run-again', 'new-review', 'recheck', 'pass-security', 'pass-critic', 'refresh', 'discard']) {
+      expect(must(id).disabled, id).toBe(true);
+    }
+    expect(must('stop-run').disabled).toBeFalsy();
+    expect(must('board-live').textContent).toBe('Security pass: 2 of 5 batches');
+    expect(must('progress-text').textContent).toBe('Security pass: 2 of 5 batches');
+    await click(must('stop-run'));
+    expect(page.posted.filter(m => m.op === 'stop')).toHaveLength(1);
+  });
+
+  it('a finished review with no findings shows "No issues found" with the picker, the token usage and Run again', async () => {
+    await loadBoard(boardState(view({ stage, results: results({ findings: [], coverage: undefined }) })));
+    expect(must('no-issues').textContent).toBe('No issues found.');
+    expect(byId('pass-picker')).toBeTruthy();
+    expect(must('tokens').textContent).toBe('Regular pass: 1,200 input and 300 output tokens in 3 call(s)');
+    await click(must('run-again'));
+    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'again' } }]);
+  });
+
+  it('a regular pass whose batches all failed shows the failure banner and Run again, and no findings controls', async () => {
+    await loadBoard(boardState(view({
+      stage,
+      results: results({
+        hasReview: false, picker: undefined, coverage: undefined, findings: [], passesRun: [],
+        statuses: ['The regular pass failed: The model is overloaded No batch gave a readable reply, so there are no findings. Run again tries once more.'],
+      }),
+    })));
+    expect(must('pass-status-0').textContent).toMatch(/^The regular pass failed/);
+    for (const id of ['pass-picker', 'findings', 'no-issues', 'run-selected']) expect(byId(id), id).toBeFalsy();
+    expect(byId('run-again')).toBeTruthy();
+  });
+
+  it('shows a failed requirements check in the coverage position with Re-check, locked only while the re-check runs', async () => {
+    const p = { ...picker({ canRun: true }), runBlocker: undefined };
+    const r = results({ picker: p, coverage: undefined, requirementsLine: 'The requirements check did not run: the ticket PROJ-12 could not be read (Issue does not exist). The findings stand.', canRecheck: true });
+    await loadBoard(boardState(view({ stage, results: r })));
+    const order = page.root.elements().map(el => el.id).filter(id => ['pass-picker', 'requirements-failure', 'findings'].includes(id));
+    expect(order).toEqual(['pass-picker', 'requirements-failure', 'findings']);
+    expect(must('requirements-line').textContent).toMatch(/ticket PROJ-12 could not be read/);
+    await click(must('recheck'));
+    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'recheck' } }]);
+
+    await push({ running: [{ size: 'call', what: 'recheck', label: 'the requirements re-check', done: 0, total: 1 }] });
+    expect(must('recheck').disabled).toBe(true);
+    expect(must('recheck').textContent).toBe('Re-checking…');
+    expect(must('run-selected').disabled).toBeFalsy();
+  });
+
+  it('a board restored after a restart mid-pass shows the interrupted banner and no running state', async () => {
+    await loadBoard(boardState(view({
+      stage,
+      results: results({ statuses: ['The security pass was cut off by a restart after 2 of 5 batches. The batches it had not saved yet are lost. It is not marked as run, so you can pick it again.'] }),
+    }), { restored: true }));
+    expect(must('pass-status-0').textContent).toMatch(/cut off by a restart after 2 of 5 batches/);
+    expect(byId('stop-run')).toBeFalsy();
+    expect(byId('run-progress')).toBeFalsy();
+    expect(must('run-selected').disabled).toBe(true);
+    expect(must('pass-security').disabled).toBeFalsy();
   });
 });
 

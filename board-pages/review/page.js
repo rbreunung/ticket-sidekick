@@ -1,9 +1,12 @@
-import { h, startBoard } from '../shared/board.js';
+import { announce, h, startBoard } from '../shared/board.js';
 
 // The pull request review board, one column. The first step: the model, the requirements source
 // (a Jira ticket, a goal or none), the goal and its rewording, and an optional question; nothing runs
 // before Start, and only Reword calls the model before it. After the regular pass: a header line
-// (pull request, model, requirements source, passes run), the coverage block and the findings.
+// (pull request, model, requirements source, passes run) with the token usage per pass, the banners
+// of the last run, the pass suggestion and picker, the coverage block (or why the requirements check
+// gave none, with Re-check), the findings, and Run again. While a pass runs, the live region reads
+// its progress, e.g. "Security pass: 2 of 5 batches".
 // The page keeps only what is being typed and not sent yet. Everything from Bitbucket, Jira or the
 // model is written as text.
 
@@ -133,33 +136,73 @@ function firstStep(view, board, off) {
 
 // ---- the results ------------------------------------------------------------------------------
 
+function passPicker(picker, board, off) {
+  return h('section', { id: 'pass-picker', 'aria-label': 'Extra passes' },
+    h('h2', {}, 'Extra passes'),
+    h('p', { id: 'pass-suggestion' }, picker.suggestion),
+    h('fieldset', { class: 'passes' },
+      h('legend', {}, 'Passes to run'),
+      picker.choices.map(c => h('label', { class: 'pass' },
+        h('input', {
+          type: 'checkbox', id: `pass-${c.step}`, checked: c.picked, disabled: off || !c.available,
+          onChange: e => board.act({ type: 'pick-pass', step: c.step, picked: Boolean(e.target.checked) }),
+        }), ` ${c.label}`,
+        c.suggested ? h('span', { class: 'muted' }, ' (suggested)') : null,
+        c.run ? h('span', { class: 'muted', id: `pass-${c.step}-run` }, ' (run)') : null,
+        c.reason && !c.run ? h('span', { class: 'muted' }, ` ${c.reason}`) : null))),
+    h('div', { class: 'bar' },
+      h('vscode-button', { id: 'run-selected', disabled: off || !picker.canRun, onClick: () => board.run({ type: 'passes' }) }, 'Run selected'),
+      h('vscode-button', { id: 'keep-as-is', secondary: true, disabled: off, onClick: () => board.act({ type: 'keep-as-is' }) }, 'Keep as is'),
+      picker.runBlocker ? h('span', { class: 'muted' }, picker.runBlocker) : null));
+}
+
+function requirementsBlock(r, board, off) {
+  const rechecking = Boolean(board.running('recheck'));
+  return [
+    r.requirementsLine ? h('section', { id: 'requirements-failure', class: 'banner', 'aria-label': 'Requirements check' },
+      h('p', { id: 'requirements-line' }, r.requirementsLine),
+      r.canRecheck ? h('vscode-button', { id: 'recheck', secondary: true, disabled: off || rechecking, onClick: () => board.run({ type: 'recheck' }) },
+        rechecking ? 'Re-checking…' : 'Re-check') : null) : null,
+    r.coverage ? h('section', { id: 'coverage', 'aria-label': 'Requirements coverage' }, h('pre', { class: 'coverage' }, r.coverage)) : null,
+  ];
+}
+
 function results(view, board, off) {
   const r = view.results;
   return h('section', { id: 'results', 'aria-label': 'Review' },
     h('p', { id: 'review-header', class: 'muted' },
       [`Model: ${r.model || 'unknown'}`, `Requirements: ${r.requirements}`, `Passes run: ${r.passesRun.length ? r.passesRun.join(', ') : 'none'}`].join(' · ')),
+    r.tokens.length ? h('ul', { id: 'tokens', class: 'muted', 'aria-label': 'Token usage per pass' },
+      r.tokens.map(t => h('li', {}, `${t.pass}: ${t.text}`))) : null,
+    view.progress ? h('p', { id: 'progress-text', class: 'muted' }, view.progress) : null,
     r.outOfDate ? h('p', { id: 'out-of-date', class: 'banner', role: 'status' },
-      `Out of date: the pull request has a new commit (${r.outOfDate.head}) since this review read ${r.outOfDate.reviewed}. Nothing runs by itself; press New review to review it again.`) : null,
-    r.status ? h('p', { id: 'pass-status', class: 'banner' }, r.status) : null,
-    // The pass picker goes here, above the coverage and the findings.
-    r.requirementsLine ? h('p', { id: 'requirements-line', class: 'banner' }, r.requirementsLine) : null,
-    r.coverage ? h('section', { id: 'coverage', 'aria-label': 'Requirements coverage' }, h('pre', { class: 'coverage' }, r.coverage)) : null,
-    h('h2', {}, `Findings (${r.findings.length})`),
-    r.findings.length === 0 ? h('p', { class: 'muted' }, 'No issues found.') : h('ol', { id: 'findings', class: 'findings' },
-      r.findings.map(f => h('li', { id: `finding-${f.number}`, value: f.number },
-        h('span', { class: `severity severity-${f.severity}` }, `#${f.number} ${SEVERITY_TEXT[f.severity] ?? f.severity}`), ' ',
-        h('span', { class: 'location' }, f.location), ' ',
-        h('span', { class: 'title' }, f.title),
-        f.markers.length ? h('span', { class: 'muted markers' }, ` (${f.markers.join(', ')})`) : null))),
-    r.tokens ? h('p', { id: 'tokens', class: 'muted' }, `Token usage: ${r.tokens}.`) : null,
+      `Out of date: the pull request has a new commit (${r.outOfDate.head}) since this review read ${r.outOfDate.reviewed}. Nothing runs by itself; Run again reviews it at the new commit.`) : null,
+    r.statuses.map((line, i) => h('p', { id: `pass-status-${i}`, class: 'banner' }, line)),
+    r.notice ? h('p', { id: 'review-notice', class: 'banner', role: 'status' }, r.notice) : null,
+    r.hasReview ? [
+      r.picker ? passPicker(r.picker, board, off) : null,
+      requirementsBlock(r, board, off),
+      h('h2', {}, `Findings (${r.findings.length})`),
+      r.findings.length === 0 ? h('p', { id: 'no-issues' }, 'No issues found.') : h('ol', { id: 'findings', class: 'findings' },
+        r.findings.map(f => h('li', { id: `finding-${f.number}`, value: f.number },
+          h('span', { class: `severity severity-${f.severity}` }, `#${f.number} ${SEVERITY_TEXT[f.severity] ?? f.severity}`), ' ',
+          h('span', { class: 'location' }, f.location), ' ',
+          h('span', { class: 'title' }, f.title),
+          f.markers.length ? h('span', { class: 'muted markers' }, ` (${f.markers.join(', ')})`) : null))),
+    ] : null,
     h('div', { class: 'bar' },
+      r.canRunAgain ? h('vscode-button', { id: 'run-again', disabled: off, onClick: () => board.run({ type: 'again' }) }, 'Run again') : null,
       h('vscode-button', { id: 'new-review', secondary: true, disabled: off, onClick: () => board.act({ type: 'new-review' }) }, 'New review')));
 }
 
 startBoard({
   root: document.getElementById('root'),
   loading: () => h('p', { class: 'muted' }, 'Reading the pull request…'),
-  render: (view, board, locked) => h('div', {},
-    headerLine(view),
-    view.stage === 'first-step' ? firstStep(view, board, locked) : results(view, board, locked)),
+  render: (view, board, locked) => {
+    announce(view.progress ?? '');
+    return h('div', {},
+      headerLine(view),
+      view.stage === 'first-step' ? [view.progress ? h('p', { id: 'progress-text', class: 'muted' }, view.progress) : null, firstStep(view, board, locked)]
+        : results(view, board, locked));
+  },
 });
