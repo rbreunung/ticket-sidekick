@@ -3,6 +3,7 @@ import type { SessionManager } from '../sessions/sessionManager';
 import { SessionError } from '../sessions/sessionTypes';
 import { IMPORT_KIND, withReportPath, type ImportRecipe, type ReportKind } from './import/recipe';
 import { IMPORT_START_BOARD, type ImportStartScreen } from './import/startScreen';
+import { REVIEW_START_BOARD, type ReviewStartScreen } from './review/startScreen';
 
 // What a board page may ask of the extension. A page lives in an editor tab (a webview) and talks
 // to the extension over VS Code's own message channel: it posts a request, the tab's host answers
@@ -10,7 +11,8 @@ import { IMPORT_START_BOARD, type ImportStartScreen } from './import/startScreen
 // nothing here: the tab knows its kind and session, and the session manager does the rest. The
 // import start screen has no session either: its requests go to the start screen the host holds,
 // which also brings the native file dialog and the setting writes, so its page names no file path,
-// no setting key and no session.
+// no setting key and no session. The review start screen is the same: it takes a pull request link
+// and opens that review's board.
 
 export const SESSIONS_BOARD = 'sessions';
 
@@ -36,6 +38,8 @@ export interface BoardHost {
   openStored(kind: string, id: string): Promise<{ ok: true } | { ok: false; reason: string }>;
   /** The import start screen of this window; absent where imports are not available. */
   readonly importStart?: ImportStartScreen;
+  /** The pull request review start screen of this window; absent where reviews are not available. */
+  readonly reviewStart?: ReviewStartScreen;
   /** VS Code's native open dialog for a report of this kind; undefined when it was cancelled. */
   pickReportFile?(kind: ReportKind): Promise<string | undefined>;
   /** Points the tab that shows `fromId` at the session it moved to. */
@@ -156,6 +160,10 @@ export async function handleBoardRequest(manager: SessionManager, target: BoardT
     if (target.kind === IMPORT_START_BOARD) {
       if (!host.importStart) throw new BoardRequestError(404, 'There is no import start screen here.');
       return await host.importStart.handle(op, body);
+    }
+    if (target.kind === REVIEW_START_BOARD) {
+      if (!host.reviewStart) throw new BoardRequestError(404, 'There is no review start screen here.');
+      return await host.reviewStart.handle(op, body);
     }
     return await sessionBoard(manager, target, op, body, host);
   } catch (err) {

@@ -61,5 +61,15 @@ export function boardTests(extensionId: string): E2eTest[] {
         assert.ok(stats().requestsAnswered > before, 'the tab is open, but its page sent no request to the extension');
       },
     },
+    {
+      name: 'the pull request review opens its start screen as an editor tab from the Command Palette',
+      fn: async () => {
+        await vscode.commands.executeCommand('ticket-sidekick.boards.openReview');
+        const deadline = Date.now() + LOAD_TIMEOUT_MS;
+        while (!boardTab('Review a pull request') && Date.now() < deadline) await sleep(250);
+        assert.ok(boardTab('Review a pull request'), 'no editor tab titled "Review a pull request" was opened');
+        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+      },
+    },
   ];
 }

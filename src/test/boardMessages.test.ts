@@ -4,6 +4,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { answerBoardRequest, asBoardRequest, type BoardHost } from '../boards/boardMessages';
 import { ImportStartScreen } from '../boards/import/startScreen';
+import { ReviewStartScreen } from '../boards/review/startScreen';
 import { importKind } from '../boards/import/kind';
 import { securityReportKind, type SecurityReportDeps } from '../boards/securityReport/kind';
 import { registerKind, type BoardKind } from '../sessions/boardKind';
@@ -315,6 +316,31 @@ describe('the import start screen', () => {
     expect((await askStart(boardHost, 'state')).status).toBe(404);
     expect((await askStart(boardHost, 'apply', { planId: 'x' })).status).toBe(404);
     expect(await askStart(host, 'view')).toEqual({ status: 404, body: { error: 'There is no import start screen here.' } });
+  });
+});
+
+describe('the review start screen', () => {
+  const START = { kind: 'review-start', id: '' };
+
+  async function askReview(boardHost: BoardHost, op: string, body: Record<string, unknown> = {}): Promise<{ status: number; body: any }> {
+    const reply = await answerBoardRequest(manager, START, { id: nextId++, op, body }, boardHost, message => errors.push(message));
+    return reply.ok ? { status: 200, body: reply.data } : { status: reply.status, body: { error: reply.error } };
+  }
+
+  it('answers the page through the start screen, which opens the review board for the link', async () => {
+    const opened: Array<{ url: string }> = [];
+    const boardHost: BoardHost = {
+      ...host,
+      reviewStart: new ReviewStartScreen({ bitbucketHint: async () => undefined, openReview: async input => { opened.push(input); return { ok: true, title: 'Review: PROJ/app#7' }; } }),
+    };
+    const reply = await askReview(boardHost, 'open', { url: 'https://bitbucket.org/team/app/pull-requests/7/overview' });
+    expect(reply).toEqual({ status: 200, body: { url: 'https://bitbucket.org/team/app/pull-requests/7/overview', opened: 'Review: PROJ/app#7' } });
+    expect(opened).toEqual([{ url: 'https://bitbucket.org/team/app/pull-requests/7' }]);
+    expect((await askReview(boardHost, 'state')).status).toBe(404);
+  });
+
+  it('is not there where the host has no review start screen', async () => {
+    expect(await askReview(host, 'view')).toEqual({ status: 404, body: { error: 'There is no review start screen here.' } });
   });
 });
 

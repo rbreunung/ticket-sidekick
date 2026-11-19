@@ -102,6 +102,10 @@
       {
         "command": "ticket-sidekick.openImportBoard",
         "title": "Ticket Sidekick: Open import board"
+      },
+      {
+        "command": "ticket-sidekick.boards.openReview",
+        "title": "Ticket Sidekick: Review a pull request"
       }
     ],
     "languageModelTools": [

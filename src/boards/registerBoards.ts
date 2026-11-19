@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as os from 'os';
 import * as path from 'path';
+import { BitbucketApiClient } from '../bitbucket/BitbucketApiClient';
 import { ConfigService } from '../services/ConfigService';
 import { TicketService } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
@@ -15,6 +16,7 @@ import { registerKind } from '../sessions/boardKind';
 import { SessionManager } from '../sessions/sessionManager';
 import { SessionStore } from '../sessions/sessionStore';
 import { logDiag } from '../utils/diagLog';
+import { TokenUsageService } from '../utils/tokenUsage';
 import { localDate } from '../utils/securityOverview';
 import { resolveCsvDelimiter } from '../utils/securityOverviewCsv';
 import type { JiraAccess } from '../tools/jiraTools/jiraAccess';
@@ -25,6 +27,10 @@ import { importJiraDeps } from './import/jiraDeps';
 import type { ImportDescriptors } from './import/read';
 import { IMPORT_KIND, type ReportKind } from './import/recipe';
 import { IMPORT_START_BOARD, ImportStartScreen, reportReaderOf, type ReportReader } from './import/startScreen';
+import { BITBUCKET_NOT_CONFIGURED, type BitbucketAccess, type ReviewBoardDeps } from './review/deps';
+import { reviewKind } from './review/kind';
+import { REVIEW_KIND } from './review/recipe';
+import { REVIEW_START_BOARD, ReviewStartScreen } from './review/startScreen';
 import { SECURITY_REPORT_KIND, securityReportKind, type SecurityReportDeps } from './securityReport/kind';
 import { ticketListJiraDeps } from './ticketList/jiraDeps';
 import { checkCleanupRules, describeRuleProblem, type RuleProblem } from './ticketList/cleanupSource';
@@ -40,6 +46,7 @@ export const BOARD_COMMANDS = {
   cleanup: 'ticket-sidekick.boards.cleanup',
   sessions: 'ticket-sidekick.boards.sessions',
   importBoard: 'ticket-sidekick.openImportBoard',
+  review: 'ticket-sidekick.boards.openReview',
 } as const;
 
 const DEFAULT_RETENTION_DAYS = 14;
@@ -180,10 +187,58 @@ export function registerBoards(
     },
     onDiag: (level, message, details) => logDiag('boards.import', level, message, details),
   });
+  const configService = new ConfigService(context);
+  /** Bitbucket as configured now: the client, or the setup hint. */
+  const bitbucketAccess = async (): Promise<BitbucketAccess> => {
+    const config = await configService.getBitbucketConfig();
+    if (!configService.isBitbucketConfigured(config)) return { configured: false, hint: BITBUCKET_NOT_CONFIGURED };
+    return {
+      configured: true,
+      client: new BitbucketApiClient({
+        baseUrl: config.baseUrl ?? '',
+        authType: config.authType,
+        token: config.token!,
+        onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
+      }),
+    };
+  };
+  // One counter store per window, the same monthly per-model counters `@bitbucket usage` shows.
+  const tokenUsage = new TokenUsageService(context.globalState);
+  const reviewDeps: ReviewBoardDeps = {
+    bitbucket: bitbucketAccess,
+    jira: async () => {
+      const access = await getJira();
+      if (!access.configured) return undefined;
+      const ticketService = new TicketService(access.client, (level, message, details) => logDiag('jira.ticketService', level, message, details));
+      return { readRequirements: key => ticketService.getRequirementsSource(key) };
+    },
+    models: vscodeBoardModels('Ticket Sidekick reviews a Bitbucket pull request on the review board.'),
+    modelSettings,
+    settings: async () => {
+      const config = await configService.getBitbucketConfig();
+      return {
+        ...(config.reviewInstructions ? { reviewInstructions: config.reviewInstructions } : {}),
+        ...(config.reviewContextLines !== undefined ? { contextLines: config.reviewContextLines } : {}),
+        ...(config.reviewExcludePatterns ? { excludePatterns: config.reviewExcludePatterns } : {}),
+        ...(config.modelContextTokens ? { modelContextTokens: config.modelContextTokens } : {}),
+        ...(config.contextBudgetRatio !== undefined ? { contextBudgetRatio: config.contextBudgetRatio } : {}),
+        confidenceThreshold: config.confidenceThreshold ?? 0.7,
+      };
+    },
+    recordTokens: (modelId, figures) => tokenUsage.record(modelId, figures),
+    confirm: async question => (await vscode.window.showWarningMessage(
+      `Ticket Sidekick: ${question.title}`, { modal: true, detail: question.detail }, question.button,
+    )) === question.button,
+    // The Bitbucket walkthrough's "first PR review" step completes on this context key.
+    onReviewCompleted: async () => { await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstReviewCompleted', true); },
+    now: () => Date.now(),
+    onDiag: (level, message, details) => logDiag('boards.review', level, message, details),
+  };
   const kinds = [
     registerKind(securityReportKind, () => securityReportDeps),
     registerKind(ticketListKind, () => ticketListDeps),
     registerKind(importKind, () => importDeps),
+    registerKind(reviewKind, () => reviewDeps),
   ];
 
   // Per workspace, outside the repository; the global folder only when no folder is open.
@@ -223,7 +278,6 @@ export function registerBoards(
 
   // The pages are plain files shipped with the extension and loaded by the tab itself.
   const pagesRoot = vscode.Uri.joinPath(context.extensionUri, 'out', 'board-pages');
-  const configService = new ConfigService(context);
   const readers: Record<ReportKind, ReportReader> = {
     veracode: reportReaderOf(descriptors.veracode),
     waltz: reportReaderOf(descriptors.waltz),
@@ -281,9 +335,17 @@ export function registerBoards(
     },
     onDiag: (level, message, details) => logDiag('boards.importStart', level, message, details),
   });
+  const reviewStart = new ReviewStartScreen({
+    bitbucketHint: async () => {
+      const access = await bitbucketAccess();
+      return access.configured ? undefined : access.hint;
+    },
+    openReview: input => panels.open(REVIEW_KIND, input),
+    onDiag: (level, message, details) => logDiag('boards.reviewStart', level, message, details),
+  });
   const panels = new BoardPanels(
     manager, kinds.map(k => k.kind.kind), pagesRoot, message => log('error', 'A board request failed', { error: message }), importStart,
-    kind => pickReportFile(readers[kind].fileFilter),
+    kind => pickReportFile(readers[kind].fileFilter), reviewStart,
   );
   /** Opens a board from the Command Palette and says why when it cannot. */
   const openFromCommand = async (kind: string, input: unknown) => {
@@ -340,6 +402,7 @@ export function registerBoards(
     }),
     vscode.commands.registerCommand(BOARD_COMMANDS.sessions, () => openFromCommand(SESSIONS_BOARD, {})),
     vscode.commands.registerCommand(BOARD_COMMANDS.importBoard, () => openFromCommand(IMPORT_START_BOARD, {})),
+    vscode.commands.registerCommand(BOARD_COMMANDS.review, () => openFromCommand(REVIEW_START_BOARD, {})),
     { dispose: () => clearInterval(timer) },
     vscode.commands.registerCommand(BOARD_COMMANDS.clearSessions, async () => {
       const choice = await vscode.window.showWarningMessage(
