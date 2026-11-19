@@ -6,16 +6,20 @@ Every tool Ticket Sidekick gives GitHub Copilot's Agent mode, with the name to r
 
 In Copilot Chat's **Agent** mode, ask for what you want in your own words, e.g. "Show me the diff of this pull request" or "Post a comment on the PR saying the fix looks good". Copilot picks the tools it needs. You can also name a tool in your prompt with `#`, e.g. `#bitbucketGetPullRequest`.
 
-The Bitbucket tools only show up once your Bitbucket credentials are set. If one is called before that, it answers with the setup step that is missing.
+The Bitbucket tools are always offered. If one is called before your Bitbucket credentials are set, it answers with the setup step that is missing.
 
 ## Tools that only read
 
-These run without asking.
+These run without asking. The review board tool only opens the board.
 
 | Tool | Reference | What it does |
 | --- | --- | --- |
+| `bitbucket_check_connection` | `#bitbucketCheckConnection` | Checks the Bitbucket connection: the settings, whether a token is stored and the signed-in user |
 | `bitbucket_getPullRequest` | `#bitbucketGetPullRequest` | Shows a pull request's title, description, author and target branch |
 | `bitbucket_getPullRequestDiff` | `#bitbucketGetPullRequestDiff` | Shows a pull request's diff |
+| `bitbucket_open_review` | `#bitbucketOpenReview` | Opens the review board of a pull request in an editor tab; the review runs there when you start it |
+| `bitbucket_read_findings` | `#bitbucketReadFindings` | Reads a stored review: the summary (findings by severity, passes run, verdict, requirements coverage), the findings list, or one finding with its code and explanation |
+| `bitbucket_token_usage` | `#bitbucketTokenUsage` | Shows the tokens the reviews used, per month and model |
 
 ## Tools that change something
 
@@ -30,7 +34,7 @@ This shows a confirmation with the exact comment text before it runs. Nothing ha
 - **One pull request at a time.** Each tool works on a single pull request.
 - **No accidental duplicates.** If Copilot repeats the same comment within a minute, the repeat is skipped. A retry after a real failure still goes through.
 - **Auto-approve skips the confirmation.** If you turned on VS Code's `chat.tools.autoApprove`, the comment tool runs without asking. It still checks its own inputs.
-- **No full PR review as a tool yet.** A complete review still runs in the deprecated `@bitbucket` chat participant: paste the PR link there — see [Bitbucket PR Review](bitbucket-pr-review.md). A review board is planned to replace it.
+- **The review runs on the board.** `bitbucket_open_review` answers as soon as the board is open; Copilot reads the result with `bitbucket_read_findings` once the review has run. The deprecated `@bitbucket` chat participant still reviews too — see [Bitbucket PR Review](bitbucket-pr-review.md).
 
 ## Jira tools
 

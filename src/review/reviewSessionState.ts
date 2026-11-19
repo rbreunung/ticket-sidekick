@@ -3,8 +3,7 @@ import type { RequirementsTicket } from '../utils/requirementsSource';
 import type { RequirementsCoverage } from './requirementsCoverage';
 // Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
 // stays safe for a vscode-free, Vitest-loadable module.
-import type { BitbucketConfig, BitbucketPR, ReviewMode } from '../bitbucket/IBitbucketClient';
-import type { ToolConfirmation } from '../tools/toolConfirmation';
+import type { ReviewMode } from '../bitbucket/IBitbucketClient';
 // Type-only — PrReviewService.ts imports FileDiff/ReviewFinding from this module, so this stays
 // a type-only (erased) import to avoid a runtime circular dependency.
 import type { PersonaId } from '../services/PrReviewService';
@@ -150,25 +149,6 @@ export const ALL_PERSONA_IDS: PersonaId[] = ['security', 'performance', 'reliabi
  * can count it as a distinct pass.
  */
 export type SourceTag = PersonaId | 'general';
-
-/**
- * Plain-text "Bitbucket isn't configured" message naming the specific missing setting or
- * setup command — the Bitbucket equivalent of `buildJiraNotConfiguredMessage` (services/setupHints.ts).
- * No trusted `MarkdownString` command link (a `LanguageModelToolResult` can't carry one), so
- * this doubles as both a tool result and plain chat text.
- */
-export function buildBitbucketNotConfiguredMessage(config: Pick<BitbucketConfig, 'authType' | 'baseUrl' | 'token'>): string {
-  const setupLabel = config.authType === 'cloud'
-    ? 'Ticket Sidekick: Configure Bitbucket Cloud Credentials'
-    : 'Ticket Sidekick: Set Bitbucket Personal Access Token';
-  if (config.authType === 'datacenter' && !config.baseUrl) {
-    return (
-      'Bitbucket base URL not configured. Add `ticketSidekick.bitbucket.baseUrl` in VS Code settings, ' +
-      `then run "${setupLabel}" from the Command Palette.`
-    );
-  }
-  return `Bitbucket credentials not configured. Run "${setupLabel}" from the Command Palette.`;
-}
 
 /**
  * `buildChatCommandLink()`'s counterpart on the untrusted side: neutralizes markdown link/image
@@ -327,33 +307,6 @@ export function formatReviewForSharing(
   });
 
   return { text: `${header}${coverage}\n\n${groups.join('\n\n')}`, copiedCount, totalCount, countLabel };
-}
-
-// ---------------------------------------------------------------------------------------------
-// Pure helpers for `bitbucket_*` Language Model tools (`src/tools/bitbucketTools.ts`, U3) —
-// result formatting and confirmation-text building kept here so they stay Vitest-loadable.
-// ---------------------------------------------------------------------------------------------
-
-/** Result text for `bitbucket_getPullRequest` — the same PR fields the chat review's header
- * surfaces (title, author, target branch), formatted as a standalone summary rather than a
- * review-in-progress header. */
-export function formatPullRequestSummary(pr: BitbucketPR): string {
-  return (
-    `## PR #${pr.id} — ${pr.title}\n` +
-    `Author: ${pr.author.displayName} → ${pr.targetBranch}\n` +
-    `Source commit: ${pr.fromCommitHash}\n\n` +
-    (pr.description?.trim() ? pr.description.trim() : '_No description._')
-  );
-}
-
-/** Confirmation for `bitbucket_postComment` — names the PR (project/repo/id, which for Cloud
- * is workspace/slug/id — `parsePrUrl` already normalizes both into this same shape) and shows
- * the literal comment text. */
-export function buildPostCommentConfirmation(project: string, repo: string, prId: number, comment: string): ToolConfirmation {
-  return {
-    title: `Post comment on ${project}/${repo}#${prId}`,
-    message: `Post this comment on **${project}/${repo}#${prId}**:\n\n${comment}`,
-  };
 }
 
 export function parsePrUrl(url: string): ParsedPrUrl | null {

@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import type { E2eTest } from './index';
 
-// The Jira tools answer when VS Code calls them, and a board opens as an editor tab whose page
+// The Jira and Bitbucket tools answer when VS Code calls them, and a board opens as an editor tab whose page
 // really loads and talks to the extension over the webview's message channel. Nothing here needs
 // Copilot, a proxy setting or a local server.
 
@@ -28,6 +28,14 @@ export function boardTests(extensionId: string): E2eTest[] {
       fn: async () => {
         const result = await vscode.lm.invokeTool('jira_check_connection', { input: {}, toolInvocationToken: undefined });
         assert.match(textOf(result), /token|base URL/i, 'the tool did not answer with the Jira setup hint');
+      },
+    },
+    {
+      name: 'a Bitbucket tool answers when VS Code calls it',
+      fn: async () => {
+        const result = await vscode.lm.invokeTool('bitbucket_check_connection', { input: {}, toolInvocationToken: undefined });
+        assert.match(textOf(result), /Bitbucket/, 'the tool did not answer about the Bitbucket connection');
+        assert.match(textOf(result), /not configured|connection/i, 'the tool did not answer with the Bitbucket setup hint or a connection result');
       },
     },
     {
