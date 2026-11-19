@@ -128,6 +128,12 @@ async function sessionBoard(manager: SessionManager, target: BoardTarget, op: st
     case 'apply':
       if (typeof body.planId !== 'string') throw new BoardRequestError(400, 'Invalid plan.');
       return manager.apply(kind, id, body.planId);
+    case 'run':
+      // Starts a model run the board kind names from `request`; the page follows it through `state`.
+      return manager.startRun(kind, id, revisionOf(body.revision), body.request);
+    case 'stop':
+      if (body.what !== undefined && typeof body.what !== 'string') throw new BoardRequestError(400, 'Invalid run.');
+      return manager.stopRun(kind, id, body.what);
     case 'save':
       if (typeof body.format !== 'string') throw new BoardRequestError(400, 'Invalid format.');
       return { outcome: await manager.exportFile(kind, id, body.format) };

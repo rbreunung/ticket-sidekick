@@ -651,3 +651,290 @@ describe('the cache', () => {
     expect(session.kind).toBe('demo');
   });
 });
+
+// ---- model runs ------------------------------------------------------------------------------
+// A board whose working state a model fills: a pass of several steps (one model call per batch),
+// and single calls that explain one ticket. Each step waits at a gate the test opens, so the test
+// decides when the model "answers".
+
+interface RunWorking {
+  selected: string[];
+  pass: 'idle' | 'running' | 'interrupted' | 'stopped' | 'done';
+  steps: number[];
+  explained: Record<string, string>;
+  /** How many checks laid a fresh reading over this state. */
+  checks: number;
+}
+type RunRequest = { type: 'pass'; steps: number } | { type: 'explain'; key: string };
+
+class Gates {
+  private waiting: Array<() => void> = [];
+  private opened = 0;
+  wait(): Promise<void> {
+    if (this.opened > 0) { this.opened--; return Promise.resolve(); }
+    return new Promise(resolve => this.waiting.push(resolve));
+  }
+  open(count = 1): void {
+    for (let i = 0; i < count; i++) {
+      const next = this.waiting.shift();
+      if (next) next(); else this.opened++;
+    }
+  }
+}
+
+interface RunDeps {
+  tickets: Record<string, string>;
+  reads: { count: number };
+  runs: number;
+  gates: Gates;
+  signals: AbortSignal[];
+  /** A read that waits for the test, to hold a check in the queue. */
+  readGate?: Promise<void>;
+  afterProgress?: () => Promise<void>;
+}
+
+const runKind: BoardKind<Recipe, Derived, RunWorking, Action, RunWorking, RunDeps> = {
+  kind: 'runs',
+  formatVersion: 1,
+  title: r => `Runs: ${r.project}`,
+  validate: async input => {
+    const project = (input as { project?: unknown })?.project;
+    return typeof project === 'string' && project ? { ok: true, recipe: { project } } : { ok: false, reason: 'No project.' };
+  },
+  sourceKey: r => r.project.toUpperCase(),
+  sourceLabel: r => r.project,
+  initialWorking: () => ({ selected: [], pass: 'idle', steps: [], explained: {}, checks: 0 }),
+  read: async (_r, deps) => {
+    deps.reads.count++;
+    await deps.readGate;
+    return { readAt: deps.reads.count, fingerprints: {}, data: { tickets: { ...deps.tickets } } };
+  },
+  reconcile: (session, fresh) => ({ derived: fresh, working: { ...session.working, checks: session.working.checks + 1 }, conflicts: [] }),
+  reduce: (session, action) => {
+    if (action.type !== 'select') return { ok: false, reason: 'Unknown action.' };
+    return { ok: true, working: { ...session.working, selected: [...session.working.selected, action.key] } };
+  },
+  plan: session => ({ ok: true, plan: { title: 'Close', lines: session.working.selected.map(k => ({ target: k, change: 'Closed' })), risky: false, payload: null } }),
+  apply: async session => ({ results: [], derived: session.derived, working: session.working }),
+  beginRun: (session, raw) => {
+    const request = raw as RunRequest;
+    if (request?.type === 'pass') {
+      return { ok: true, size: 'pass', what: 'pass', label: 'the review pass', total: request.steps, working: { ...session.working, pass: 'running', steps: [] } };
+    }
+    if (request?.type === 'explain') return { ok: true, size: 'call', what: `explain:${request.key}`, label: `the explanation of ${request.key}` };
+    return { ok: false, reason: 'Unknown run.' };
+  },
+  run: async (_session, raw, deps, progress, signal) => {
+    deps.runs++;
+    deps.signals.push(signal);
+    const request = raw as RunRequest;
+    if (request.type === 'explain') {
+      await deps.gates.wait();
+      return { update: w => ({ ...w, explained: { ...w.explained, [request.key]: `About ${request.key}` } }) };
+    }
+    for (let step = 1; step <= request.steps; step++) {
+      await deps.gates.wait();
+      if (signal.aborted) return { update: w => ({ ...w, pass: 'stopped' }) };
+      await progress({ update: w => ({ ...w, steps: [...w.steps, step] }), done: step, total: request.steps });
+      await deps.afterProgress?.();
+    }
+    return { update: w => ({ ...w, pass: 'done' }) };
+  },
+  interrupted: w => (w.pass === 'running' ? { ...w, pass: 'interrupted' } : w),
+  view: session => session.working,
+};
+
+describe('a model run on a board', () => {
+  let deps: RunDeps;
+
+  function runManager(): SessionManager {
+    return new SessionManager({
+      store: new SessionStore(dir),
+      kinds: [registerKind(runKind, () => deps)],
+      now: () => clock,
+      confirm: async () => true,
+      saveFile: async () => true,
+    });
+  }
+
+  async function openRuns(m: SessionManager) {
+    const opened = await m.open('runs', { project: 'PROJ' });
+    if (!opened.ok) throw new Error(opened.reason);
+    let state = await m.state('runs', opened.id);
+    while (state.status !== 'ready') state = await m.state('runs', opened.id, state.tick, 1000);
+    return state;
+  }
+
+  /** Waits until the board shows no run going. */
+  async function idle(m: SessionManager, id: string) {
+    let state = await m.state('runs', id);
+    while (state.running) state = await m.state('runs', id, state.tick, 1000);
+    return state;
+  }
+
+  const working = (state: { view?: unknown }) => state.view as RunWorking;
+
+  beforeEach(() => {
+    deps = { tickets: { 'PROJ-1': 'Open', 'PROJ-2': 'Open' }, reads: { count: 0 }, runs: 0, gates: new Gates(), signals: [] };
+  });
+
+  it('saves each finished step without raising the revision, and shows done of total while it runs', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    const seen: { done: number; total: number; revision: number; stored: number[] }[] = [];
+    deps.afterProgress = async () => {
+      const now = await m.state('runs', before.id);
+      const stored = await new SessionStore(dir).load(before.id);
+      seen.push({ done: now.running![0].done, total: now.running![0].total, revision: now.revision, stored: (stored!.session.working as RunWorking).steps });
+    };
+    const started = await m.startRun('runs', before.id, before.revision, { type: 'pass', steps: 3 });
+    expect(started.running).toEqual([{ size: 'pass', what: 'pass', label: 'the review pass', done: 0, total: 3 }]);
+    deps.gates.open(3);
+    const after = await idle(m, before.id);
+    expect(seen).toEqual([
+      { done: 1, total: 3, revision: started.revision, stored: [1] },
+      { done: 2, total: 3, revision: started.revision, stored: [1, 2] },
+      { done: 3, total: 3, revision: started.revision, stored: [1, 2, 3] },
+    ]);
+    expect(working(after)).toMatchObject({ pass: 'done', steps: [1, 2, 3] });
+    expect(after.revision).toBe(started.revision + 1);
+    expect(after.running).toBeUndefined();
+  });
+
+  it('stops at once on Stop, even while a check waits in the queue, and keeps the finished steps', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    const started = await m.startRun('runs', before.id, before.revision, { type: 'pass', steps: 3 });
+    deps.gates.open(1);
+    let release!: () => void;
+    deps.readGate = new Promise(resolve => { release = resolve; });
+    const refreshing = m.refresh('runs', before.id);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    await m.stopRun('runs', before.id);
+    expect(deps.signals[0].aborted).toBe(true);
+    release();
+    deps.readGate = undefined;
+    await refreshing;
+    deps.gates.open(1);
+    const after = await idle(m, before.id);
+    expect(working(after)).toMatchObject({ pass: 'stopped', steps: [1] });
+    expect(after.revision).toBeGreaterThan(started.revision);
+  });
+
+  it('refuses an action, a preview, an Apply and another run while a pass runs, saying why', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    const preview = await m.preview('runs', before.id, before.revision, { type: 'close' });
+    const started = await m.startRun('runs', before.id, before.revision, { type: 'pass', steps: 2 });
+    const busy = { status: 409, message: expect.stringContaining('the review pass is running') };
+    await expect(m.action('runs', before.id, started.revision, { type: 'select', key: 'PROJ-1' })).rejects.toMatchObject(busy);
+    await expect(m.preview('runs', before.id, started.revision, { type: 'close' })).rejects.toMatchObject(busy);
+    await expect(m.apply('runs', before.id, preview.planId)).rejects.toMatchObject(busy);
+    await expect(m.startRun('runs', before.id, started.revision, { type: 'pass', steps: 2 })).rejects.toMatchObject(busy);
+    await expect(m.startRun('runs', before.id, started.revision, { type: 'explain', key: 'PROJ-1' })).rejects.toMatchObject(busy);
+    deps.gates.open(2);
+    await idle(m, before.id);
+    expect(deps.runs).toBe(1);
+  });
+
+  it('restores a session stored mid-run as interrupted, with its finished steps and no run going', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    let saved!: () => void;
+    const firstSaved = new Promise<void>(resolve => { saved = resolve; });
+    deps.afterProgress = async () => { saved(); };
+    await m.startRun('runs', before.id, before.revision, { type: 'pass', steps: 3 });
+    deps.gates.open(1);
+    await firstSaved;
+
+    const restarted = runManager();
+    const restored = await restarted.state('runs', before.id);
+    expect(working(restored)).toMatchObject({ pass: 'interrupted', steps: [1] });
+    expect(restored.running).toBeUndefined();
+    await expect(restarted.stopRun('runs', before.id)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('lets a check during a run lay its fresh reading over the board, and neither starts a run nor undoes a step', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    await m.startRun('runs', before.id, before.revision, { type: 'pass', steps: 2 });
+    deps.gates.open(1);
+    let state = await m.state('runs', before.id);
+    while (working(state).steps.length < 1) state = await m.state('runs', before.id, state.tick, 1000);
+    const checksBefore = working(state).checks;
+    await m.refresh('runs', before.id);
+    deps.gates.open(1);
+    const after = await idle(m, before.id);
+    expect(working(after)).toMatchObject({ pass: 'done', steps: [1, 2], checks: checksBefore + 1 });
+    expect(deps.runs).toBe(1);
+  });
+
+  it('keeps working during a single call: another action is accepted, and the call\'s result does not undo it', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    const started = await m.startRun('runs', before.id, before.revision, { type: 'explain', key: 'PROJ-1' });
+    expect(started.running).toEqual([{ size: 'call', what: 'explain:PROJ-1', label: 'the explanation of PROJ-1', done: 0, total: 0 }]);
+    const selected = await m.action('runs', before.id, started.revision, { type: 'select', key: 'PROJ-2' });
+    expect(selected.running).toHaveLength(1);
+    await expect(m.startRun('runs', before.id, selected.revision, { type: 'explain', key: 'PROJ-1' })).rejects.toMatchObject({ status: 409 });
+    deps.gates.open(1);
+    const after = await idle(m, before.id);
+    expect(working(after)).toMatchObject({ selected: ['PROJ-2'], explained: { 'PROJ-1': 'About PROJ-1' } });
+  });
+
+  it('refuses a pass while a single call runs, and a single call while a pass runs', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    const call = await m.startRun('runs', before.id, before.revision, { type: 'explain', key: 'PROJ-1' });
+    await expect(m.startRun('runs', before.id, call.revision, { type: 'pass', steps: 1 })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('the explanation of PROJ-1') });
+    deps.gates.open(1);
+    const between = await idle(m, before.id);
+    const pass = await m.startRun('runs', before.id, between.revision, { type: 'pass', steps: 1 });
+    await expect(m.startRun('runs', before.id, pass.revision, { type: 'explain', key: 'PROJ-2' })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('the review pass') });
+    deps.gates.open(1);
+    await idle(m, before.id);
+    expect(deps.runs).toBe(2);
+  });
+
+  it('refuses a run the board does not know, and a run on a board without runs', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    await expect(m.startRun('runs', before.id, before.revision, { type: 'dance' })).rejects.toMatchObject({ status: 400, message: 'Unknown run.' });
+    const plain = manager();
+    const demo = await openReady(plain);
+    await expect(plain.startRun('demo', demo.id, demo.revision, { type: 'pass', steps: 1 })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('peeks at a stored session without reading its sources or starting a check, and marks a cut-off run as interrupted', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    let saved!: () => void;
+    const firstSaved = new Promise<void>(resolve => { saved = resolve; });
+    deps.afterProgress = async () => { saved(); };
+    await m.startRun('runs', before.id, before.revision, { type: 'pass', steps: 3 });
+    deps.gates.open(1);
+    await firstSaved;
+    const reads = deps.reads.count;
+
+    const restarted = runManager();
+    const peeked = await restarted.peek('runs', before.id);
+    expect(peeked?.working).toMatchObject({ pass: 'interrupted', steps: [1] });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(deps.reads.count).toBe(reads);
+    expect(await restarted.peek('runs', sessionIdFor('runs', 'OTHER'))).toBeUndefined();
+    // The session in memory is what a peek gives while its run goes on.
+    expect((await m.peek('runs', before.id))?.working).toMatchObject({ pass: 'running', steps: [1] });
+  });
+
+  it('writes nothing back when the board is closed during a run, and aborts the run', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    await m.startRun('runs', before.id, before.revision, { type: 'pass', steps: 2 });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    await m.discard(before.id);
+    expect(deps.signals[0].aborted).toBe(true);
+    deps.gates.open(2);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(await new SessionStore(dir).load(before.id)).toBeUndefined();
+  });
+});

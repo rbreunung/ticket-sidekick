@@ -1,4 +1,4 @@
-import type { ApplyLineResult, Conflict, DerivedPart, Session, WritePlan } from './sessionTypes';
+import type { ApplyLineResult, Conflict, DerivedPart, RunningState, Session, WritePlan } from './sessionTypes';
 
 // A board kind is the one place that knows a board's rules. `reduce`, `plan` and `reconcile` are
 // pure, so a board's behaviour is tested as scenarios without a browser or a server. The session
@@ -41,6 +41,55 @@ export interface ApplyProgressReport<W> {
  * board restored after an interrupted Apply shows the finished targets as done.
  */
 export type ApplyProgress<W> = (report: ApplyProgressReport<W>) => Promise<void>;
+
+/**
+ * How much of the board a model run holds. A `pass` (a review pass, Run again) is the only run of
+ * its session, and every other action, preview, apply and run is refused until it ends. A `call`
+ * (one explanation, one rewrite) holds only its own control: other actions go on, and only a pass
+ * is refused while one is active.
+ */
+export type RunSize = RunningState['size'];
+
+/** What a run request starts, as the kind names it before the run begins, or why it cannot start now. */
+export type RunBegun<W> =
+  | {
+    ok: true;
+    size: RunSize;
+    /** Names this run among the session's runs, e.g. `explain:3`; a run of the same name that is still going is refused. */
+    what: string;
+    /** What the developer reads about it, e.g. "the security pass". */
+    label: string;
+    /** How many steps it has, when known at the start. */
+    total?: number;
+    /** The working state that records the run has started, saved before it runs; a restart finds it there. */
+    working?: W;
+  }
+  | { ok: false; reason: string };
+
+/**
+ * Changes a run makes to the working state. The manager applies it to the working state as it is
+ * when the change arrives, never to the state the run started from, so an action, a check or another
+ * run that changed the board meanwhile is kept.
+ */
+export type WorkingUpdate<W> = (working: W) => W;
+
+/** What a run reports after each finished step: its change to the working state and how far it is. */
+export interface RunProgressReport<W> {
+  update?: WorkingUpdate<W>;
+  done: number;
+  total: number;
+}
+
+/**
+ * Saves the step in the session without raising its revision and tells the page. A kind awaits it
+ * before its next step, so a board restored after a restart keeps the finished steps.
+ */
+export type RunProgress<W> = (report: RunProgressReport<W>) => Promise<void>;
+
+/** How a run ended, for a stopped run as well: its last change to the working state. */
+export interface RunFinished<W> {
+  update: WorkingUpdate<W>;
+}
 
 export interface ExportedFile {
   fileName: string;
@@ -88,6 +137,23 @@ export interface BoardKind<R, D, W, A, V, X> {
   plan?(session: Session<R, D, W>, action: A, prepared?: unknown): Planned;
   /** Reads the targets again, writes the unchanged ones and reports each, through `progress` as each finishes. */
   apply?(session: Session<R, D, W>, plan: WritePlan, deps: X, progress?: ApplyProgress<W>): Promise<Applied<D, W>>;
+  /**
+   * Names the model run a page request starts and records it in the working state, or refuses it.
+   * Pure. Kinds without model runs omit it and `run`.
+   */
+  beginRun?(session: Session<R, D, W>, request: unknown): RunBegun<W>;
+  /**
+   * Does the run's work, e.g. one model call per batch, outside the session's queue. It reports each
+   * finished step through `progress`, ends when `signal` aborts (the developer's Stop, or the board
+   * closed), and records how it ended, stopped or failed included, in its result. A run that throws
+   * is treated as one a restart cut off (`interrupted`). Never started by a check or a Refresh.
+   */
+  run?(session: Session<R, D, W>, request: unknown, deps: X, progress: RunProgress<W>, signal: AbortSignal): Promise<RunFinished<W>>;
+  /**
+   * The working state of a session whose run no longer goes on: a stored session that still says a
+   * run is going (the window closed during it), or a run that threw. It keeps the finished steps.
+   */
+  interrupted?(working: W): W;
   /** A file the developer saves from the board, always built from the reading the board shows. */
   exportFile?(session: Session<R, D, W>, format: string, deps: X): Promise<ExportedFile>;
   /** What the page gets: never more than it shows. */

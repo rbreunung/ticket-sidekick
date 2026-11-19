@@ -180,6 +180,65 @@ describe('a board page and the extension', () => {
   });
 });
 
+describe('a model run asked for by a board page', () => {
+  /** A board whose one run is a pass of two steps that ends only when the page stops it. */
+  const passKind: BoardKind<{ name: string }, null, { pass: string }, unknown, { pass: string }, null> = {
+    kind: 'pass-demo',
+    formatVersion: 1,
+    title: r => `Pass: ${r.name}`,
+    validate: async input => ({ ok: true, recipe: { name: String((input as { name?: unknown }).name) } }),
+    sourceKey: r => r.name,
+    sourceLabel: r => r.name,
+    initialWorking: () => ({ pass: 'idle' }),
+    read: async () => ({ readAt: 1, fingerprints: {}, data: null }),
+    reconcile: (session, fresh) => ({ derived: fresh, working: session.working, conflicts: [] }),
+    reduce: () => ({ ok: false, reason: 'Unknown action.' }),
+    beginRun: (session, request) => (request === 'pass'
+      ? { ok: true, size: 'pass', what: 'pass', label: 'the pass', total: 2, working: { pass: 'running' } }
+      : { ok: false, reason: 'Unknown run.' }),
+    run: async (_session, _request, _deps, progress, signal) => {
+      await progress({ done: 1, total: 2 });
+      await new Promise(resolve => signal.addEventListener('abort', resolve));
+      return { update: () => ({ pass: 'stopped after 1 of 2' }) };
+    },
+    view: session => session.working,
+  };
+
+  it('starts the run, shows it running with the board locked, and stops it on Stop', async () => {
+    manager = new SessionManager({
+      store: new SessionStore(path.join(dir, 'sessions')),
+      kinds: [registerKind(passKind, () => null)],
+      now: () => Date.now(),
+      confirm: async () => true,
+      saveFile: async () => true,
+    });
+    const opened = await manager.open('pass-demo', { name: 'one' });
+    if (!opened.ok) throw new Error(opened.reason);
+    const tab = { kind: 'pass-demo', id: opened.id };
+    let state = (await ask(tab, 'state')).body;
+    while (state.status !== 'ready') state = (await ask(tab, 'state', { tick: state.tick, wait: 2000 })).body;
+
+    expect((await ask(tab, 'run', { request: 'pass' })).status).toBe(400);
+    const started = await ask(tab, 'run', { revision: state.revision, request: 'pass' });
+    expect(started.body.running).toEqual([{ size: 'pass', what: 'pass', label: 'the pass', done: 0, total: 2 }]);
+    state = started.body;
+    while (state.running?.[0].done !== 1) state = (await ask(tab, 'state', { tick: state.tick, wait: 2000 })).body;
+    expect((await ask(tab, 'run', { revision: state.revision, request: 'pass' })).status).toBe(409);
+
+    expect((await ask(tab, 'stop', { what: 3 })).status).toBe(400);
+    expect((await ask(tab, 'stop')).status).toBe(200);
+    while (state.running) state = (await ask(tab, 'state', { tick: state.tick, wait: 2000 })).body;
+    expect(state.view).toEqual({ pass: 'stopped after 1 of 2' });
+    expect((await ask(tab, 'stop')).status).toBe(409);
+  });
+
+  it('refuses a run on a board that runs no model', async () => {
+    const state = await openReady();
+    expect(await ask(report(state.id), 'run', { revision: state.revision, request: 'pass' })).toMatchObject({ status: 400, body: { error: 'This board runs no model.' } });
+    expect((await ask(report(state.id), 'stop')).status).toBe(409);
+  });
+});
+
 describe('the sessions board', () => {
   it('lists the stored sessions, deletes one, and deletes all', async () => {
     const a = await openReady('AAA');

@@ -110,15 +110,18 @@ export function api(op, body) {
 
 /**
  * Runs a board page. `render(view, board, locked, state)` returns the board's own content for the
- * current view; `locked` is true while a request runs or an Apply is in progress, and the page
- * disables its controls then. `board` offers `act`, `preview`, `save` and the current `state`.
- * `loading(state)`, when given, is shown while the session has no view yet.
+ * current view; `locked` is true while a request runs, an Apply is in progress or a model pass runs,
+ * and the page disables its controls then. During a single model call only that call's control is
+ * busy: the page asks `board.running(what)` and disables that one. `board` offers `act`, `preview`,
+ * `run`, `stop`, `save` and the current `state`. `loading(state)`, when given, is shown while the
+ * session has no view yet.
  */
 export function startBoard({ root, render, loading }) {
   let state;
   let message;
   let busy = false;
   let stopped = false;
+  let stopping = false;
   // The plan an Apply is running and the last Apply's results, for pages that show them per row.
   let applyingPlan;
   let lastApply;
@@ -137,6 +140,28 @@ export function startBoard({ root, render, loading }) {
     /** A non-writing action. */
     async act(action) {
       await run(async () => { state = await api('action', { revision: state.revision, action }); });
+    },
+    /** Starts a model run the board kind names from `request`; its progress arrives with the state. */
+    async run(request) {
+      await run(async () => { state = await api('run', { revision: state.revision, request }); });
+    },
+    /** Stops a run: the pass without `what`. Sent while the board is locked, since the pass locks it. */
+    async stop(what) {
+      if (stopping) return;
+      stopping = true;
+      message = undefined;
+      paint();
+      try {
+        state = await api('stop', what === undefined ? {} : { what });
+      } catch (err) {
+        message = err.message;
+      }
+      stopping = false;
+      paint();
+    },
+    /** The run of this name while it goes on, `{ size, what, label, done, total }`; undefined otherwise. */
+    running(what) {
+      return state?.running?.find(r => r.what === what);
     },
     async refresh() {
       await run(async () => { state = await api('refresh'); });
@@ -172,9 +197,14 @@ export function startBoard({ root, render, loading }) {
     },
   };
 
-  /** An Apply in progress, on this page or another: nothing else is sent until it ends. */
+  /** The model pass going on, which holds the whole board. */
+  function passRun() {
+    return state?.running?.find(r => r.size === 'pass');
+  }
+
+  /** An Apply or a model pass in progress, on this page or another: nothing else is sent until it ends. */
   function locked() {
-    return busy || Boolean(state?.applying);
+    return busy || Boolean(state?.applying) || Boolean(passRun());
   }
 
   async function run(work) {
@@ -247,15 +277,19 @@ export function startBoard({ root, render, loading }) {
   function paint() {
     const focusId = document.activeElement?.id;
     const applying = state?.applying;
+    const pass = passRun();
     const header = h('header', {},
       h('h1', {}, state?.title ?? rootElement.dataset.title ?? ''),
       state ? h('p', { class: 'muted', role: 'status' },
         applying ? `Applying: ${applying.done} of ${applying.total} done…`
+          : pass ? `Running ${pass.label}: ${pass.done} of ${pass.total} done…`
           : state.status === 'building' ? 'Reading…'
             : state.status === 'checking' ? `As of ${formatTime(state.asOf)}. Checking for changes…`
               : state.asOf ? `As of ${formatTime(state.asOf)}${state.restored ? ' (restored session)' : ''}.` : '') : null,
       applying ? h('progress', { id: 'apply-progress', max: applying.total, value: applying.done, 'aria-label': 'Apply progress' }) : null,
+      pass ? h('progress', { id: 'run-progress', max: pass.total, value: pass.done, 'aria-label': 'Run progress' }) : null,
       state && !stopped ? h('div', { class: 'bar' },
+        pass ? h('vscode-button', { id: 'stop-run', disabled: stopping, onClick: () => board.stop() }, 'Stop') : null,
         h('vscode-button', { id: 'refresh', secondary: true, disabled: locked() || state.status !== 'ready' && state.status !== 'failed', onClick: () => board.refresh() }, 'Refresh'),
         h('vscode-button', {
           id: 'discard', secondary: true, disabled: locked(), title: 'Closes this tab and forgets the choices not applied yet. Nothing in Jira changes.',
