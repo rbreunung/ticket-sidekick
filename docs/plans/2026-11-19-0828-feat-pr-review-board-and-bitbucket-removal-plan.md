@@ -187,6 +187,10 @@ Today's review also asks the developer to choose the depth before seeing anythin
 
 ### Outstanding Questions
 
+#### Open decision from the plan review (2026-11-19)
+
+- **When does the goal rewording run?** AE3 says it runs when the developer leaves the goal field. Scope Boundaries says no rewording runs without the developer asking. A click on Start right after typing would be swallowed, because the rewording locks Start (R6). The recommended answer is an explicit Reword button: Start stays enabled and uses the typed words as they stand, until the developer presses Reword. This changes AE3 and U5's trigger, so it is the maintainer's call. U5 cannot be finished before it is answered.
+
 #### Deferred to Implementation
 
 - How a long findings list stays easy to scan after a full review: collapsing explanations, or a severity filter. Decide when the page meets a real deep review. It is not a requirement.
@@ -213,10 +217,12 @@ Today's review also asks the developer to choose the depth before seeing anythin
 ### Key Technical Decisions
 
 - KTD1. **The board gets its own staged review engine, vscode-free, in `src/review/`. `@bitbucket` keeps its inline pipeline until U11 deletes it.** The engine is built on the pure helpers moved there in U1 (prompts, parsers, anchors, dedupe, chunking, the requirements pass, the token meter). The chat handler's inline loop in `src/participant/BitbucketParticipant.ts` (`createBitbucketParticipant`) is not refactored onto the engine. It is deprecated, gets bug fixes only, and is deleted in this PR. Governs R8 to R12.
-- KTD2. **Model runs are a new session-manager operation outside the per-session queue.** Today every action, preview and apply waits in one queue per session (`src/sessions/sessionManager.ts`, `enqueue`), and only `state()` skips it. A kind gains an optional `run`. The manager starts it from a board request, keeps at most one run per session, and refuses any other action, preview or apply while one runs. `stopRun` bypasses the queue and aborts the run's signal. Each progress report saves the working state without raising the revision, as Apply's progress does. A run that a restart cut off is marked interrupted on load. `read` and background checks never start a run. Governs R13, R14, R25, and R6, R7, R17, R19.
-- KTD3. **The board's model access gains a model handle.** `BoardModels` keeps `list` and `send` for the email check and adds a handle by id. The handle streams a request under an abort signal, counts tokens and gives the model's input limit. `src/boards/registerBoards.ts` binds it over `vscode.lm` with a `CancellationTokenSource` cancelled by the signal. `createTokenMeter` wraps the handle (it already takes a structural model with `id`, `countTokens` and `sendRequest`). The engine keeps today's `withEasierRetry`/`withLmRetry` and `PartialLmResponseError` recovery. `ModelSettings` gains the review-model write. Governs R3, R4, R23.
-- KTD4. **Finding numbers are assigned once per review session.** A new finding gets the next unused number. A later pass's finding that dedupes against an existing one is dropped, and the existing finding keeps its number and text. The critic acts per R37. The cross-run renumbering in today's `completeReview` is not carried over. Governs R11, R37.
-- KTD5. **The review snapshot in the session is the full parsed diff, the reviewed commit, the batch boundaries and each batch's context-file paths, not file contents.** Later passes re-read context files by path at the reviewed commit through `IBitbucketClient.getFileContent(…, commitHash)`, which returns the same content because a commit cannot change. This keeps a large PR under `MAX_SESSION_BYTES` (20 MB). When a save still fails, the board shows the existing "will not survive a restart" state. Governs R11, R24.
+- KTD2. **Model runs are a new session-manager operation outside the per-session queue, in two sizes.** Today every action, preview and apply waits in one queue per session (`src/sessions/sessionManager.ts`, `enqueue`), and only `state()` skips it. A kind gains an optional `run`, and the manager starts it from a board request. Both sizes write their results into the then-current working state inside the queue, never from the run's starting snapshot, so a background check or an edit made meanwhile is not overwritten. `read` and background checks never start a run.
+  - **Pass runs** (the regular pass, extra passes, Run again): at most one per session. Every other action, preview, apply and single-call run is refused while one runs. `stopRun` bypasses the queue and aborts the signal. Each progress report saves the working state without raising the revision, as Apply's progress does. A pass run that a restart cut off is marked interrupted on load. Governs R13, R14, R25.
+  - **Single-call runs** (Explain, Rewrite, goal rewording, re-check): lock only their own control (R22). Other actions stay allowed, and only a pass run is refused while one is active. Governs R6, R7, R17, R19, R22.
+- KTD3. **The board's model access gains a model handle with the token meter's shape.** `BoardModels` keeps `list` and `send` for the email check and adds a handle by id. The handle has an `id`, `countTokens`, `maxInputTokens` and a `sendRequest` that streams text under an abort signal, which is the structural model `createTokenMeter` already wraps. `src/boards/registerBoards.ts` binds it over `vscode.lm`, with a `CancellationTokenSource` cancelled by the signal. An aborted request throws a distinct cancellation error, never a `PartialLmResponseError`, so `isTransientLmError` is false for it and `withLmRetry`/`withEasierRetry` rethrow it at once. The handle refuses to send under a signal that has already aborted. The engine otherwise keeps today's retry helpers and `PartialLmResponseError` recovery for provider failures. `ModelSettings` gains the review-model write. Governs R3, R4, R14, R23.
+- KTD4. **Finding numbers are assigned once per review session.** A new finding gets the next unused number. A later pass's finding that dedupes against an existing one is merged into it under today's `dedupeFindings` merge rule: stronger severity, combined sources, the corroboration confidence bump and the better provenance. The existing finding keeps its number, title, description and recommendation. The critic acts per R37. The cross-run renumbering in today's `completeReview` is not carried over. Governs R11, R37.
+- KTD5. **The review snapshot in the session is the full parsed diff, the reviewed commit, the batch boundaries and each batch's context-file paths, not file contents.** Later passes re-read context files by path at the reviewed commit through `IBitbucketClient.getFileContent(…, commitHash)`, which returns the same content because a commit cannot change. This keeps a large PR under `MAX_SESSION_BYTES` (20 MB). When a save still fails, the board shows the existing "will not survive a restart" state. Before an extra pass or the critic calls the model, it reads its context files at the reviewed commit. If any read fails, for example after a force-push removed the commit, the pass does not run. It is not marked as run, it removes no finding, and the board says the reviewed commit can no longer be read and offers Run again. It never falls back to a newer head. Governs R11, R14, R24.
 - KTD6. **The review board is one board kind, `review`, keyed by the normalised PR URL.** Its recipe is the PR URL and host. The session id comes from kind and URL through `sessionIdFor`, so a repeat request finds the stored session (R36). `read` fetches only the PR's title, author, state and head commit. `reconcile` compares the head commit and marks the board out of date without touching the review. All review data lives in the working state, because only runs and the developer's actions produce it. Governs R1, R24, R25, R36.
 - KTD7. **Copy goes through a new host capability, and the text is built in the extension.** `BoardHost` gains `copyText`, bound to `vscode.env.clipboard.writeText` in `src/boards/boardPanels.ts`. A page request names the format and the selection, never the text. Plain text extends today's `formatReviewForSharing`. Markdown is a new formatter that escapes finding text. Governs R20, R21.
 - KTD8. **The Bitbucket tools join the catalog shape under their current names.** `bitbucket_getPullRequest`, `bitbucket_getPullRequestDiff` and `bitbucket_postComment` keep their names and reference names. The new tools use the Jira style: `bitbucket_open_review`, `bitbucket_read_findings`, `bitbucket_check_connection`, `bitbucket_token_usage`. The manifest builder and sync script cover both catalogs with a tag per product. The `when` clause goes. A Bitbucket tool answers with a setup hint while Bitbucket is not configured, as the Jira tools do. Governs R26 to R30.
@@ -262,7 +268,7 @@ flowchart LR
 
 ### Assumptions
 
-- `IBitbucketClient.getFileContent` with a commit hash works on Data Center and Cloud for a commit that is no longer the PR's head. `@bitbucket` already reads at `pr.fromCommitHash`.
+- `IBitbucketClient.getFileContent` with a commit hash usually works on Data Center and Cloud for a commit that is no longer the PR's head. This is unverified: `@bitbucket` only reads at the head of the moment. KTD5 covers the case where it fails.
 - The managed machine allows a board's streamed, cancellable model call, as it allowed the email check's call (Q1).
 
 ---
@@ -291,7 +297,7 @@ flowchart LR
 - **Goal:** Every vscode-free review module lives outside `src/participant/`, so the board can use it and U11 can delete the participant folder.
 - **Requirements:** R12, R32; KTD1.
 - **Dependencies:** None.
-- **Files:** Move `src/participant/reviewSessionState.ts` (the pure parts: types, `parsePrUrl`, `parseDiff`, `parseReviewReply`, `aggregateRecommendedPersonas`, `dedupeFindings`, `resolveFindingAnchors`, `parseCriticKeep`, `buildAdaptiveChunks`, `selectFilesWithinBudget`, `mergePass2Findings`, `buildFindingFollowUpPrompt`, `formatReviewForSharing`, the diagnostics formatters) and `src/participant/bitbucket/{requirementsCoverage,requirementsPass,reviewDiagnostics,tokenMeter}.ts`, plus `readTicketGuarded` from `requirementsFlow.ts`, into `src/review/`. Chat-only helpers (`parseFollowUpIntent`, `computeBitbucketFollowups`, `isEndSessionRequest`, `endBitbucketSessions`, `extractPromptDirectives`, `decideTicketStep`'s pause text) stay in `src/participant/`. Update imports in `src/services/PrReviewService.ts`, `src/tools/bitbucketTools.ts`, `src/participant/BitbucketParticipant.ts` and `src/extension.ts`. Move the matching tests from `src/test/` imports (`reviewSessionState.test.ts`, `requirementsCoverage.test.ts`, `requirementsPass.test.ts`, `reviewDiagnostics.test.ts`, `tokenMeter.test.ts`, `PrReviewService.test.ts`).
+- **Files:** Move `src/participant/reviewSessionState.ts` (the pure parts: types, `parsePrUrl`, `parseDiff`, `parseReviewReply`, `aggregateRecommendedPersonas`, `dedupeFindings`, `resolveFindingAnchors`, `parseCriticKeep`, `buildAdaptiveChunks`, `selectFilesWithinBudget`, `mergePass2Findings`, `buildFindingFollowUpPrompt`, `formatReviewForSharing`, the diagnostics formatters) and `src/participant/bitbucket/{requirementsCoverage,requirementsPass,reviewDiagnostics,tokenMeter}.ts`, plus `readTicketGuarded` and `safeErrorText` from `requirementsFlow.ts` and `neutralizeMarkdownLinks`, `sanitizeGfmCellText` and `normalizeShareText` from `reviewSessionState.ts`, into `src/review/`. Chat-only helpers stay in `src/participant/`: `parseFollowUpIntent`, `computeBitbucketFollowups`, `isEndSessionRequest`, `endBitbucketSessions`, `extractPromptDirectives`, `decideTicketStep`'s pause text, `buildChatCommandLink` and `buildSmartRerunCommand`. Update imports in `src/services/PrReviewService.ts`, `src/tools/bitbucketTools.ts`, `src/participant/BitbucketParticipant.ts` and `src/extension.ts`. Move the matching tests from `src/test/` imports (`reviewSessionState.test.ts`, `requirementsCoverage.test.ts`, `requirementsPass.test.ts`, `reviewDiagnostics.test.ts`, `tokenMeter.test.ts`, `PrReviewService.test.ts`).
 - **Approach:** A pure move with no behaviour change. Grep each moved name's destination before deleting the source ([`docs/solutions/`](../solutions/) doc-consolidation learning). Keep `src/review/` free of `vscode` imports and of imports from `src/participant/`.
 - **Patterns to follow:** The `@jira` removal's moves (`defaultProjectNotice.ts` to `src/services/`, `chatPrimitives.ts`), commit `f2bbca9`.
 - **Test scenarios:**
@@ -305,11 +311,13 @@ flowchart LR
 - **Requirements:** R3, R4, R23; KTD3.
 - **Dependencies:** None.
 - **Files:** `src/boards/boardModels.ts`, `src/boards/registerBoards.ts`, `src/test/boardModels.test.ts`.
-- **Approach:** Add the handle to `BoardModels` beside `list` and `send`, and `writeReviewModel` and a "review model in use" reader to `ModelSettings`. The vscode binding (`vscodeBoardModels`) stays thin: it selects the model by id, maps the abort signal to a `CancellationTokenSource`, yields text fragments and exposes `countTokens` and `maxInputTokens`. A missing model id answers "not available", which the first step shows as a pick (R3). Log through `logDiag('boards.models', …)`.
+- **Approach:** Add the handle (KTD3) to `BoardModels` beside `list` and `send`, and `writeReviewModel` and a "review model in use" reader to `ModelSettings`. The vscode binding (`vscodeBoardModels`) stays thin: it selects the model by id, maps the abort signal to a `CancellationTokenSource`, and returns `{ text }` as an async stream from `sendRequest`. A missing model id answers "not available", which the first step shows as a pick (R3). Log through `logDiag('boards.models', …)`.
 - **Patterns to follow:** `vscodeBoardModels` and `checkModelAnswers` in `src/boards/boardModels.ts`; the participant's `callLLMOnce` for partial-text keeping.
 - **Test scenarios:**
   - A handle from a fake model yields its fragments in order and reports the token counts the fake gives.
-  - Aborting the signal mid-stream ends the request with a cancellation error that keeps the partial text.
+  - Aborting the signal mid-stream ends the request with the cancellation error, which `isTransientLmError` rejects.
+  - A request sent under a signal that has already aborted is refused without calling the model.
+  - `createTokenMeter` wraps a handle and records its input and output tokens.
   - With the setting empty, the review model in use is none. After `writeReviewModel('m1')` it is `m1`.
   - A setting naming a model that `list()` does not return counts as not available.
 - **Verification:** The email check still passes its scenario tests (`importBoardEmailCleanup.test.ts`) unchanged.
@@ -317,10 +325,10 @@ flowchart LR
 ### U3. Model runs in the session manager
 
 - **Goal:** A board kind can run long model work that the developer can stop, that saves progress as it goes, and that a restart marks as interrupted.
-- **Requirements:** R13, R14; KTD2.
+- **Requirements:** R13, R14, R22; KTD2.
 - **Dependencies:** None.
 - **Files:** `src/sessions/boardKind.ts`, `src/sessions/sessionManager.ts`, `src/sessions/sessionTypes.ts`, `src/boards/boardMessages.ts`, `board-pages/shared/board.js`, `src/test/sessionManager.test.ts`, `src/test/boardMessages.test.ts`.
-- **Approach:** Add an optional `run(session, request, deps, progress, signal)` to `BoardKind`, and `startRun`/`stopRun` to `SessionManager`. `startRun` validates and records the run inside the queue, then runs the work outside it. `BoardState` gains `running` (what runs, done of total) beside `applying`. A finished or stopped run writes its final working state in the queue. On load, a stored working state that still says running is changed to interrupted through a kind hook. The page client gains `board.run` and `board.stop`, and locks every other control while `running` is set (R13). Page requests `run` and `stop` join `asBoardRequest`.
+- **Approach:** Add an optional `run(session, request, deps, progress, signal)` to `BoardKind`, and `startRun`, `stopRun` and `peek` to `SessionManager`. `startRun` validates and records the run inside the queue, then runs the work outside it. It merges each progress report and the final result into the then-current working state inside the queue (KTD2). A background check that finishes during a run merges only its derived data and out-of-date mark, never the working state of its stale snapshot. `BoardState` gains `running` (the run's size, what runs, done of total) beside `applying`. On load, a stored working state that still says a pass is running is changed to interrupted through a kind hook. `peek(kind, id)` returns a session from memory or the store without creating an entry or starting a check, and applies the same hook. The page client gains `board.run` and `board.stop`. It locks every other control during a pass run (R13), and only the busy control during a single-call run (R22). Page requests `run` and `stop` join `asBoardRequest`.
 - **Patterns to follow:** Apply progress (`entry.applying`, the progress save without a revision raise) in `sessionManager.ts`. The `state()` long-poll, which already skips the queue.
 - **Test scenarios:**
   - A run reporting 3 progress steps saves each one, and `state()` shows done 1, 2, 3 of 3 while it runs.
@@ -328,6 +336,9 @@ flowchart LR
   - An action, preview, apply or second run sent while a run is active is refused with a clear reason.
   - A session stored mid-run is restored as interrupted, with its finished steps kept and no run active.
   - A background check during a run does not start a run and does not overwrite the run's working state.
+  - During a single-call run, an action that edits another part of the working state is accepted, and the run's result does not undo it.
+  - A pass run is refused while a single-call run is active, and the reverse.
+  - `peek` on a stored session that is not loaded calls no `read` and starts no check.
 - **Verification:** Every existing `sessionManager.test.ts` scenario passes unchanged.
 
 ### U4. Staged review engine
@@ -349,7 +360,9 @@ flowchart LR
   - A 3-batch PR whose batches recommend security, then nothing, then security and performance suggests security and performance.
   - Covers AE5. Every batch returning an empty recommendation gives "no extra pass suggested". Every reply missing the field gives "no usable recommendation".
   - A security pass run a day later on the stored snapshot re-reads its context files at the reviewed commit, not at a newer head the mock returns.
-  - A persona finding that dedupes against #2 is dropped, and #2 keeps its number and text.
+  - A security finding (critical) that dedupes against #2 (a suggestion) merges into #2: #2 keeps its number and text, becomes critical, lists both sources and gains the corroboration bump.
+  - Stop during batch 3's model call makes no further model call (no retry, no split), and batch 3 counts as not finished, not as failed.
+  - When the mock refuses a context-file read at the reviewed commit, the critic makes no model call, removes no finding and reports the commit as unreadable.
   - Covers AE12. The critic rejects #3 (explained) and #5 (untouched): #5 is removed, #3 is labelled, and #4 keeps its number.
   - Covers AE7. Aborting after batch 3 of 7 ends with 3 batches' findings and a stopped result that names 3 of 7.
   - A batch that fails after retries is counted in the partial-results result, and the other batches' findings stand.
@@ -404,6 +417,8 @@ flowchart LR
   - **No findings:** a finished review with no findings shows "No issues found" with the coverage, the token usage, the picker and Run again.
   - **Failed regular pass:** a regular pass whose every batch failed shows the failure banner and Run again, and no findings controls.
   - **Run again:** confirms through `deps.confirm` when explanations or drafts would be lost (R14).
+  - **Unreadable commit:** an extra pass refused under KTD5 shows its banner with Run again, and the pass stays unmarked.
+  - **Requirements check failure:** when the ticket cannot be read, the reply is unreadable or the model call fails, the coverage position shows the cause and a Re-check control, and the findings stand.
   - **Token usage:** shown per pass in the header area (R15).
 - **Patterns to follow:** Apply progress and the locked controls in `board-pages/shared/board.js`. The import page's live region for progress text.
 - **Test scenarios:**
@@ -414,6 +429,7 @@ flowchart LR
   - A regular pass with no findings shows "No issues found" with the picker and Run again.
   - A regular pass whose batches all failed shows the failure banner and no findings controls.
   - Run again on a review with an explanation asks for confirmation. Declining keeps the review.
+  - A regular pass whose ticket read fails shows the findings, plus a coverage line naming the failed ticket read with Re-check.
 - **Verification:** A restored board after a mid-run restart shows the interrupted banner and no running state.
 
 ### U7. Explain, drafts, Post and Copy
@@ -424,7 +440,8 @@ flowchart LR
 - **Files:** `src/boards/review/findings.ts`, `src/review/shareFormat.ts`, `src/boards/boardPanels.ts` and `src/boards/boardMessages.ts` (`copyText` host capability), `board-pages/review/page.js`, `src/test/reviewBoardFindings.test.ts`, `src/test/shareFormat.test.ts`.
 - **Approach:**
   - **Explain:** a run with `buildFindingFollowUpPrompt` over the finding, its hunk, the PR title and description, and the upfront question. It stores the answer on the finding and replaces an earlier one.
-  - **Drafts:** made once from the finding and its explanation with `formatPrComment`. A later explanation change marks the draft outdated, with Regenerate (R18).
+  - **Drafts:** selecting a finding for posting creates its draft under that finding, once, from the finding and its explanation with `formatPrComment`. A later explanation change marks the draft outdated, with Regenerate (R18). Draft text is saved to the session on blur and before any run or Post starts. Draft boxes and selection checkboxes stay editable during a single-call run.
+  - **Order:** select, edit or Rewrite, then Post. Post previews the existing drafts and never rebuilds them.
   - **Rewrite:** a run per draft that keeps the previous text for Undo until the next edit or post (R19).
   - **Post:** a risky plan naming each comment. `deps.confirm` is the native confirmation, and `apply` posts each comment with `postCommentItems` and reports each result, so only the failed ones can be retried (R22).
   - **Selection:** a checkbox per finding plus select-all. Post and Copy act on the selection.
@@ -451,7 +468,7 @@ flowchart LR
 - **Approach:**
   - **The three existing tools:** rebuilt with `defineTool` under their current names. `postComment` keeps its confirmation through `confirmationWithPreview` and the write guard.
   - **`bitbucket_open_review`:** takes the PR URL and opens the board through `boards.panels.open`. It answers "opened" or the reason (R26).
-  - **`bitbucket_read_findings`:** derives the session id from the normalised URL and reads the stored session without starting a background check, as `startScreen` already avoids it. It returns the summary (counts, passes run, verdict per KTD10, coverage summary), the list, or one finding with its code and explanation (R28).
+  - **`bitbucket_read_findings`:** derives the session id from the normalised URL and reads the stored session through `SessionManager.peek` (U3), which starts no check. It returns the summary (counts, passes run, verdict per KTD10, coverage summary), the list, or one finding with its code and explanation (R28).
   - **`bitbucket_check_connection`:** moves the `@bitbucket check` logic over `configValidation` and the client's health probe.
   - **`bitbucket_token_usage`:** reads `TokenUsageService` and formats it with `formatUsageTable`.
   - **Manifest:** the builder takes a tag per catalog, and the sync script and test cover both.
@@ -511,7 +528,7 @@ flowchart LR
 - **Dependencies:** U10, and the maintainer's Step 3 checklist result from the pre-release build (Goal Capsule).
 - **Files:**
   - **Deleted:** `src/participant/` with its tests (`bitbucketReviewFlow.test.ts` and the other participant-only suites).
-  - **Changed:** `src/extension.ts`, `src/test/bundleSmoke.test.ts`.
+  - **Changed:** `src/extension.ts`, `src/test/bundleSmoke.test.ts`, and the `reviewMode` and `showTokenUsage` readers and fields in `src/services/ConfigService.ts`, `src/bitbucket/IBitbucketClient.ts` and `src/test/ConfigService.test.ts`.
   - **`package.json`:** the `chatParticipants` entry, its commands and disambiguation, `reviewMode`, `showTokenUsage`, the walkthrough step text, and the `when` keys only the participant used.
   - **Docs:** `docs/manual/settings-reference.md`.
 - **Approach:**
@@ -524,7 +541,7 @@ flowchart LR
   - `bundleSmoke.test.ts` asserts the extension creates no chat participant.
   - `userDocsSync.test.ts` passes with no participant slash commands left in the README.
   - Both parity guards still pass (KTD12).
-- **Verification:** `rg "chatParticipant|src/participant"` finds nothing in `src/` and `package.json`, and the e2e suite activates and registers every command and tool.
+- **Verification:** `rg "createChatParticipant|participant/" src --glob '!src/test/**'` finds nothing, `package.json` has no `chatParticipants` key, and the e2e suite activates and registers every command and tool.
 
 ### U12. Documentation and manual checklist
 
@@ -563,6 +580,6 @@ CI (`.github/workflows/ci.yml`) runs compile and test on Ubuntu and Windows with
 - Every unit's verification holds, and the gates above are green.
 - Every R1 to R37 and AE1 to AE13 is covered by a unit's test scenario or verification.
 - The review parity ledger has no unmapped Carry over row, and both parity guards pass.
-- `src/participant/` and the `chatParticipants` contribution are gone. `rg` finds no `@bitbucket` outside superseded plans and history.
-- `docs/architecture/migration-status.md` shows O9 to O20 and Q2 to Q5 closed.
+- `src/participant/` and the `chatParticipants` contribution are gone. `rg` finds no `@bitbucket` outside superseded plans, history, the review parity ledger and the guard tests that prove its removal (`skillsGuard.test.ts`, `reviewBoardParity.test.ts`).
+- `docs/architecture/migration-status.md` shows O9, O10, O12 to O16, O18, O19, the Bitbucket part of O20 and Q2 to Q5 closed. O17 (the keyboard and screen-reader check) and the rest of O20 stay open.
 - Code from abandoned approaches is removed from the diff, and no new file under `src/review/` or `src/boards/review/` imports `vscode` except the binding files `registerBoards.ts` and `boardPanels.ts`.
