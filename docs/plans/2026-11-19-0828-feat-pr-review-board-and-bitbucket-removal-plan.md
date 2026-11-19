@@ -23,7 +23,7 @@ execution: code
 
 ### Summary
 
-The review board opens as soon as a review is asked for. It stops on a first step: the model, the requirements source (a Jira ticket, a goal the developer types and the board rewords for review, or none) and an optional upfront question. After Start, the board runs the regular pass and shows the findings, along with a suggestion of which extra passes are worth running. The suggestion may be empty. The developer keeps the result, runs the suggestion, or picks any extra passes up to a full review, now or later. Each finding can be explained, noted, posted to Bitbucket as an editable comment, or copied for Teams or as Markdown. The chat agent can read the findings through a tool. Once every `@bitbucket` behaviour has a home or a recorded drop, `@bitbucket` is removed.
+The review board opens as soon as a review is asked for. It stops on a first step: the model, the requirements source (a Jira ticket, a goal the developer types and the board rewords for review, or none) and an optional upfront question. After Start, the board runs the regular pass and shows the findings, along with a suggestion of which extra passes are worth running. The suggestion may be empty. The developer keeps the result, runs the suggestion, or picks any extra passes up to a full review, now or later. Each finding can be explained, posted to Bitbucket as an editable comment, or copied for Teams or as Markdown. The chat agent can read the findings through a tool. Once every `@bitbucket` behaviour has a home or a recorded drop, `@bitbucket` is removed.
 
 ### Problem Frame
 
@@ -49,6 +49,11 @@ Today's review also asks the developer to choose the depth before seeing anythin
 - **The agent matches a free-text question to a finding itself.** (session-settled: user-approved — chosen over keeping the extension's own matching call.) Governs R28.
 - **The agent gets a review's result from the read-findings tool.** Starting a review only answers "opened". (session-settled: user-approved — chosen over a tool call that stays open until the review ends, which board steps can delay for minutes.) Governs R26, R28.
 - **The Bitbucket tools move into the catalog shape of the Jira tools.** (session-settled: user-approved — chosen over leaving the three existing tools as they are and building only the new ones that way.) Answers Q2. Governs R30.
+- **No note field on findings.** (session-settled: user-directed — chosen over keeping the boards plan R21's note: the editable draft carries the developer's own words.) Governs R18, R20.
+- **The results screen is one column.** The next-pass choice sits above the findings. (session-settled: user-directed — chosen over tabs like the import board, and over a list with a detail pane, after text sketches of each.) Governs R16.
+- **Later passes see what the regular pass saw, read at the reviewed commit.** (session-settled: user-approved — chosen over reading newly requested files at the PR's newest head.) Governs R11, R24.
+- **A repeat request opens the stored review.** (session-settled: user-approved — chosen over opening on the first step with the stored review named, and over keeping several reviews per PR.) Governs R36.
+- **The critic labels instead of removing when the developer worked on a finding.** (session-settled: user-approved — chosen over keeping every rejected finding labelled, and over always removing.) Governs R37.
 - **A new commit on the PR never starts a review by itself.** (session-settled: user-approved — chosen over an automatic quick re-run, and over reviewing only the new commits.) Governs R25.
 
 ---
@@ -58,51 +63,53 @@ Today's review also asks the developer to choose the depth before seeing anythin
 **Starting a review**
 
 - R1. A review starts from a PR link in a Copilot chat, from `/ts-bitbucket review <url>`, or from a Command Palette command that asks for the PR link on the board. The review board opens as an editor tab before any pass runs.
-- R2. The board always stops on its first step, prefilled from the chat request or the command, and the review starts only when the developer presses Start. The step holds the model pick when one is needed (R3), the requirements source (R5) and an optional upfront question.
+- R2. A new review always stops on the board's first step, prefilled from the chat request or the command, and starts only when the developer presses Start. The step holds the model pick when one is needed (R3), the requirements source (R5) and an optional upfront question.
+- R36. Asking for a PR that already has a stored review opens that review, marked out of date when R25 applies. A New review control goes to the first step. Start then asks for confirmation before it replaces a review that has explanations or drafts.
 - R3. Every model call the board makes uses the model named in `ticketSidekick.bitbucket.reviewModel`. When that setting is empty, or names a model that is not available, the first step asks the developer to pick one and saves the pick to the setting.
 - R4. No model call is made before the model is chosen. The goal rewording (R6) is the only call before Start. The board shows which model ran (boards plan R45).
 
 **Requirements source**
 
-- R5. The first step offers three requirements sources: the Jira ticket, a goal, or none. The ticket is preselected when the request names a key, or when the PR title carries one and Jira is configured. Otherwise none is preselected. With Jira not configured, the ticket option is unavailable, with a one-line reason. The chosen source is checked as part of the regular pass.
-- R6. A typed goal is reworded by one model call into in-scope and out-of-scope points, shown in an editable box on the first step. The developer corrects it and presses Start. The check compares the diff against the text as it stands at Start.
+- R5. The first step offers three requirements sources: the Jira ticket, a goal, or none. The ticket is preselected when Jira is configured and the request names a key or the PR title carries one. Otherwise none is preselected. With Jira not configured, the ticket option is unavailable, with a one-line reason. The chosen source is checked as part of the regular pass.
+- R6. A typed goal is reworded by one model call into in-scope and out-of-scope points, shown in an editable box on the first step. The developer corrects it and presses Start. The check compares the diff against the text as it stands at Start. The rewording runs only once a model is chosen, and Start is locked while it runs. When it fails, the typed words stay and are used as they stand. Changing the typed goal after the points were corrected asks before the corrections are replaced.
 - R7. After a review, the developer can change the source or edit the goal and re-check. Only the requirements check runs again, on the stored diff, and replaces the coverage block. The findings are untouched.
 
 **Staged review**
 
 - R8. Every review starts with the regular pass. That is today's standard review: pass 1, then the budget-aware Pass 2 with whole-file context, plus the requirements check when a source is chosen. The quick, smart and deep modes and the `ticketSidekick.bitbucket.reviewMode` setting are removed.
-- R9. The regular pass ends with a suggestion of which of the four persona passes are worth running, from the recommendation the model gives today. When the recommendation is empty, the board says no extra pass is suggested. When no batch gave a usable recommendation, the board says so and suggests nothing.
+- R9. The regular pass ends with a suggestion of which of the four persona passes are worth running. Every batch of the regular pass asks for the recommendation as smart mode's first phase does today, and the suggestion is the union across the finished batches. When the recommendation is empty, the board says no extra pass is suggested. When no batch gave a usable recommendation, the board says so and suggests nothing.
 - R10. After the regular pass, the developer keeps the findings, runs the suggested passes, or picks any combination of the four persona passes and the critic pass. Picking all of them gives today's deep review.
-- R11. Extra passes can be added to a finished review at any time. They run on the stored diff, their findings join the list under today's dedupe rules, and the board marks which passes have run. The critic checks the findings it has not checked yet and drops the ones it cannot confirm, as in deep mode today.
+- R11. Extra passes can be added to a finished review at any time. They run on the full diff the regular pass reviewed and see the context files the earlier passes read. They may ask for more files, as Pass 2 does today, and every file is read at the reviewed commit, never at a newer head. Their findings join the list under today's dedupe rules, and the board marks which passes have run.
+- R37. The critic checks the findings it has not checked yet. A finding it cannot confirm is removed, as in deep mode today, unless the developer has explained it or drafted a comment for it. Then it stays, labelled as probably a false alarm. Finding numbers never change: new findings get new numbers, and a removed finding leaves a gap.
 - R12. Each pass keeps today's prompts, anchor verification, confidence and dedupe rules. A review with the regular pass plus every extra pass applies the same rules as today's deep review (boards plan R20).
 
 **Running**
 
 - R13. While a pass runs, the board shows each batch as it finishes, with the other controls locked, and a Stop control.
-- R14. A pass stopped by the developer or interrupted by a restart keeps the findings of its finished batches, under a banner that names how many batches finished. A pass with failed batches shows today's partial-results banner the same way. Run again starts the review over from the regular pass.
+- R14. A pass stopped by the developer or interrupted by a restart keeps the findings of its finished batches, under a banner that names how many batches finished. A pass with failed batches shows today's partial-results banner the same way. A stopped extra pass is not marked as run, and it can be added again on its own. Run again redoes the whole review from the regular pass, after a confirmation when explanations or drafts would be lost.
 
 **Findings**
 
 - R15. The board shows the verified findings exactly as computed, ordered by severity, with today's markers for low confidence and for an unverified location, the requirements coverage block when there is one, and the token usage per pass (boards plan R21).
-- R16. Each finding can carry a note the developer writes.
+- R16. After the regular pass, the board is one column, in this order: a header line with the PR, the model, the requirements source and the passes run; the pass suggestion and picker; the coverage block; the findings. Post and Copy act on the selected findings.
 - R17. Each finding has an Explain control. Explain makes one model call with the finding, its code, the PR title and description, and the upfront question, and shows the answer under the finding. Explaining again replaces the answer.
-- R18. The developer selects findings to post. The board drafts one comment per finding from the finding, its note and its explanation, each in an editable text box.
-- R19. A draft can be edited by hand or rewritten by the model with an instruction the developer types, one model call per draft, and the developer reviews the result before posting. Posting needs the native confirmation, which names each comment (boards plan R3).
-- R20. Copy for Teams puts the selected findings, or all of them, on the clipboard as plain text with their notes, explanations and the coverage block. It stays plain text because Teams shows pasted Markdown as raw characters.
+- R18. The developer selects findings to post. The board drafts one comment per finding from the finding and its explanation, each in an editable text box. A draft is made once and does not change by itself. When the finding's explanation changes later, the draft is marked outdated, with a Regenerate control.
+- R19. A draft can be edited by hand or rewritten by the model with an instruction the developer types, one model call per draft, and the developer reviews the result before posting. After a Rewrite, Undo restores the previous text until the developer edits or posts. Posting needs the native confirmation, which names each comment (boards plan R3).
+- R20. Copy for Teams puts the selected findings, or all of them, on the clipboard as plain text with their explanations and the coverage block. It stays plain text because Teams shows pasted Markdown as raw characters.
 - R21. Copy as Markdown copies the same content as Markdown, for places that render it, such as a Bitbucket comment or Confluence.
 - R22. While Explain, Rewrite, the goal rewording, a re-check or Post runs, that control is locked and shows it is busy. On failure, an error line appears where the result would go, and the previous explanation, draft or coverage stays unchanged. Posting several comments reports each one, and only the failed ones can be retried.
 - R23. Every model call the board makes counts toward the monthly per-model token counters.
 
 **Session**
 
-- R24. Findings, the passes run, notes, explanations, drafts, the requirements source, coverage and token usage are part of the review's session. A restored board shows them without running anything, and the agent can still read them (boards plan R26).
+- R24. Findings, the passes run, explanations, drafts, the requirements source, coverage, token usage, the full reviewed diff, the reviewed commit and the context files read are part of the review's session. A restored board shows them without running anything, and the agent can still read them (boards plan R26).
 - R25. When the PR's head commit has changed since the review, the board marks itself out of date and offers Run again. It never starts a review on its own.
 
 **Chat**
 
 - R26. A review started from chat answers the agent "opened". The agent gets the counts by severity, the passes run, the verdict and the coverage summary through the read-findings tool (R28).
 - R27. When the agent posts a comment on its own, the comment goes through the tool's confirmation dialog, not through the board (boards plan R23).
-- R28. A read-findings tool gives the agent a review's summary, its findings list, and on request one finding with its code, note and explanation. The agent uses it to explain, to work out which finding a free-text question means, and to fix a finding in the local checkout.
+- R28. A read-findings tool gives the agent a review's summary, its findings list, and on request one finding with its code and explanation. The agent uses it to explain, to work out which finding a free-text question means, and to fix a finding in the local checkout.
 - R29. `/ts-bitbucket` offers `review <url>`, `check`, `usage` and `help`. `check` tests the Bitbucket connection and `usage` shows the monthly token table, as `@bitbucket check` and `@bitbucket usage` do now. A plain chat request with a PR link also starts a review.
 - R30. The Bitbucket tools are in the same catalog shape as the Jira tools, with generated manifest entries, confirmations for writes and the same guard tests.
 
@@ -124,12 +131,12 @@ Today's review also asks the developer to choose the depth before seeing anythin
   - **Covered by:** R1 to R6, R8 to R10, R13, R26, R28
 - F2. Explain, then post or share
   - **Trigger:** The developer is unsure about finding #3.
-  - **Steps:** Explain shows the reason under the finding (R17). The developer adds a note (R16), selects #3 to post, and rewrites the draft with "shorter, friendlier" (R18, R19). They confirm, and the comment is posted. Then they copy #3 for a teammate in Teams (R20).
-  - **Covered by:** R16 to R20
+  - **Steps:** Explain shows the reason under the finding (R17). The developer selects #3 to post and rewrites the draft with "shorter, friendlier" (R18, R19). They confirm, and the comment is posted. Then they copy #3 for a teammate in Teams (R20).
+  - **Covered by:** R17 to R20
 - F3. Back the next day
   - **Trigger:** VS Code restarts with the review board open, and the PR has a new commit.
-  - **Steps:** The board shows the stored findings, explanations and passes run (R24), marked out of date (R25). The developer still adds the critic pass to the stored review (R11). In chat, "fix #3 in my checkout" works through the read-findings tool (R28).
-  - **Covered by:** R11, R24, R25, R28
+  - **Steps:** The developer pastes the PR link again, and the board opens on the stored findings, explanations and passes run (R36, R24), marked out of date (R25). They add the critic pass to the stored review. It reads files at the reviewed commit (R11) and labels #3, which the developer had explained, as probably a false alarm (R37). In chat, "fix #2 in my checkout" works through the read-findings tool (R28).
+  - **Covered by:** R11, R24, R25, R28, R36, R37
 
 ---
 
@@ -140,11 +147,14 @@ Today's review also asks the developer to choose the depth before seeing anythin
 - AE3. **Covers R6.** Given the developer types the goal "only backend endpoint, export button later", when they leave the goal field, then one model call shows in-scope and out-of-scope points in an editable box. Nothing else runs until Start.
 - AE4. **Covers R7.** Given a finished review with a coverage block, when the developer edits the goal and re-checks, then exactly one model call runs, the coverage is replaced and the findings are unchanged.
 - AE5. **Covers R9, R10.** Given the regular pass suggests no extra pass, when the board shows the findings, then it says no extra pass is suggested and still offers every extra pass to pick.
-- AE6. **Covers R11.** Given a finished review that ran the security pass, when the developer adds the critic pass the next day, then the critic runs on the stored diff over the findings it has not checked yet, and the security pass is marked as run.
+- AE6. **Covers R11.** Given a finished review that ran the security pass, when the developer adds the critic pass the next day, then the critic runs on the full reviewed diff over the findings it has not checked yet, and the security pass is marked as run.
 - AE7. **Covers R14.** Given the regular pass on 7 batches, when the developer presses Stop after 3, then the board shows the findings of those 3 under a banner saying 3 of 7 batches finished.
 - AE8. **Covers R19, R22.** Given a hand-edited draft, when a Rewrite fails, then the error shows under the draft and the hand-edited text is unchanged. When the developer declines the native confirmation, nothing is posted.
 - AE9. **Covers R24, R28.** Given a review board was open, when VS Code restarts, then the board shows the same findings and explanations, no review runs, and the agent can still read finding #3.
 - AE10. **Covers R25.** Given a stored review and a new commit on the PR, when the board's background check runs, then the board is marked out of date and no model call is made.
+- AE11. **Covers R36.** Given a stored review of PR #482 with an explanation on #3, when the developer asks for PR #482 again, then the stored review opens. Pressing New review and then Start asks for confirmation before the stored review is replaced.
+- AE12. **Covers R37.** Given finding #3 has an explanation and #5 has none, when the critic added later cannot confirm either, then #5 is removed and #3 stays labelled as probably a false alarm. #4 keeps its number.
+- AE13. **Covers R14.** Given the security pass is stopped after 2 of 5 batches, when the board shows the review, then its findings from 2 batches are kept, the security pass is not marked as run, and it can be added again.
 
 ---
 
