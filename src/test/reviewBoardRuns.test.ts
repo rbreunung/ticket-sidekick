@@ -389,6 +389,17 @@ describe('the regular pass ends', () => {
     expect(results.picker).toBeUndefined();
     expect(results.canRunAgain).toBe(true);
   });
+
+  it('with one batch that failed after its retries shows the findings of the others under the partial-results banner', async () => {
+    respond = call => {
+      if (call.kind === 'regular' && call.file === 2) throw new Error('The model is overloaded');
+      return defaultRespond(call);
+    };
+    const results = resultsOf(await reviewed(manager(), 3));
+    expect(results.statuses).toEqual(['1 of 3 batches of the regular pass had a part that failed; the findings of the others are shown.']);
+    expect(results.findings.map(f => f.title)).toEqual(['Unchecked input in f1', 'Unchecked input in f3']);
+    expect(results.picker).toBeDefined();
+  });
 });
 
 describe('Run again', () => {

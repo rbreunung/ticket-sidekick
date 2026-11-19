@@ -507,3 +507,138 @@ describe('requirements re-check', () => {
     expect(result.review.coverage).toEqual(coverage);
   });
 });
+
+/** The diff of test file `n` alone, as `prDiff` writes it. */
+function fileDiff(n: number): string {
+  return prDiff(n).split('diff --git ').filter(Boolean).map((part) => `diff --git ${part}`)[n - 1];
+}
+
+describe('regular pass: the rules every review pass keeps', () => {
+  it('fetches the files a Data Center server cut from the diff one by one and reviews them, and names a file still cut and one it could not fetch', async () => {
+    const t = setup({ files: 1, respond: (c) => reviewReply([{ file: c.file, line: 1, title: `Issue in f${c.file}` }]) });
+    t.client.cutFiles = [{ path: 'src/f2.ts' }, { path: 'src/f3.ts' }, { path: 'src/f4.ts' }, { path: 'src/f5.ts' }];
+    t.client.perFileDiffs.set('src/f2.ts', { raw: fileDiff(2), truncated: false });
+    t.client.perFileDiffs.set('src/f3.ts', { raw: fileDiff(3), truncated: true });
+
+    const result = await regular(t, { ...ONE_FILE_PER_BATCH, excludePatterns: ['**/f5.ts'] });
+
+    expect(t.client.getPullRequestFileDiffCalls.map((c) => c.path)).toEqual(['src/f2.ts', 'src/f3.ts', 'src/f4.ts']);
+    expect(t.calls.map((c) => c.file).sort()).toEqual([1, 2, 3]);
+    expect(result.review!.store.findings.map((f) => f.file)).toEqual(['src/f1.ts', 'src/f2.ts', 'src/f3.ts']);
+    const notes = result.outcome.notes.join('\n');
+    expect(notes).toContain('reviewed partially: src/f3.ts');
+    expect(notes).toContain('not reviewed: src/f4.ts');
+  });
+
+  it('asks for the configured context lines, and leaves out excluded files and files with no text change, saying how many', async () => {
+    const t = setup({ files: 3, respond: (c) => reviewReply([{ file: c.file, line: 1, title: `Issue in f${c.file}` }]) });
+    t.client.rawDiff = `${prDiff(3)}diff --git a/logo.png b/logo.png\n--- a/logo.png\n+++ b/logo.png\nBinary files differ\n`;
+
+    const result = await regular(t, { ...ONE_FILE_PER_BATCH, contextLines: 25, excludePatterns: ['**/f3.ts'] });
+
+    expect(t.client.getPullRequestDiffCalls.map((c) => c.contextLines)).toEqual([25]);
+    expect(t.calls.map((c) => c.file).sort()).toEqual([1, 2]);
+    expect(result.outcome.notes).toContain('1 file excluded by pattern.');
+    expect(result.outcome.notes).toContain('1 file with no text changes (binary, rename or mode only) skipped.');
+  });
+
+  it('puts a finding on the line its quoted code is on, keeps one whose code is not in the diff as location unverified, and drops one naming a file outside the pull request', async () => {
+    const finding = (file: string, line: number, anchorCode: string, title: string) => JSON.stringify({
+      file, line, anchorCode, severity: 'warning', confidence: 0.8, title, description: `${title} described`, recommendation: `Fix ${title}`,
+    });
+    const t = setup({
+      files: 1,
+      respond: () => [
+        finding('src/f1.ts', 9, codeLine(1, 3), 'Wrong line given'),
+        finding('src/f1.ts', 5, 'const notInTheDiff = true;', 'Code not found'),
+        finding('src/elsewhere.ts', 2, codeLine(1, 4), 'Outside the pull request'),
+        JSON.stringify({ additionalFilesNeeded: [] }),
+      ].join('\n'),
+    });
+
+    const result = await regular(t);
+
+    const findings = result.review!.store.findings;
+    expect(findings.map((f) => f.title)).toEqual(['Wrong line given', 'Code not found']);
+    expect(findings[0].line).toBe(3);
+    expect(findings[0].locationUnverified).toBeFalsy();
+    expect(findings[1].locationUnverified).toBe(true);
+    expect(findings[1].line).toBeUndefined();
+  });
+
+  it('gives a reply cut off mid-finding one continuation call that lists what it already reported, and keeps the findings of both', async () => {
+    const t = setup({
+      files: 1,
+      respond: (c) => c.prompt.includes('Already reported for these files')
+        ? reviewReply([{ file: 1, line: 6, title: 'Second issue' }])
+        : `${findingLine({ file: 1, line: 2, title: 'First issue' })}\n{"file":"src/f1.ts","line":6,"anchorCo`,
+    });
+
+    const result = await regular(t);
+
+    expect(t.calls).toHaveLength(2);
+    expect(t.calls[1].prompt).toContain('First issue');
+    expect(result.review!.store.findings.map((f) => f.title)).toEqual(['First issue', 'Second issue']);
+    expect(result.outcome.failedBatches).toBe(0);
+  });
+
+  it('lets the call with the whole files a batch asked for retract a first finding by its number, and keeps the others', async () => {
+    const t = setup({
+      files: 1,
+      respond: (c) => c.kind === 'regular-whole-files'
+        ? [findingLine({ file: 1, line: 8, title: 'Seen in the whole file' }), JSON.stringify({ additionalFilesNeeded: [], retract: [1] })].join('\n')
+        : reviewReply([{ file: 1, line: 2, title: 'Retracted later' }, { file: 1, line: 4, title: 'Kept' }], { additionalFilesNeeded: ['src/ctx.ts'] }),
+    });
+    t.client.fileContents.set('src/ctx.ts', 'export const ctx = 1;');
+
+    const result = await regular(t);
+
+    expect(t.calls.map((c) => c.kind)).toEqual(['regular', 'regular-whole-files']);
+    expect(t.client.getFileContentCalls.map((c) => [c.path, c.commitHash])).toEqual([['src/ctx.ts', result.review!.snapshot.reviewedCommit]]);
+    expect(result.review!.store.findings.map((f) => f.title).sort()).toEqual(['Kept', 'Seen in the whole file']);
+  });
+
+  it('retries a reply with no usable JSON like a provider error, and keeps the findings of the retry', async () => {
+    const t = setup({
+      files: 1,
+      respond: (_c, index) => (index === 0 ? 'Sorry, I could not review this file.' : reviewReply([{ file: 1, line: 2, title: 'Found on retry' }])),
+    });
+
+    const result = await regular(t);
+
+    expect(t.calls).toHaveLength(2);
+    expect(result.outcome.failedBatches).toBe(0);
+    expect(result.review!.store.findings.map((f) => f.title)).toEqual(['Found on retry']);
+  });
+
+  it('gives the review instructions and the upfront question to every review call, the persona passes and the critic, and the ticket text only to the requirements check', async () => {
+    const readTicket = async (key: string): Promise<RequirementsSourceResult> => ({
+      ok: true,
+      source: { key, summary: 'CSV export', descriptionText: 'Ship the CSV export by Friday.', truncatedDescription: false, comments: [], omittedComments: 0, commentsUnavailable: false },
+    });
+    const t = setup({
+      files: 1,
+      readTicket,
+      respond: (c) => {
+        if (c.kind === 'requirements') return requirementsReply();
+        if (c.kind === 'critic') return '{"keep":[1]}';
+        if (c.kind === 'regular') return reviewReply([{ file: 1, line: 2, title: 'Unchecked input' }], { additionalFilesNeeded: ['src/ctx.ts'] });
+        return reviewReply([]);
+      },
+    });
+    t.client.fileContents.set('src/ctx.ts', 'export const ctx = 1;');
+    const settings: EngineSettings = { ...ONE_FILE_PER_BATCH, reviewInstructions: 'Follow the house style guide.', focus: 'Is the retry loop bounded?' };
+
+    const first = await runRegularPass({ target: TARGET, requirements: { kind: 'ticket', key: 'PAY-9' }, settings }, t.deps);
+    const withSecurity = await runExtraPass(first.review!, 'security', settings, t.deps);
+    await runCritic(withSecurity.review, [], settings, t.deps);
+
+    expect(t.calls.map((c) => c.kind)).toEqual(['regular', 'regular-whole-files', 'requirements', 'security', 'critic']);
+    for (const call of t.calls.filter((c) => c.kind !== 'requirements')) {
+      expect(call.prompt, call.kind).toContain('Follow the house style guide.');
+      expect(call.prompt, call.kind).toContain('Is the retry loop bounded?');
+      expect(call.prompt, call.kind).not.toContain('Ship the CSV export by Friday.');
+    }
+    expect(t.calls.find((c) => c.kind === 'requirements')!.prompt).toContain('Ship the CSV export by Friday.');
+  });
+});
