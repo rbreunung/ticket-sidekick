@@ -18,7 +18,7 @@ export const openReviewTool = defineTool<BitbucketToolDeps, typeof openReviewSha
   title: 'Open a pull request review',
   description:
     'Opens the review board of a Bitbucket pull request in its own editor tab, where the user starts the review and decides how deep it goes. '
-    + 'Use it whenever the user asks to review a pull request or pastes a pull request link to review. Pass a Jira key or a question the user named. '
+    + 'Use it whenever the user asks to review a pull request or pastes a pull request link: a plain chat request with a pull request link means opening a review. Pass a Jira key or a question the user named. '
     + `The answer says only whether the board opened, not the review's result: the review runs on the board, and ${READ_FINDINGS_TOOL} reads its findings afterwards. `
     + 'Changes nothing in Bitbucket.',
   inputSchema: openReviewShape,
