@@ -7,9 +7,7 @@ import { PrReviewService, PERSONAS, type Persona, type PersonaId } from '../serv
 import {
   parsePrUrl,
   parseDiff,
-  parseFollowUpIntent,
   formatReviewForSharing,
-  extractPromptDirectives,
   buildPrContextPrompt,
   buildDiffAwarePrompt,
   buildFindingFollowUpPrompt,
@@ -35,11 +33,23 @@ import {
   mergePass2Findings,
   RAW_PREVIEW_CHARS,
   createAttemptTracker,
-  computeBitbucketFollowups,
   resolveReviewMode,
   deriveCriticEnabled,
-  parseSmartFallbackReply,
   aggregateRecommendedPersonas,
+  type ReviewFinding,
+  type ReviewSession,
+  type BitbucketCommentPreviewSession,
+  type FileDiff,
+  type SmartFallbackSession,
+  type ParsedReviewReply,
+  type ReviewPass,
+  type ReviewTally,
+} from '../review/reviewSessionState';
+import {
+  parseFollowUpIntent,
+  extractPromptDirectives,
+  computeBitbucketFollowups,
+  parseSmartFallbackReply,
   buildChatCommandLink,
   composeReviewOutput,
   hasPrUrl,
@@ -48,33 +58,26 @@ import {
   isReviewStartWithoutUrl,
   endBitbucketSessions,
   hasStoredBitbucketSession,
-  type ReviewFinding,
-  type ReviewSession,
-  type BitbucketCommentPreviewSession,
   type BitbucketFollowupState,
   type BitbucketSessionContinuity,
-  type FileDiff,
-  type SmartFallbackSession,
-  type ParsedReviewReply,
-  type ReviewPass,
-  type ReviewTally,
 } from './reviewSessionState';
 import { isConfirmation, isGreetingOrEmpty } from '../utils/chatPrimitives';
 import { generateContent } from './bitbucket/generateContent';
-import { createTokenMeter } from './bitbucket/tokenMeter';
+import { createTokenMeter } from '../review/tokenMeter';
 import { JiraApiClient } from '../jira/JiraApiClient';
 import { TicketService } from '../services/TicketService';
 import { findJiraKeyInText } from '../utils/branchParser';
 import type { RequirementsTicket } from '../utils/requirementsSource';
-import { runRequirementsPass as runRequirementsPassCore, type RequirementsPassParams } from './bitbucket/requirementsPass';
+import { runRequirementsPass as runRequirementsPassCore, type RequirementsPassParams } from '../review/requirementsPass';
 import {
   renderCoverageMarkdown, renderCoverageText,
   type RequirementsCoverage,
-} from './bitbucket/requirementsCoverage';
+} from '../review/requirementsCoverage';
 import {
   decideTicketStep, buildTicketPause, buildTicketHintLine, buildIgnoredTicketLine,
-  buildNotConfiguredLine, buildNoKeyLine, buildTicketFailureLine, buildTitleKeyAlternativeLine, readTicketGuarded, resolveGoalCommit, buildPrMovedOnLine,
+  buildNotConfiguredLine, buildNoKeyLine, buildTicketFailureLine, buildTitleKeyAlternativeLine, resolveGoalCommit, buildPrMovedOnLine,
 } from './bitbucket/requirementsFlow';
+import { readTicketGuarded } from '../review/ticketRead';
 import { TokenUsageService, formatTokenFooter, formatUsageTable } from '../utils/tokenUsage';
 import { trustedChatMarkdown } from '../utils/chatMarkdown';
 import { tokenStatus } from '../utils/diagUtils';
@@ -86,7 +89,7 @@ import {
   errorCodeOf, handleAttemptFailure, describeErrorForLog,
   formatBatchFailureNotice, formatReviewFailedMessage, PARTIAL_REVIEW_WARNING,
   type CallAttemptOut, type CallDiagHooks,
-} from './bitbucket/reviewDiagnostics';
+} from '../review/reviewDiagnostics';
 
 // R1/R3/U4: replaces the former `getLastAssistantText(...).includes('<!-- bitbucket:TAG -->')` — reads the
 // metadata a session-producing response returned via `{ metadata: { bitbucketSession } }` off the

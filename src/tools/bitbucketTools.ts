@@ -11,7 +11,7 @@ import {
   buildPostCommentConfirmation,
   formatPullRequestSummary,
   type ReviewFinding,
-} from '../participant/reviewSessionState';
+} from '../review/reviewSessionState';
 
 // ---------------------------------------------------------------------------------------------
 // Language Model tools (Agent Mode) for @bitbucket, registered via `vscode.lm.registerTool` in

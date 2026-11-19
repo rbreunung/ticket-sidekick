@@ -1,7 +1,7 @@
 import type { BitbucketCommentResult, BitbucketPR, IBitbucketClient, InlineAnchor } from '../bitbucket/IBitbucketClient';
 import type { DiagLogger } from '../utils/diagTypes';
 import { ApiError } from '../utils/apiError';
-import type { FileDiff, ReviewFinding } from '../participant/reviewSessionState';
+import type { FileDiff, ReviewFinding } from '../review/reviewSessionState';
 import {
   formatSourceConfidence,
   langFromPath,
@@ -9,7 +9,7 @@ import {
   neutralizeMarkdownLinks,
   sanitizeGfmCellText,
   MAX_CONTEXT_FILES_PER_BATCH,
-} from '../participant/reviewSessionState';
+} from '../review/reviewSessionState';
 
 const PROMPT_INTRO = `You are a senior software engineer performing a code review.
 

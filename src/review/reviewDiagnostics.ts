@@ -8,8 +8,8 @@
  * logging (`logLmFailure`, `logReview`) as injected callbacks, the same
  * pattern `TicketService`/`PrReviewService` already use for `onDiag`.
  */
-import { isTransientLmError } from '../../utils/lmRetry';
-import { createAttemptTracker, formatCallLine, formatRecoveryDecision, type ReviewPass } from '../reviewSessionState';
+import { isTransientLmError } from '../utils/lmRetry';
+import { createAttemptTracker, formatCallLine, formatRecoveryDecision, type ReviewPass } from './reviewSessionState';
 
 /**
  * Written into by `callLLM` on completion, so a review-pipeline call site can

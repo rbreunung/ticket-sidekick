@@ -1,6 +1,7 @@
 import type { ReviewMode } from '../../bitbucket/IBitbucketClient';
 import type { RequirementsSourceResult } from '../../services/TicketService';
-import { buildChatCommandLink, buildSmartRerunCommand, neutralizeMarkdownLinks } from '../reviewSessionState';
+import { buildChatCommandLink, buildSmartRerunCommand } from '../reviewSessionState';
+import { safeErrorText } from '../../review/ticketRead';
 
 // Pure and `vscode`-free: the decision about what a review does with a Jira ticket, and the lines
 // and commands that go with each outcome. The participant file only executes the outcome.
@@ -86,18 +87,6 @@ export function buildNoKeyLine(): string {
   return '_No Jira key in the PR title, so requirements aren\'t checked. Put a key in the command to use a ticket._';
 }
 
-/**
- * An error message shown in a notice line. It can carry text from a remote server (a Jira response body),
- * so links, autolinks, HTML and emphasis markers are flattened and it is cut to `maxChars`.
- */
-export function safeErrorText(message: string, maxChars: number): string {
-  return neutralizeMarkdownLinks(message.replace(/\s+/g, ' ').trim())
-    .replace(/[`*_~|<>\\]/g, ' ')
-    .replace(/\b([a-z][a-z0-9+.-]*):\/\//gi, '$1:\u200b//')
-    .replace(/\s+/g, ' ')
-    .slice(0, maxChars);
-}
-
 /** One line saying why a ticket could not be read; the review then runs without it. */
 export function buildTicketFailureLine(key: string, failure: Extract<RequirementsSourceResult, { ok: false }>): string {
   switch (failure.reason) {
@@ -113,30 +102,6 @@ export function buildTicketFailureLine(key: string, failure: Extract<Requirement
 /** When the key written in the prompt does not exist but the PR title names another one, point to it. */
 export function buildTitleKeyAlternativeLine(titleKey: string, prUrl: string): string {
   return `_The PR title names ${titleKey} instead. To check against it, run \`${buildSmartRerunCommand(prUrl, titleKey)}\`._`;
-}
-
-/** How long the ticket read may take before the review goes on without it. */
-export const TICKET_READ_TIMEOUT_MS = 20000;
-
-/**
- * Runs the ticket read so it can never hold the review up or sink it: a read that does not settle in
- * time, or that throws, becomes an `error` failure that the usual failure line names.
- */
-export async function readTicketGuarded(
-  read: () => Promise<RequirementsSourceResult>,
-  timeoutMs: number = TICKET_READ_TIMEOUT_MS,
-): Promise<RequirementsSourceResult> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<RequirementsSourceResult>((resolve) => {
-    timer = setTimeout(() => resolve({ ok: false, reason: 'error', message: 'timed out' }), timeoutMs);
-  });
-  try {
-    return await Promise.race([read(), timeout]);
-  } catch (err) {
-    return { ok: false, reason: 'error', message: err instanceof Error ? err.message : 'unexpected error' };
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 /**

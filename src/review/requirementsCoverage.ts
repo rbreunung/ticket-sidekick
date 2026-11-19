@@ -1,6 +1,6 @@
-import { extractJsonObject } from '../../utils/extractJsonObject';
-import { UnparseableReplyError } from '../../utils/lmRetry';
-import { neutralizeMarkdownLinks, sanitizeGfmCellText, normalizeShareText, type FileDiff } from '../reviewSessionState';
+import { extractJsonObject } from '../utils/extractJsonObject';
+import { UnparseableReplyError } from '../utils/lmRetry';
+import { neutralizeMarkdownLinks, sanitizeGfmCellText, normalizeShareText, type FileDiff } from './reviewSessionState';
 
 // Pure and `vscode`-free: the requirements pass's reply parsing and its two renderers (the chat
 // block and the plain text for "Copy for Teams"). Everything derived from the ticket or the model

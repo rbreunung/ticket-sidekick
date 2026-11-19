@@ -1,9 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
-  isUsageRequest,
   buildBitbucketNotConfiguredMessage,
-  buildChatCommandLink,
   neutralizeMarkdownLinks,
+  ALL_PERSONA_IDS,
+  formatReviewForSharing,
+  type ReviewFinding,
+  type ReviewSession,
+} from '../review/reviewSessionState';
+import {
+  isUsageRequest,
+  buildChatCommandLink,
   composeReviewOutput,
   computeBitbucketFollowups,
   isEndSessionRequest,
@@ -12,12 +18,8 @@ import {
   hasStoredBitbucketSession,
   BITBUCKET_SESSION_KEYS,
   parseSmartFallbackReply,
-  ALL_PERSONA_IDS,
-  formatReviewForSharing,
   extractPromptDirectives,
   type BitbucketFollowupState,
-  type ReviewFinding,
-  type ReviewSession,
 } from '../participant/reviewSessionState';
 import { isGreetingOrEmpty } from '../utils/chatPrimitives';
 

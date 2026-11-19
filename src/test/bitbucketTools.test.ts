@@ -3,10 +3,10 @@ import {
   formatPullRequestSummary,
   buildPostCommentConfirmation,
   buildBitbucketNotConfiguredMessage,
-} from '../participant/reviewSessionState';
+} from '../review/reviewSessionState';
 import { PrReviewService } from '../services/PrReviewService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
-import type { ReviewFinding } from '../participant/reviewSessionState';
+import type { ReviewFinding } from '../review/reviewSessionState';
 
 // These tests cover the pure builders `src/tools/bitbucketTools.ts` (vscode-coupled, not
 // Vitest-loadable — see CLAUDE.md's Testing section) delegates to for every bitbucket_* Language
