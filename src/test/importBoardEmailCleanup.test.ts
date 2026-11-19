@@ -27,6 +27,7 @@ let logs: Array<[string, string, unknown]>;
 const models: BoardModels = {
   list: async () => [{ id: 'm1', name: 'Model One', vendor: 'copilot', family: 'one' }],
   send: async (id, prompt) => { sent.push({ id, prompt }); return reply(prompt); },
+  handle: async () => undefined,
 };
 
 const DISCLAIMER = 'CONFIDENTIAL: this message is for the addressee only.';
@@ -50,6 +51,7 @@ beforeEach(async () => {
       emailModel: () => modelSettings.email,
       reviewModel: () => modelSettings.review,
       writeEmailModel: async id => { modelSettings.email = id; },
+      writeReviewModel: async id => { modelSettings.review = id; },
     },
     onDiag: (level, message, details) => { logs.push([level, message, details]); },
   };

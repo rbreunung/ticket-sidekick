@@ -9,7 +9,7 @@ import { createWaltzDescriptor } from '../imports/waltz';
 import { checkEmailBatchCaps, createEmailDescriptor } from '../imports/email';
 import { parseEmlFile } from '../utils/emlParser';
 import { resolveBoilerplatePatterns } from '../utils/emailBoilerplate';
-import { EMAIL_MODEL_SETTING, REVIEW_MODEL_SETTING, type BoardModels, type ModelSettings } from './boardModels';
+import { EMAIL_MODEL_SETTING, REVIEW_MODEL_SETTING, modelHandle, type BoardChatMessage, type BoardModels, type ModelSettings } from './boardModels';
 import { emailSettings, veracodeSettings, waltzSettings } from '../services/importSettings';
 import { registerKind } from '../sessions/boardKind';
 import { SessionManager } from '../sessions/sessionManager';
@@ -78,7 +78,26 @@ export function vscodeBoardModels(justification: string): BoardModels {
         source.dispose();
       }
     },
+    handle: async id => {
+      const [model] = await vscode.lm.selectChatModels({ id });
+      if (!model) {
+        logDiag('boards.models', 'warn', 'The model a board asked for is not available', { modelId: id });
+        return undefined;
+      }
+      return modelHandle({
+        id: model.id,
+        maxInputTokens: model.maxInputTokens,
+        countTokens: text => model.countTokens(typeof text === 'string' ? text : chatMessage(text)),
+        sendRequest: (messages, token) => model.sendRequest(messages.map(chatMessage), { justification }, token),
+      }, () => new vscode.CancellationTokenSource());
+    },
   };
+}
+
+function chatMessage(message: BoardChatMessage): vscode.LanguageModelChatMessage {
+  return message.role === 'assistant'
+    ? vscode.LanguageModelChatMessage.Assistant(message.content)
+    : vscode.LanguageModelChatMessage.User(message.content);
 }
 
 /** The email check's and the review's model settings; a pick is saved for the user, since models belong to the user, not the workspace. */
@@ -91,6 +110,7 @@ export function vscodeModelSettings(): ModelSettings {
     emailModel: () => read(EMAIL_MODEL_SETTING),
     reviewModel: () => read(REVIEW_MODEL_SETTING),
     writeEmailModel: async id => { await vscode.workspace.getConfiguration().update(EMAIL_MODEL_SETTING, id, vscode.ConfigurationTarget.Global); },
+    writeReviewModel: async id => { await vscode.workspace.getConfiguration().update(REVIEW_MODEL_SETTING, id, vscode.ConfigurationTarget.Global); },
   };
 }
 

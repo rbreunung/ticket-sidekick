@@ -78,11 +78,13 @@ function deps(): ImportStartDeps {
     models: {
       list: async () => available,
       send: async id => { modelCalls.push(id); if (modelFails) throw modelFails; return 'ready'; },
+      handle: async () => undefined,
     },
     modelSettings: {
       emailModel: () => modelSettings.email,
       reviewModel: () => modelSettings.review,
       writeEmailModel: async id => { modelSettings.email = id; },
+      writeReviewModel: async id => { modelSettings.review = id; },
     },
     openSetting: async key => { openedSettings.push(key); },
     hasSession: async id => stored.has(id),
