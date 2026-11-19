@@ -4,8 +4,9 @@ import { announce, h, startBoard } from '../shared/board.js';
 // (a Jira ticket, a goal or none), the goal and its rewording, and an optional question; nothing runs
 // before Start, and only Reword calls the model before it. After the regular pass: a header line
 // (pull request, model, requirements source, passes run) with the token usage per pass, the banners
-// of the last run, the pass suggestion and picker, the coverage block (or why the requirements check
-// gave none, with Re-check), the findings, and Run again. While a pass runs, the live region reads
+// of the last run, the pass suggestion and picker, the requirements source (changeable, with the goal
+// and its rewording) and Re-check, the coverage block (or why the requirements check gave none), the
+// findings, and Run again. While a pass runs, the live region reads
 // its progress, e.g. "Security pass: 2 of 5 batches".
 // The page keeps only what is being typed and not sent yet. Everything from Bitbucket, Jira or the
 // model is written as text.
@@ -94,7 +95,8 @@ function ticketRow(step, board, off) {
     h('label', {}, 'Ticket key', fieldInput('input', 'ticket-key', step.ticketKey, board, off, { type: 'text', size: 16, placeholder: 'PROJ-123', 'aria-label': 'Ticket key' })));
 }
 
-function goalRows(step, board, off, rewording) {
+/** The goal, Reword and the reworded points; `before` names the button the points are corrected for. */
+function goalRows(step, board, off, rewording, before = 'Start') {
   return [
     textField('goal', 'Goal', step.goal, board, off || rewording, 3),
     h('div', { class: 'bar' },
@@ -105,7 +107,7 @@ function goalRows(step, board, off, rewording) {
       step.rewordBlocker && !rewording ? h('span', { class: 'muted' }, step.rewordBlocker) : null),
     step.rewordError ? h('p', { id: 'reword-error', class: 'banner error', role: 'alert' }, step.rewordError) : null,
     step.points || typed.points !== undefined ? [
-      textField('points', 'Reworded goal (correct it before Start)', step.points, board, off || rewording, 8),
+      textField('points', `Reworded goal (correct it before ${before})`, step.points, board, off || rewording, 8),
       step.pointsFromOtherGoal ? h('p', { class: 'muted' }, 'These points were reworded from an earlier wording of the goal. Reword again to replace them, or correct them here.') : null,
     ] : null,
   ];
@@ -156,13 +158,27 @@ function passPicker(picker, board, off) {
       picker.runBlocker ? h('span', { class: 'muted' }, picker.runBlocker) : null));
 }
 
+/** The requirements source, changeable after the review, and Re-check, which runs only the requirements check. */
 function requirementsBlock(r, board, off) {
   const rechecking = Boolean(board.running('recheck'));
+  const rewording = Boolean(board.running('reword'));
+  const form = r.requirementsForm;
+  const fields = form ? { goal: form.goal, points: form.points, 'ticket-key': form.ticketKey } : {};
+  const blocker = rewording ? 'Re-check waits until the rewording ends.' : form?.recheckBlocker;
   return [
+    form ? h('section', { id: 'requirements-source', 'aria-label': 'Requirements source' },
+      h('h2', {}, 'Requirements'),
+      sourceRow(form, board, off || rewording || rechecking),
+      form.source === 'ticket' ? ticketRow(form, board, off || rechecking) : null,
+      form.source === 'goal' ? goalRows(form, board, off || rechecking, rewording, 'Re-check') : null,
+      blocker && !rechecking ? h('p', { class: 'muted' }, blocker) : null) : null,
     r.requirementsLine ? h('section', { id: 'requirements-failure', class: 'banner', 'aria-label': 'Requirements check' },
-      h('p', { id: 'requirements-line' }, r.requirementsLine),
-      r.canRecheck ? h('vscode-button', { id: 'recheck', secondary: true, disabled: off || rechecking, onClick: () => board.run({ type: 'recheck' }) },
-        rechecking ? 'Re-checking…' : 'Re-check') : null) : null,
+      h('p', { id: 'requirements-line' }, r.requirementsLine)) : null,
+    h('div', { class: 'bar' },
+      h('vscode-button', {
+        id: 'recheck', secondary: true, disabled: off || rechecking || rewording || !r.canRecheck,
+        onClick: () => afterSaving(board, fields, () => board.run({ type: 'recheck' })),
+      }, rechecking ? 'Re-checking…' : 'Re-check')),
     r.coverage ? h('section', { id: 'coverage', 'aria-label': 'Requirements coverage' }, h('pre', { class: 'coverage' }, r.coverage)) : null,
   ];
 }

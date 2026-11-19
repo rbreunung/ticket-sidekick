@@ -111,7 +111,12 @@ function progressReporter(progress: RunProgress<ReviewWorking>) {
   return {
     report(p: EngineProgress) {
       reported = reported.then(() => progress({
-        update: w => (w.active ? { ...w, active: { ...w.active, step: p.step, done: p.batchesDone, total: p.batchesTotal } } : w),
+        update: w => {
+          if (!w.active) return w;
+          const active: ActivePass = { ...w.active, step: p.step, done: p.batchesDone, total: p.batchesTotal };
+          if (p.review) active.partial = p.review;
+          return { ...w, active };
+        },
         done: p.batchesDone,
         total: p.batchesTotal,
       })).catch(() => undefined);
@@ -211,7 +216,18 @@ export async function extraPassesRun(
     review = result.review;
     const record: PassRecord = { ...result.outcome, modelId, run };
     const done = review;
-    await progress({ update: w => ({ ...w, review: done, passes: [...w.passes, record] }), done: result.outcome.batchesDone, total: result.outcome.batchesTotal });
+    await progress({
+      update: w => {
+        const next: ReviewWorking = { ...w, review: done, passes: [...w.passes, record] };
+        if (next.active) {
+          next.active = { ...next.active };
+          delete next.active.partial;
+        }
+        return next;
+      },
+      done: result.outcome.batchesDone,
+      total: result.outcome.batchesTotal,
+    });
     if (result.outcome.status !== 'finished') break;
   }
   const final = review;
@@ -228,8 +244,13 @@ export async function extraPassesRun(
   };
 }
 
-/** The requirements check alone, on the stored diff: only the coverage changes. */
-export async function recheckRun(session: ReviewSession, deps: ReviewBoardDeps, signal: AbortSignal): Promise<RunFinished<ReviewWorking>> {
+/**
+ * The requirements check alone, on the stored diff, with the source as it is set now: only the
+ * coverage changes, and the source "none" removes it without a call.
+ */
+export async function recheckRun(
+  session: ReviewSession, choice: RequirementsChoice, deps: ReviewBoardDeps, signal: AbortSignal,
+): Promise<RunFinished<ReviewWorking>> {
   const review = session.working.review;
   if (!review) return withNotice('There is no review to check.', false);
   const model = await modelFor(session, deps);
@@ -237,14 +258,19 @@ export async function recheckRun(session: ReviewSession, deps: ReviewBoardDeps, 
   const bitbucket = await deps.bitbucket();
   if (!bitbucket.configured) return withNotice(bitbucket.hint, false);
   const { confidenceThreshold: _threshold, ...settings } = await deps.settings();
-  const result = await recheckRequirements(review, review.requirements, settings, await engineDeps(deps, model.handle, bitbucket.client, signal));
+  const result = await recheckRequirements(review, choice, settings, await engineDeps(deps, model.handle, bitbucket.client, signal));
   return {
     update: w => {
       // A review replaced meanwhile is not given this coverage.
       if (!w.review || w.review.snapshot.reviewedCommit !== review.snapshot.reviewedCommit || w.review.snapshot.pr.id !== review.snapshot.pr.id) return w;
+      // A failed or stopped check keeps the source and the coverage it had.
       const nextReview: StagedReview = { ...w.review, requirements: result.review.requirements };
       if (result.review.coverage) nextReview.coverage = result.review.coverage;
-      return { ...w, review: nextReview, requirements: result.outcome, recheckTokens: addTokens(w.recheckTokens, result.tokens) };
+      else delete nextReview.coverage;
+      const next: ReviewWorking = { ...w, review: nextReview, requirements: result.outcome, recheckTokens: addTokens(w.recheckTokens, result.tokens) };
+      // Run again redoes the review with the source the coverage now comes from.
+      if (w.startedWith) next.startedWith = { ...w.startedWith, requirements: result.review.requirements };
+      return next;
     },
   };
 }
@@ -269,20 +295,23 @@ export function interruptedWorking(working: ReviewWorking): ReviewWorking {
   const next: ReviewWorking = { ...working };
   delete next.active;
   if (active.what === 'regular') {
-    // The regular pass hands its findings over only at its end, so none were saved.
+    // The findings of the batches that finished stay, as after a stop; the review it replaced is gone.
     const startedWith: StartedWith = { ...active.startedWith!, confidenceThreshold: working.startedWith?.confidenceThreshold ?? 0.7 };
     const step = active.step === 'requirements' ? 'regular' : active.step;
     const result: ReviewWorking = {
       ...next, stage: 'review', startedWith, passes: [emptyRecord(step, active, active.run)], explanations: {}, drafts: {},
     };
-    delete result.review;
+    if (active.partial) result.review = active.partial;
+    else delete result.review;
     delete result.requirements;
     delete result.picked;
     delete result.recheckTokens;
     return result;
   }
   const step = active.step === 'requirements' ? active.steps[0] : active.step;
-  const review = working.review;
+  // The running step's finished batches join the review; the steps finished before it were saved already.
+  if (active.partial) next.review = active.partial;
+  const review = next.review;
   const left = active.steps.filter(s => !review?.store.stepsRun.includes(s));
   if (left.length > 0) next.picked = left;
   return { ...next, passes: [...working.passes, emptyRecord(step, active, active.run)] };

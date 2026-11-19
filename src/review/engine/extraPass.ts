@@ -43,6 +43,11 @@ export async function runExtraPass(
   const contextPaths = batches.map((b) => [...b.contextPaths]);
   const findings: NewFinding[] = [];
   let stopped = false;
+  const withFindings = (store: StagedReview['store']): StagedReview => ({
+    ...review,
+    snapshot: { ...snapshot, batches: batches.map((b, i) => ({ ...b, contextPaths: [...contextPaths[i]] })) },
+    store,
+  });
 
   deps.onProgress?.({ step: personaId, batchesDone: 0, batchesTotal: batches.length });
   for (let i = 0; i < batches.length; i++) {
@@ -67,15 +72,11 @@ export async function runExtraPass(
       break;
     }
     outcome.batchesDone = i + 1;
-    deps.onProgress?.({ step: personaId, batchesDone: i + 1, batchesTotal: batches.length });
+    deps.onProgress?.({ step: personaId, batchesDone: i + 1, batchesTotal: batches.length, review: withFindings(addFindings(review.store, findings).store) });
   }
 
   const added = addFindings(review.store, findings);
-  const next: StagedReview = {
-    ...review,
-    snapshot: { ...snapshot, batches: batches.map((b, i) => ({ ...b, contextPaths: contextPaths[i] })) },
-    store: stopped ? added.store : markStepRun(added.store, personaId),
-  };
+  const next = withFindings(stopped ? added.store : markStepRun(added.store, personaId));
   ctx.log('info', `${persona.displayName} pass ${stopped ? 'stopped' : 'finished'}`, {
     batchesDone: outcome.batchesDone, batchesTotal: batches.length, added: added.added.length, merged: added.merged.length,
   });

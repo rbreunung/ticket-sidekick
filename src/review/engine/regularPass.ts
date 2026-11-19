@@ -65,6 +65,13 @@ export async function runRegularPass(
   const cache = new Map<string, string>();
   const findings: NewFinding[] = [];
   const recommendations: Array<string[] | undefined> = [];
+  /** The review a stop now would hand over: the finished batches' findings, the step not marked as run. */
+  const partial = (): StagedReview => ({
+    snapshot: { target, pr, reviewedCommit: pr.fromCommitHash, batches: batches.map((b) => ({ ...b })) },
+    store: addFindings(emptyStore(), findings).store,
+    suggestion: suggestionOf(recommendations),
+    requirements: input.requirements,
+  });
   let reviewedFiles = 0;
   let firstFailure: string | undefined;
   let stopped = false;
@@ -96,7 +103,9 @@ export async function runRegularPass(
       break;
     }
     outcome.batchesDone = i + 1;
-    deps.onProgress?.({ step: 'regular', batchesDone: i + 1, batchesTotal: chunks.length });
+    if (deps.onProgress) {
+      deps.onProgress({ step: 'regular', batchesDone: i + 1, batchesTotal: chunks.length, ...(reviewedFiles > 0 ? { review: partial() } : {}) });
+    }
   }
 
   if (reviewedFiles === 0) {

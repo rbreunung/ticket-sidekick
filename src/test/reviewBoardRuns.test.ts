@@ -47,11 +47,12 @@ function reviewReply(findings: string[], meta: { recommendedPersonas?: string[];
   return [...findings, JSON.stringify({ additionalFilesNeeded: meta.additionalFilesNeeded ?? [], ...(meta.recommendedPersonas ? { recommendedPersonas: meta.recommendedPersonas } : {}) })].join('\n');
 }
 
-type CallKind = 'regular' | 'whole-files' | 'security' | 'performance' | 'reliability' | 'maintainability' | 'critic' | 'requirements';
+type CallKind = 'reword' | 'regular' | 'whole-files' | 'security' | 'performance' | 'reliability' | 'maintainability' | 'critic' | 'requirements';
 
 function kindOf(prompt: string): CallKind {
   if (prompt.startsWith('You are verifying the findings')) return 'critic';
   if (prompt.startsWith('You are checking whether a pull request')) return 'requirements';
+  if (prompt.startsWith('A developer typed the goal')) return 'reword';
   for (const lens of ['security', 'performance', 'reliability', 'maintainability'] as const) {
     if (prompt.includes(`through a ${lens} lens ONLY`)) return lens;
   }
@@ -73,6 +74,7 @@ let confirms: string[];
 let confirmAnswer: boolean;
 let ticketResult: RequirementsSourceResult;
 let clock: number;
+let jiraConfigured: boolean;
 
 function requirementsReply(): string {
   return readFileSync(resolve(process.cwd(), 'src/test/fixtures/requirements-reply-clean-spec.json'), 'utf-8');
@@ -81,6 +83,7 @@ function requirementsReply(): string {
 /** The regular pass finds one warning per file and suggests the security pass. */
 const defaultRespond = (call: Call): string => {
   if (call.kind === 'requirements') return requirementsReply();
+  if (call.kind === 'reword') return JSON.stringify({ inScope: ['Only the backend export endpoint'], outOfScope: ['The export button'], openPoints: [] });
   if (call.kind === 'critic') return JSON.stringify({ keep: [] });
   if (call.kind === 'regular') return reviewReply([findingLine(call.file, 2, `Unchecked input in f${call.file}`)], { recommendedPersonas: ['security'] });
   if (call.kind === 'security') return reviewReply([findingLine(call.file, 6, `Token logged in f${call.file}`, 'critical')]);
@@ -107,7 +110,7 @@ function handle(id: string): BoardModelHandle {
 function deps(): ReviewBoardDeps {
   return {
     bitbucket: async () => ({ configured: true, client }),
-    jira: async () => ({ readRequirements: async () => ticketResult }),
+    jira: async () => (jiraConfigured ? { readRequirements: async () => ticketResult } : undefined),
     models: { list: async () => [MODEL], handle: async id => (id === MODEL.id ? handle(id) : undefined) },
     modelSettings: { reviewModel: () => MODEL.id, writeReviewModel: async () => {} },
     // One file per batch.
@@ -201,6 +204,7 @@ beforeEach(() => {
     source: { key: 'PROJ-12', summary: 'Add export', descriptionText: 'Export the report as CSV.', truncatedDescription: false, comments: [], omittedComments: 0, commentsUnavailable: false },
   };
   clock = 1_000;
+  jiraConfigured = true;
 });
 
 afterEach(() => {
@@ -462,8 +466,86 @@ describe('the requirements check', () => {
   });
 });
 
+describe('changing the requirements source after a review', () => {
+  async function reviewedAgainstTicket(m: SessionManager): Promise<BoardState> {
+    client.prOverride.title = 'PROJ-12 Add export';
+    const state = await reviewed(m, 2);
+    expect(resultsOf(state).coverage).toMatch(/Requirements coverage \(PROJ-12\)/);
+    return state;
+  }
+
+  it('switching from the ticket to a reworded goal and re-checking makes one requirements call, replaces the coverage and leaves the findings', async () => {
+    const m = manager();
+    let state = await reviewedAgainstTicket(m);
+    const before = resultsOf(state).findings;
+    expect(resultsOf(state).requirementsForm).toMatchObject({ source: 'ticket', ticketKey: 'PROJ-12' });
+
+    state = await act(m, state, { type: 'source', source: 'goal' });
+    state = await act(m, state, { type: 'goal', text: 'export only the backend endpoint' });
+    expect(resultsOf(state).requirementsForm).toMatchObject({ source: 'goal', goal: 'export only the backend endpoint', canReword: true });
+    expect(resultsOf(state).coverage).toMatch(/PROJ-12/);
+
+    calls = [];
+    state = await runAndWait(m, state, { type: 'reword' });
+    expect(calls.map(c => c.kind)).toEqual(['reword']);
+    expect(resultsOf(state).requirementsForm!.points).toMatch(/Only the backend export endpoint/);
+
+    calls = [];
+    const started = await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'recheck' });
+    expect(started.running).toEqual([expect.objectContaining({ size: 'call', what: 'recheck' })]);
+    state = await idle(m, state.id);
+    expect(calls.map(c => c.kind)).toEqual(['requirements']);
+    expect(calls[0].prompt).toContain('Only the backend export endpoint');
+    const results = resultsOf(state);
+    expect(results.requirements).toBe('the stated goal');
+    expect(results.coverage).toMatch(/Stated goal/);
+    expect(results.coverage).not.toMatch(/PROJ-12/);
+    expect(results.findings).toEqual(before);
+    expect(results.passesRun).toEqual(['Regular']);
+  });
+
+  it('switching to none and re-checking makes no call and removes the coverage', async () => {
+    const m = manager();
+    let state = await reviewedAgainstTicket(m);
+    const before = resultsOf(state).findings;
+    state = await act(m, state, { type: 'source', source: 'none' });
+    expect(resultsOf(state).canRecheck).toBe(true);
+
+    calls = [];
+    state = await runAndWait(m, state, { type: 'recheck' });
+    expect(calls).toEqual([]);
+    const results = resultsOf(state);
+    expect(results.coverage).toBeUndefined();
+    expect(results.requirements).toBe('none');
+    expect(results.findings).toEqual(before);
+    // Nothing is left to check or remove.
+    expect(results.canRecheck).toBe(false);
+    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'recheck' })).rejects.toThrow(/ticket or a goal/);
+  });
+
+  it('a goal re-check needs the goal typed; the ticket is not offered while Jira is not configured', async () => {
+    jiraConfigured = false;
+    const m = manager();
+    let state = await reviewed(m, 2);
+    let form = resultsOf(state).requirementsForm!;
+    expect(form.sources.find(s => s.id === 'ticket')).toMatchObject({ available: false, reason: expect.stringMatching(/Jira is not configured/) });
+    await expect(act(m, state, { type: 'source', source: 'ticket' })).rejects.toThrow(/Jira is not configured/);
+
+    state = await act(m, state, { type: 'source', source: 'goal' });
+    form = resultsOf(state).requirementsForm!;
+    expect(resultsOf(state).canRecheck).toBe(false);
+    expect(form.recheckBlocker).toBe('Type the goal.');
+  });
+
+  it('the question and the model stay as the review was started', async () => {
+    const m = manager();
+    const state = await reviewed(m, 2);
+    await expect(act(m, state, { type: 'question', text: 'other question' })).rejects.toThrow(/New review/);
+  });
+});
+
 describe('a restart during a pass', () => {
-  it('a security pass cut off by a restart shows the interrupted banner and no running state, and is offered again', async () => {
+  it('a security pass cut off by a restart during batch 3 of 5 keeps the findings of batches 1 and 2, stays unmarked and is offered again', async () => {
     const m = manager();
     let state = await reviewed(m, 5);
     hold(call => call.kind === 'security' && call.file === 3);
@@ -475,24 +557,52 @@ describe('a restart during a pass', () => {
     expect(restored.running).toBeUndefined();
     const results = resultsOf(restored);
     expect(viewOf(restored).progress).toBeUndefined();
-    expect(results.statuses).toEqual([expect.stringMatching(/^The security pass was cut off by a restart after 2 of 5 batches\..*not marked as run/)]);
+    expect(results.statuses).toEqual([expect.stringMatching(/^The security pass was cut off by a restart: 2 of 5 batches finished, and their findings are kept\..*not marked as run/)]);
+    expect(titles(restored)).toEqual([
+      'Token logged in f1', 'Token logged in f2',
+      'Unchecked input in f1', 'Unchecked input in f2', 'Unchecked input in f3', 'Unchecked input in f4', 'Unchecked input in f5',
+    ]);
     expect(results.passesRun).toEqual(['Regular']);
-    expect(results.picker!.choices.find(c => c.step === 'security')).toMatchObject({ available: true, picked: true });
+    expect(results.picker!.choices.find(c => c.step === 'security')).toMatchObject({ available: true, run: false, picked: true });
   });
 
-  it('a regular pass cut off by a restart shows the interrupted banner and Run again', async () => {
+  it('a regular pass cut off by a restart during batch 4 of 7 shows the findings of batches 1 to 3 under the interrupted banner, and the review takes extra passes', async () => {
     const m = manager();
-    client.rawDiff = prDiff(4);
+    client.rawDiff = prDiff(7);
     const state = await open(m);
-    hold(call => call.kind === 'regular' && call.file === 2);
+    hold(call => call.kind === 'regular' && call.file === 4);
     await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'start' });
-    await until(m, state.id, s => viewOf(s).progress === 'Regular pass: 1 of 4 batches');
+    await until(m, state.id, s => viewOf(s).progress === 'Regular pass: 3 of 7 batches');
 
-    const restored = await open(manager());
+    const m2 = manager();
+    let restored = await open(m2);
     expect(restored.running).toBeUndefined();
     expect(viewOf(restored).stage).toBe('review');
     const results = resultsOf(restored);
-    expect(results.statuses).toEqual([expect.stringMatching(/^The regular pass was cut off by a restart after 1 of 4 batches/)]);
+    expect(results.statuses).toEqual([expect.stringMatching(/^The regular pass was cut off by a restart: 3 of 7 batches finished, and their findings are kept\./)]);
+    expect(results.hasReview).toBe(true);
+    expect(titles(restored)).toEqual(['Unchecked input in f1', 'Unchecked input in f2', 'Unchecked input in f3']);
+    expect(results.passesRun).toEqual([]);
+    expect(results.canRunAgain).toBe(true);
+
+    // As after a stop, the kept review takes an extra pass over every batch of the pull request.
+    calls = [];
+    restored = await runAndWait(m2, restored, { type: 'passes' });
+    expect(calls.filter(c => c.kind === 'security')).toHaveLength(7);
+    expect(resultsOf(restored).passesRun).toEqual(['Security']);
+  });
+
+  it('a regular pass cut off before its first batch finished has no findings and offers Run again', async () => {
+    const m = manager();
+    client.rawDiff = prDiff(4);
+    const state = await open(m);
+    hold(call => call.kind === 'regular' && call.file === 1);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'start' });
+    await until(m, state.id, s => viewOf(s).progress === 'Regular pass: 0 of 4 batches');
+
+    const restored = await open(manager());
+    const results = resultsOf(restored);
+    expect(results.statuses).toEqual([expect.stringMatching(/^The regular pass was cut off by a restart: 0 of 4 batches finished/)]);
     expect(results.hasReview).toBe(false);
     expect(results.canRunAgain).toBe(true);
   });

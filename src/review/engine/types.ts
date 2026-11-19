@@ -148,6 +148,12 @@ export interface EngineProgress {
   step: ReviewStep | 'requirements';
   batchesDone: number;
   batchesTotal: number;
+  /**
+   * The review as it stands after the batch just finished, with the step not marked as run: what a
+   * stop at this point would hand over. Set on the per-batch reports of the regular pass, the persona
+   * passes and the critic, so a board can save it and keep the finished batches after a restart.
+   */
+  review?: StagedReview;
 }
 
 export interface EngineDeps {

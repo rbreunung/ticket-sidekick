@@ -146,7 +146,7 @@ export async function runCritic(
     outcome.labelled.push(...applied.labelled);
     if (failed) outcome.failedBatches++;
     outcome.batchesDone = n + 1;
-    deps.onProgress?.({ step: 'critic', batchesDone: n + 1, batchesTotal: order.length });
+    deps.onProgress?.({ step: 'critic', batchesDone: n + 1, batchesTotal: order.length, review: { ...review, store } });
   }
 
   if (!stopped) store = markStepRun(store, 'critic');

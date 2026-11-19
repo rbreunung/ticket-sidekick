@@ -318,12 +318,56 @@ describe('the review board page: passes and runs', () => {
     expect(must('run-selected').disabled).toBeFalsy();
   });
 
+  it('after a review the requirements source can be changed and the goal edited and reworded; Re-check sends a typed goal first', async () => {
+    const form = (extra: Partial<NonNullable<ReviewResultsView['requirementsForm']>> = {}): NonNullable<ReviewResultsView['requirementsForm']> => ({
+      sources: [
+        { id: 'ticket', label: 'Jira ticket', available: true },
+        { id: 'goal', label: 'A goal', available: true },
+        { id: 'none', label: 'None', available: true },
+      ],
+      source: 'ticket', ticketKey: 'PROJ-12', goal: '', points: '', pointsFromOtherGoal: false, canReword: false, ...extra,
+    });
+    await loadBoard(boardState(view({ stage, results: results({ requirementsForm: form(), canRecheck: true }) })));
+    const order = page.root.elements().map(el => el.id).filter(id => ['pass-picker', 'requirements-source', 'recheck', 'coverage', 'findings'].includes(id));
+    expect(order).toEqual(['pass-picker', 'requirements-source', 'recheck', 'coverage', 'findings']);
+    expect(must('source-ticket').checked).toBe(true);
+    expect(must('ticket-key').value).toBe('PROJ-12');
+    must('source-goal').dispatch('change');
+    await settle();
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'source', source: 'goal' } }]);
+
+    await push({ view: view({ stage, results: results({ requirementsForm: form({ source: 'goal', canReword: false, rewordBlocker: 'Type the goal first.', recheckBlocker: 'Type the goal.' }), canRecheck: false }) }) });
+    expect(byId('ticket-key')).toBeFalsy();
+    expect(must('recheck').disabled).toBe(true);
+    expect(must('requirements-source').textContent).toMatch(/Type the goal\./);
+
+    await push({ view: view({ stage, results: results({ requirementsForm: form({ source: 'goal', goal: 'only backend', canReword: true }), canRecheck: true }) }) });
+    await type(must('goal'), 'only the backend endpoint', false);
+    await click(must('reword'));
+    expect(posted('action').at(-1)).toEqual({ revision: 1, action: { type: 'goal', text: 'only the backend endpoint' } });
+    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'reword' } }]);
+
+    await push({ running: [{ size: 'call', what: 'reword', label: 'the goal rewording', done: 0, total: 1 }] });
+    expect(must('recheck').disabled).toBe(true);
+    expect(must('reword').textContent).toBe('Rewording…');
+
+    await push({
+      running: undefined,
+      view: view({ stage, results: results({ requirementsForm: form({ source: 'goal', goal: 'only the backend endpoint', points: 'In scope:\n- The backend endpoint', canReword: true }), canRecheck: true }) }),
+    });
+    expect(must('points').value).toBe('In scope:\n- The backend endpoint');
+    await type(must('points'), 'In scope:\n- The backend endpoint only', false);
+    await click(must('recheck'));
+    expect(posted('action').at(-1)).toEqual({ revision: 1, action: { type: 'points', text: 'In scope:\n- The backend endpoint only' } });
+    expect(posted('run').at(-1)).toEqual({ revision: 1, request: { type: 'recheck' } });
+  });
+
   it('a board restored after a restart mid-pass shows the interrupted banner and no running state', async () => {
     await loadBoard(boardState(view({
       stage,
-      results: results({ statuses: ['The security pass was cut off by a restart after 2 of 5 batches. The batches it had not saved yet are lost. It is not marked as run, so you can pick it again.'] }),
+      results: results({ statuses: ['The security pass was cut off by a restart: 2 of 5 batches finished, and their findings are kept. It is not marked as run, so you can pick it again.'] }),
     }), { restored: true }));
-    expect(must('pass-status-0').textContent).toMatch(/cut off by a restart after 2 of 5 batches/);
+    expect(must('pass-status-0').textContent).toMatch(/cut off by a restart: 2 of 5 batches finished/);
     expect(byId('stop-run')).toBeFalsy();
     expect(byId('run-progress')).toBeFalsy();
     expect(must('run-selected').disabled).toBe(true);

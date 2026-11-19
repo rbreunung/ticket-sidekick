@@ -62,6 +62,11 @@ export interface ActivePass {
   run: number;
   /** For the regular pass: what it was started with, so Run again works after a restart. */
   startedWith?: Omit<StartedWith, 'confidenceThreshold'>;
+  /**
+   * The review as it stands after the running step's last finished batch, the step not marked as
+   * run. It is not shown while the pass runs; a restart that cuts the pass off keeps it.
+   */
+  partial?: StagedReview;
 }
 
 /** What the regular pass was started with. */
@@ -140,6 +145,21 @@ export interface FirstStepView {
   storedReview: boolean;
 }
 
+/** The requirements source after a review: changed or edited here, then Re-check runs only the requirements check. */
+export interface RequirementsFormView {
+  sources: FirstStepView['sources'];
+  source: SourceId;
+  ticketKey: string;
+  goal: string;
+  points: string;
+  pointsFromOtherGoal: boolean;
+  rewordError?: string;
+  canReword: boolean;
+  rewordBlocker?: string;
+  /** Why Re-check cannot run now. */
+  recheckBlocker?: string;
+}
+
 export interface PassChoiceView {
   step: ReviewStep;
   label: string;
@@ -173,6 +193,8 @@ export interface ReviewResultsView {
   picker?: PassPickerView;
   /** Why the requirements check gave no coverage, in the coverage position. */
   requirementsLine?: string;
+  /** The requirements source to re-check with; there when there is a review. */
+  requirementsForm?: RequirementsFormView;
   canRecheck: boolean;
   coverage?: string;
   /** Token usage per pass. */
@@ -234,9 +256,7 @@ function statusLine(pass: PassRecord): string | undefined {
     case 'stopped':
       return `${name} was stopped: ${pass.batchesDone} of ${pass.batchesTotal} batches finished, and ${kept}.${offered}`;
     case 'interrupted':
-      return extra
-        ? `${name} was cut off by a restart after ${pass.batchesDone} of ${pass.batchesTotal} batches. The batches it had not saved yet are lost.${offered}`
-        : `${name} was cut off by a restart after ${pass.batchesDone} of ${pass.batchesTotal} batches, before its findings were saved. Run again reviews the pull request.`;
+      return `${name} was cut off by a restart: ${pass.batchesDone} of ${pass.batchesTotal} batches finished, and ${kept}.${offered}`;
     case 'failed':
       return `${name} failed${pass.error ? `: ${pass.error}` : '.'}${pass.step === 'regular' ? ' No batch gave a readable reply, so there are no findings. Run again tries once more.' : ''}`;
     case 'nothing-to-review':
@@ -308,6 +328,7 @@ function resultsView(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking
   const threshold = startedWith?.confidenceThreshold ?? 0.7;
   const statuses = working.passes.filter(p => p.run === lastRun).map(statusLine).filter((line): line is string => line !== undefined);
   const line = review ? requirementsLine(working.requirements) : undefined;
+  const recheck = recheckBlocker(session);
   const tokens = working.passes.filter(p => p.tokens.calls > 0).map(p => ({ pass: p.step === 'critic' ? 'Critic' : `${STEP_LABELS[p.step]} pass`, text: tokenText(p.tokens) }));
   if (working.recheckTokens && working.recheckTokens.calls > 0) tokens.push({ pass: 'Requirements re-check', text: tokenText(working.recheckTokens) });
   return {
@@ -321,7 +342,8 @@ function resultsView(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking
     hasReview: review !== undefined,
     ...(review ? { picker: pickerView(working, review) } : {}),
     ...(line ? { requirementsLine: line } : {}),
-    canRecheck: line !== undefined && review !== undefined && review.requirements.kind !== 'none',
+    ...(review ? { requirementsForm: { ...sourceFields(session), ...(recheck ? { recheckBlocker: recheck } : {}) } } : {}),
+    canRecheck: recheck === undefined,
     ...(review?.coverage ? { coverage: renderCoverageText(review.coverage) } : {}),
     tokens,
     canRunAgain: startedWith !== undefined,
@@ -340,11 +362,11 @@ function progressText(working: ReviewWorking): string | undefined {
   return active.total > 0 ? `${name}: ${active.done} of ${active.total} batches` : `${name}: starting`;
 }
 
-function firstStepView(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>): FirstStepView {
+/** The requirements source as the first step and the results show it. */
+function sourceFields(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>): RequirementsFormView {
   const step = session.working.firstStep;
   const ctx = contextOf(session);
   const reword = rewordBlocker(step, ctx);
-  const start = startBlocker(step, ctx);
   return {
     sources: [
       { id: 'ticket', label: 'Jira ticket', available: ctx.jiraConfigured, ...(ctx.jiraConfigured ? {} : { reason: JIRA_NOT_CONFIGURED_REASON }) },
@@ -357,10 +379,30 @@ function firstStepView(session: Session<ReviewRecipe, ReviewDerived, ReviewWorki
     points: step.points,
     pointsFromOtherGoal: step.points.trim() !== '' && step.pointsFrom !== undefined && step.pointsFrom !== step.goal,
     ...(step.rewordError ? { rewordError: step.rewordError } : {}),
-    question: step.question,
-    ...(step.notice ? { notice: step.notice } : {}),
     canReword: !reword,
     ...(reword ? { rewordBlocker: reword } : {}),
+  };
+}
+
+/** What keeps Re-check from running with the source as it is set now, when something does. */
+function recheckBlocker(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>): string | undefined {
+  const { review, firstStep } = session.working;
+  if (!review) return 'There is no review to check.';
+  const ctx = contextOf(session);
+  const blocker = startBlocker(firstStep, ctx);
+  if (blocker) return blocker;
+  if (sourceOf(firstStep, ctx) === 'none' && review.requirements.kind === 'none' && !review.coverage) return 'Pick a ticket or a goal to check against.';
+  return undefined;
+}
+
+function firstStepView(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>): FirstStepView {
+  const step = session.working.firstStep;
+  const ctx = contextOf(session);
+  const start = startBlocker(step, ctx);
+  return {
+    ...sourceFields(session),
+    question: step.question,
+    ...(step.notice ? { notice: step.notice } : {}),
     canStart: !start,
     ...(start ? { startBlocker: start } : {}),
     storedReview: session.working.review !== undefined || session.working.passes.length > 0,
@@ -397,6 +439,9 @@ async function readModels(deps: ReviewBoardDeps): Promise<ReviewModels> {
   return { setting, state: state.state, options: listed.map(m => ({ id: m.id, label: modelLabel(m) })) };
 }
 
+/** The first-step actions the results take too: the requirements source, the ticket key, the goal and its points. */
+const SOURCE_ACTIONS: ReadonlySet<string> = new Set(['source', 'ticket-key', 'goal', 'points']);
+
 const RUN_TYPES = new Set(['reword', 'start', 'passes', 'again', 'recheck']);
 
 function isRunRequest(request: unknown): request is ReviewRunRequest {
@@ -407,7 +452,10 @@ function isRunRequest(request: unknown): request is ReviewRunRequest {
 async function rewordRun(
   session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>, deps: ReviewBoardDeps, signal: AbortSignal,
 ): Promise<RunFinished<ReviewWorking>> {
-  const notice = (text: string): RunFinished<ReviewWorking> => ({ update: w => ({ ...w, firstStep: { ...w.firstStep, notice: text } }) });
+  const onResults = session.working.stage === 'review';
+  const notice = (text: string): RunFinished<ReviewWorking> => ({
+    update: w => (onResults ? { ...w, notice: text } : { ...w, firstStep: { ...w.firstStep, notice: text } }),
+  });
   const step = session.working.firstStep;
   if (rewordReplacesCorrections(step)) {
     const replace = await deps.confirm({
@@ -473,10 +521,13 @@ function beginResultsRun(session: Session<ReviewRecipe, ReviewDerived, ReviewWor
   }
   const review = working.review;
   if (!review) return { ok: false, reason: 'There is no review. Run again reviews the pull request.' };
+  if (request.type === 'reword') {
+    const blocker = rewordBlocker(working.firstStep, contextOf(session));
+    return blocker ? { ok: false, reason: blocker } : { ok: true, size: 'call', what: 'reword', label: 'the goal rewording', total: 1 };
+  }
   if (request.type === 'recheck') {
-    return review.requirements.kind === 'none'
-      ? { ok: false, reason: 'The review has no requirements source to check.' }
-      : { ok: true, size: 'call', what: 'recheck', label: 'the requirements re-check', total: 1 };
+    const blocker = recheckBlocker(session);
+    return blocker ? { ok: false, reason: blocker } : { ok: true, size: 'call', what: 'recheck', label: 'the requirements re-check', total: 1 };
   }
   const steps = pickedSteps(working);
   if (steps.length === 0) return { ok: false, reason: 'Pick at least one pass.' };
@@ -534,7 +585,7 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
       return { ok: true, working: { ...working, picked: EXTRA_STEPS.filter(s => next.includes(s)) } };
     }
     if (typeof type === 'string' && FIRST_STEP_ACTIONS.has(type)) {
-      if (working.stage !== 'first-step') return { ok: false, reason: 'Press New review to change the first step.' };
+      if (working.stage !== 'first-step' && !(SOURCE_ACTIONS.has(type) && working.review)) return { ok: false, reason: 'Press New review to change the first step.' };
       const reduced = reduceFirstStep(working.firstStep, action as FirstStepAction, contextOf(session));
       return reduced.ok ? { ok: true, working: { ...working, firstStep: reduced.working } } : reduced;
     }
@@ -543,7 +594,9 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
 
   beginRun(session, request): RunBegun<ReviewWorking> {
     if (!isRunRequest(request)) return { ok: false, reason: 'Unknown run.' };
-    if (request.type === 'passes' || request.type === 'again' || request.type === 'recheck') return beginResultsRun(session, request);
+    if (request.type === 'passes' || request.type === 'again' || request.type === 'recheck' || (request.type === 'reword' && session.working.stage === 'review')) {
+      return beginResultsRun(session, request);
+    }
     if (session.working.stage !== 'first-step') return { ok: false, reason: 'Press New review to start another review.' };
     const ctx = contextOf(session);
     if (request.type === 'reword') {
@@ -560,7 +613,7 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
       case 'reword': return rewordRun(session, deps, signal);
       case 'start': return startRun(session, deps, progress, signal);
       case 'again': return runAgainRun(session, deps, progress, signal);
-      case 'recheck': return recheckRun(session, deps, signal);
+      case 'recheck': return recheckRun(session, requirementsChoiceOf(session.working.firstStep, contextOf(session)), deps, signal);
       case 'passes': return extraPassesRun(session, pickedSteps(session.working), deps, progress, signal);
     }
   },

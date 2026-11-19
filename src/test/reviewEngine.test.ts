@@ -244,6 +244,25 @@ describe('regular pass: findings, batches and the snapshot', () => {
     expect(result.review!.store.findings.map((f) => f.id)).toEqual([1, 2, 3]);
     expect(t.calls).toHaveLength(3);
   });
+
+  it('reports the review as it stands after each finished batch: after 3 of 7 it is the review a stop after 3 gives', async () => {
+    const respond = (c: Call) => reviewReply([{ file: c.file, line: 2, title: `Issue in f${c.file}` }], { recommendedPersonas: c.file === 2 ? ['security'] : [] });
+    const t = setup({ files: 7, respond });
+    const partial = new Map<number, StagedReview>();
+    t.deps.onProgress = (p) => { if (p.step === 'regular' && p.review) partial.set(p.batchesDone, p.review); };
+    await regular(t);
+
+    const stoppedRun = setup({ files: 7, respond });
+    stoppedRun.deps.onProgress = (p) => { if (p.step === 'regular' && p.batchesDone === 3) stoppedRun.controller.abort(); };
+    const stopped = (await regular(stoppedRun)).review!;
+
+    expect([...partial.keys()]).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    const afterThree = partial.get(3)!;
+    expect(afterThree.store.findings.map((f) => f.title)).toEqual(['Issue in f1', 'Issue in f2', 'Issue in f3']);
+    expect(afterThree.store.stepsRun).toEqual([]);
+    expect(afterThree.suggestion).toEqual({ kind: 'suggested', personas: ['security'] });
+    expect(JSON.parse(JSON.stringify(afterThree))).toEqual(JSON.parse(JSON.stringify(stopped)));
+  });
 });
 
 describe('regular pass: requirements check', () => {
@@ -362,6 +381,20 @@ describe('extra passes', () => {
     expect(result.review.store.stepsRun).toEqual(['regular']);
   });
 
+  it('reports the review as it stands after each finished batch, the pass not marked as run until the end', async () => {
+    const { t, review } = await reviewedTwoFiles((c) => reviewReply([{ file: c.file, line: 6, title: `Timing leak in f${c.file}` }]));
+    const partial: StagedReview[] = [];
+    t.deps.onProgress = (p) => { if (p.step === 'security' && p.review) partial.push(p.review); };
+
+    const result = await runExtraPass(review, 'security', ONE_FILE_PER_BATCH, t.deps);
+
+    expect(partial).toHaveLength(2);
+    expect(partial[0].store.findings.map((f) => f.title)).toEqual(['Unvalidated input', 'Magic number', 'Swallowed error', 'Timing leak in f1']);
+    expect(partial[0].store.stepsRun).toEqual(['regular']);
+    expect(partial[1].store.findings.map((f) => f.id)).toEqual([1, 2, 3, 4, 5]);
+    expect(result.review.store.stepsRun).toEqual(['regular', 'security']);
+  });
+
   it('does not run when the reviewed commit can no longer be read', async () => {
     const { t, review } = await reviewedTwoFiles(() => reviewReply([{ file: 1, line: 6, title: 'Timing leak' }]));
     vi.spyOn(t.client, 'getFileContent').mockRejectedValue(new Error('404 commit not found'));
@@ -424,6 +457,19 @@ describe('critic', () => {
     expect(t.calls[0].prompt).toContain('Swallowed error');
     expect(t.calls[0].prompt).not.toContain('Magic number');
     expect(result.review.store.findings.map((f) => f.id)).toEqual([1, 2, 3]);
+  });
+
+  it('reports the review as it stands after each finished batch: the verdicts of the batches done', async () => {
+    const { t, review } = await reviewedTwoFiles(() => '{"keep":[]}');
+    const partial: StagedReview[] = [];
+    t.deps.onProgress = (p) => { if (p.step === 'critic' && p.review) partial.push(p.review); };
+
+    await runCritic(review, [], ONE_FILE_PER_BATCH, t.deps);
+
+    expect(partial).toHaveLength(2);
+    expect(partial[0].store.findings.map((f) => f.id)).toEqual([3]);
+    expect(partial[0].store.criticChecked).toEqual([1, 2]);
+    expect(partial[0].store.stepsRun).toEqual(['regular']);
   });
 });
 
