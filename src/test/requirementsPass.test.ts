@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { runRequirementsPass, type RequirementsPassDeps, type RequirementsPassParams } from '../participant/bitbucket/requirementsPass';
+import { runRequirementsPass, type RequirementsPassDeps, type RequirementsPassParams } from '../review/requirementsPass';
 import { PrReviewService } from '../services/PrReviewService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 import type { BitbucketPR } from '../bitbucket/IBitbucketClient';

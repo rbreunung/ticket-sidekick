@@ -11,8 +11,8 @@
  * proxy an empty target and read from the real object themselves. If the model still cannot be wrapped,
  * the meter fails open: the raw model is returned and the response simply goes uncounted.
  */
-import type { TokenFigures } from '../../utils/tokenUsage';
-import type { DiagLogger } from '../../utils/diagTypes';
+import type { TokenFigures } from '../utils/tokenUsage';
+import type { DiagLogger } from '../utils/diagTypes';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface MeterableModel<Msg = any> {

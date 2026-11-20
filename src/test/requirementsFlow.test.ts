@@ -5,11 +5,10 @@ import {
   buildTicketHintLine,
   buildTicketFailureLine,
   buildTitleKeyAlternativeLine,
-  readTicketGuarded,
   resolveGoalCommit,
-  safeErrorText,
   buildPrMovedOnLine,
 } from '../participant/bitbucket/requirementsFlow';
+import { readTicketGuarded, safeErrorText } from '../review/ticketRead';
 import { buildSmartRerunCommand, extractPromptDirectives } from '../participant/reviewSessionState';
 
 const base = { explicitKey: undefined, skipTicket: false, titleKey: undefined, jiraConfigured: true } as const;

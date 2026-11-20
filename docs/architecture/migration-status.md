@@ -121,6 +121,113 @@ What the `@jira` import did and what the import board does with it. The list is 
 | O15 | Remove `@bitbucket`, `src/participant/`, the `chatParticipants` contribution, follow-up chips, disambiguation entries and the participant walkthrough steps | R33, R37 | — |
 | O16 | Final review of every developer and user document | R50 | — |
 
+#### Review board parity ledger
+
+What `@bitbucket` does and what the review board and the Bitbucket tools do with it. The list is built from the code and docs of the participant, not from memory: the follow-up intents and reply words in `src/participant/reviewSessionState.ts` (`parseFollowUpIntent`, `isEndSessionRequest`, `parseSmartFallbackReply`), the chips of `computeBitbucketFollowups`, the `bitbucket.session.*` keys, every `ticketSidekick.bitbucket.*` setting in `package.json`, the review modes, the slash commands, the rules in [`docs/review-process.md`](../review-process.md), and the `@bitbucket` commits since 2026-11-01 (the only behaviour change among them is the "Jira isn't configured" line naming `/ts-jira check`, which the first step's unavailable-ticket reason replaces). `src/test/reviewBoardParity.test.ts` keeps the list, fails when a behaviour has no row here, and maps every "Carry over" row to the review board action, page request or Bitbucket tool that keeps it and to the scenario test that proves the result. "Carry over" means the board or a tool keeps the behaviour; a typed reply word becomes a board control. "Dropped" means the review board plan's scope or one of its settled decisions leaves it out, named in the note. Both this guard and the import board's stay after `@bitbucket` is removed. Why the ledger exists: [`docs/solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md`](../solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md).
+
+**Follow-up intents and reply words**
+
+| Behaviour | Board | Note |
+| --- | --- | --- |
+| `explain` | Carry over | `#N <question>`: Explain under the finding, one call with its code, the PR title and description and the upfront question; explaining again replaces the answer |
+| `copy` | Carry over | Copy for Teams as plain text, plus Copy as Markdown, for the selected findings or all of them; the typed word goes |
+| `add` | Carry over | `add … to review`: select the findings, edit one draft comment each, Post after the native confirmation; inline on a verified line, else on the activity feed; each comment reported, only the failed ones offered again |
+| `post it` | Carry over | The comment preview's confirmation is Post's preview and native confirmation |
+| `refinement` | Carry over | A refinement instruction in the comment preview is Rewrite with a typed instruction, with Undo |
+| `goal` | Carry over | "the goal is …" after a review: change the source or edit the goal, then Re-check runs only the requirements check on the stored diff and replaces the coverage |
+| `finding-not-found` | Carry over | An unknown finding number is refused on the board; the read-findings tool names the numbers the review has |
+| `diff-question` | Carry over | A general question about the PR: the agent reads the findings and the diff through the tools |
+| `follow-up-failure` | Carry over | A failed follow-up or refinement keeps what was there: the earlier explanation or the hand-edited draft stays, with an error line |
+| `finding-match` | Dropped | Scope: the extension's call that matches a free-text question to a finding; the agent does it from the findings list |
+| `done`, `cancel` | Dropped | Scope: the reply words; a board is left by closing its tab |
+| `smart-fallback-reply` | Dropped | Scope: the smart-mode fallback question and its replies `all` and `standard`; a review with no usable recommendation says so and the developer picks passes |
+| `greeting` | Dropped | Dropped by the maintainer on 2026-11-20: the chat greeting is chat-only; `/ts-bitbucket help` covers what it said |
+| `empty-prompt` | Dropped | Dropped by the maintainer on 2026-11-20: the guidance for an empty prompt is chat-only; `/ts-bitbucket help` covers it |
+
+**Follow-up chips**
+
+| Chip | Board | Note |
+| --- | --- | --- |
+| `chip-check`, `chip-copy`, `chip-add`, `chip-explain`, `chip-check-against-ticket`, `chip-post-it`, `chip-cancel`, `chip-done` | Dropped | Scope: follow-up chips. Each one's action is a board control or a `/ts-bitbucket` command |
+| `finding-heading-links` | Dropped | Scope: clickable finding headings in chat; each finding has its own Explain |
+
+**Sessions**
+
+| Session | Board | Note |
+| --- | --- | --- |
+| `bitbucket.session.review` | Carry over | The review is the board's session: findings, passes run, explanations, drafts, coverage and the reviewed diff survive a restart, and a repeat request opens it |
+| `bitbucket.session.commentPreview` | Carry over | Drafts are kept in the session until posted |
+| `bitbucket.session.smartFallback` | Dropped | Scope: the smart-mode fallback question |
+| `session-continuity` | Dropped | The removal takes out the chat sessions with `@bitbucket` (a settled decision of the plan): expiry through the chat history, a PR link that starts a fresh review over a live session (a repeat request now opens the stored review, also settled), `check` and `usage` keeping a session alive, and `/review` without a link or a lone mode word ending one |
+
+**Slash commands**
+
+| Command | Board | Note |
+| --- | --- | --- |
+| `/check` | Carry over | `bitbucket_check_connection` (`/ts-bitbucket check`) |
+| `/review` | Carry over | `bitbucket_open_review` (`/ts-bitbucket review <url>`, or a plain chat request with a PR link) opens the board; without a link, the Command Palette start screen asks for it |
+| `/usage` | Carry over | `bitbucket_token_usage` (`/ts-bitbucket usage`), without Bitbucket credentials |
+
+**Review modes**
+
+| Mode | Board | Note |
+| --- | --- | --- |
+| `standard` | Carry over | The regular pass every review starts with: pass 1, the budget-aware call with whole files, the requirements check when a source is chosen |
+| `smart` | Carry over | The regular pass suggests persona passes from every batch's recommendation; the developer runs the suggestion or picks others |
+| `deep` | Carry over | Picking all four persona passes and the critic, now or later |
+| `quick` | Dropped | Scope: the quick review (pass 1 without the call with whole files) |
+| `mode words` | Dropped | Scope: `review quick`/`smart`/`deep` in the prompt, its keyword priority, and the hands-off deep review from chat |
+
+**Settings**
+
+| Setting | Board | Note |
+| --- | --- | --- |
+| `ticketSidekick.bitbucket.baseUrl`, `ticketSidekick.bitbucket.authType` | Carry over | Data Center or Cloud, for the board and the tools; the connection check names a malformed base URL first |
+| `ticketSidekick.bitbucket.reviewModel` | Carry over | The model every board call uses; asked for and saved on the first step when empty or unavailable |
+| `ticketSidekick.bitbucket.reviewInstructions` | Carry over | Added to every review call, the persona passes and the critic |
+| `ticketSidekick.bitbucket.modelContextTokens`, `ticketSidekick.bitbucket.contextBudgetRatio` | Carry over | The token budget that sizes the batches |
+| `ticketSidekick.bitbucket.reviewContextLines` | Carry over | Context lines asked for with the diff |
+| `ticketSidekick.bitbucket.reviewExcludePatterns` | Carry over | Excluded files are not reviewed, and a cut file they match is not fetched |
+| `ticketSidekick.bitbucket.confidenceThreshold` | Carry over | Below it a finding is marked low confidence |
+| `ticketSidekick.bitbucket.reviewMode` | Dropped | The staged review replaces the modes (a settled decision); the setting is removed with `@bitbucket` |
+| `ticketSidekick.bitbucket.showTokenUsage` | Dropped | The board always shows the token usage per pass (the plan's decision on this setting); see `token-footer` |
+| `ticketSidekick.bitbucket.detailedDiagnostics` | Carry over | Each pass of a board review also writes its structured run record (configuration, every call and event line, the findings funnel) to the output channel |
+| `ticketSidekick.bitbucket.showConnectionInfo` | Dropped | Dropped by the maintainer on 2026-11-20: the base URL and auth line under each answer; `bitbucket_check_connection` reports the settings |
+
+**Pipeline rules** (from `docs/review-process.md`)
+
+| Rule | Board | Note |
+| --- | --- | --- |
+| `batches` | Carry over | Files packed against the token budget (setting, model, 60 000) times the ratio and the 24 000-token cap |
+| `dc-truncated-diffs` | Carry over | Files a Data Center server cut are fetched one by one and reviewed; a file still cut or not fetched is recorded with the pass |
+| `dc-response-shape` | Carry over | The content-free shape line of every Data Center diff response in the output channel |
+| `skipped-files` | Carry over | Files with no text change and excluded files are left out and counted |
+| `anchor-verification` | Carry over | The line comes from the quoted code, not the model's number; code not found keeps the finding as location unverified; a finding naming a file outside the PR is dropped |
+| `reply-parsing` | Carry over | A reply with no usable JSON is retried like a provider error |
+| `retry-and-split` | Carry over | Three tries per call, the last one split in half for a batch; a batch that still fails is reported and the others are kept |
+| `continuation` | Carry over | A cut-off reply gets one continuation call that lists the findings already reported |
+| `whole-file-call` | Carry over | The call with the whole files a batch asked for refines the first findings and retracts one only by its number |
+| `context-files` | Carry over | Context files are read at the reviewed commit, within the budget, and later passes see what the regular pass saw |
+| `persona-passes` | Carry over | Security, performance, reliability and maintainability, each over every batch |
+| `dedupe` | Carry over | Findings on the same line with the same meaning merge: stronger severity, combined sources, the corroboration bump |
+| `finding-numbers` | Carry over | Numbers are assigned once per review and never change, so a removed finding leaves a gap (the chat renumbered after each review) |
+| `critic` | Carry over | Removes what it cannot confirm, or labels it probably a false alarm when the developer worked on it; checks only unchecked findings |
+| `partial-results` | Carry over | A pass with failed batches shows the other batches' findings under a banner |
+| `failed-review` | Carry over | No batch readable: a failure banner, no findings, Run again |
+| `upfront-question` | Carry over | The question goes into every review call; the agent passes it to the board instead of the prompt syntax (`question:`, `--`, a sentence ending in `?`) |
+| `ticket-choice` | Carry over | An explicit key wins over the PR title's, none without a key, the ticket unavailable with a reason while Jira is not configured; the title-key pause (Use / Skip) is the first step, which always stops before Start, and the quick/standard hint chip goes with the chips |
+| `ticket-read` | Carry over | The capped ticket text, read with a 20-second guard; a failed read lets the review finish without the check |
+| `requirements-call` | Carry over | One call over the whole PR after the findings, the only call that sees ticket text, with at most one extra-file round; an unreadable reply says the check failed |
+| `coverage-block` | Carry over | Shown above the findings as plain text |
+| `token-meter` | Carry over | Every model call is metered, a frozen host model included, and recorded toward the counters |
+| `monthly-counters` | Carry over | Per month and model, the current month and the two before |
+| `token-footer` | Carry over | The board shows the token usage per pass |
+| `review-completed` | Carry over | The first finished review sets the context key the Bitbucket walkthrough waits for |
+| `diagnostic-timeline` | Carry over | Every pass logs to the output channel under `bitbucket.review`: its configuration (model, token budget and ratio, the pass, critic, context lines), the model in use with metering and frozen state, one line per model call (pass, batch, attempt, sizes, duration, status), the retry, split and give-up decisions, a cut-off reply, the findings funnel, "no file could be reviewed" and the last stage of an aborted pass |
+| `not-reviewed-notes` | Carry over | The board, under the banners, and the read-findings summary list what was not reviewed (cut short, not fetched, excluded, no text change, a failed batch part with its files, "after retrying" only for a transient error), the findings dropped for naming a file outside the PR and the findings the critic removed |
+| `finding-detail` | Carry over | Under each finding: its description, recommendation, line with the related lines ("L19 (also L12, L15)"), provenance (new, existing or removed code), confidence and source, as text |
+| `title-key-alternative` | Carry over | When the ticket key in use is not found and the PR title names another, the failure line says so, and the first step and the results offer Use with that key, which sets the ticket key for Start or Re-check |
+
 ### Across all steps
 
 | # | Open point | Note |

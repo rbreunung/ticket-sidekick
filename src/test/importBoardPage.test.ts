@@ -448,7 +448,7 @@ describe('the import board page against the import kind', () => {
   afterEach(async () => {
     stopped = true;
     removeFakePage();
-    await fs.promises.rm(dir, { recursive: true, force: true });
+    await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
 
   it('shows the crafted title as text, writes it to Jira through the sanitizers, and exports it with the formula prefix', async () => {

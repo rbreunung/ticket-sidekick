@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { BITBUCKET_TOOLS } from '../tools/bitbucketTools/catalog';
 import { JIRA_TOOLS } from '../tools/jiraTools/catalog';
 
 // Loads the *bundled* extension (out/extension.js, what the .vsix ships) with a stubbed `vscode`
@@ -154,11 +155,15 @@ describe('bundled extension (out/extension.js)', () => {
     expect((manifest.contributes as { mcpServerDefinitionProviders?: unknown }).mcpServerDefinitionProviders).toBeUndefined();
     expect((manifest.contributes as { chatPlugins?: unknown }).chatPlugins).toBeUndefined();
   });
+
+  it('registers every Bitbucket tool of the catalog with VS Code', () => {
+    expect(registered.tools.filter(name => name.startsWith('bitbucket_')).sort()).toEqual(BITBUCKET_TOOLS.map(t => t.name).sort());
+  });
 });
 
 // A board's editor tab loads its page from files shipped in the extension folder.
 describe('the board pages', () => {
-  const boards = ['security-report', 'ticket-list', 'sessions', 'import-start', 'import'];
+  const boards = ['security-report', 'ticket-list', 'sessions', 'import-start', 'import', 'review-start', 'review'];
 
   beforeAll(() => {
     execFileSync(process.execPath, ['esbuild.js'], { cwd: root, stdio: 'pipe' });

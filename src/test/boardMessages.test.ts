@@ -4,6 +4,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { answerBoardRequest, asBoardRequest, type BoardHost } from '../boards/boardMessages';
 import { ImportStartScreen } from '../boards/import/startScreen';
+import { ReviewStartScreen } from '../boards/review/startScreen';
 import { importKind } from '../boards/import/kind';
 import { securityReportKind, type SecurityReportDeps } from '../boards/securityReport/kind';
 import { registerKind, type BoardKind } from '../sessions/boardKind';
@@ -95,7 +96,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await fs.promises.rm(dir, { recursive: true, force: true });
+  await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 describe('a board page and the extension', () => {
@@ -154,6 +155,18 @@ describe('a board page and the extension', () => {
     expect(preview).toMatchObject({ status: 400, body: { error: 'This board does not write.' } });
   });
 
+  it('has no Copy: only the review board copies findings, and nothing reaches the clipboard', async () => {
+    const state = await openReady();
+    const copied: string[] = [];
+    host.copyText = async text => { copied.push(text); };
+    try {
+      expect(await ask(report(state.id), 'copy', { format: 'teams', numbers: [], text: 'anything' })).toMatchObject({ status: 404 });
+    } finally {
+      delete host.copyText;
+    }
+    expect(copied).toEqual([]);
+  });
+
   it('saves the full report through the save dialog', async () => {
     const state = await openReady();
     expect((await ask(report(state.id), 'save', { format: 'csv' })).body).toEqual({ outcome: 'saved' });
@@ -177,6 +190,65 @@ describe('a board page and the extension', () => {
     const answered = await ask(report(state.id), 'refresh');
     expect(answered).toEqual({ status: 500, body: { error: 'The extension could not answer. See the Ticket Sidekick output for details.' } });
     expect(errors).toEqual(['secret internals']);
+  });
+});
+
+describe('a model run asked for by a board page', () => {
+  /** A board whose one run is a pass of two steps that ends only when the page stops it. */
+  const passKind: BoardKind<{ name: string }, null, { pass: string }, unknown, { pass: string }, null> = {
+    kind: 'pass-demo',
+    formatVersion: 1,
+    title: r => `Pass: ${r.name}`,
+    validate: async input => ({ ok: true, recipe: { name: String((input as { name?: unknown }).name) } }),
+    sourceKey: r => r.name,
+    sourceLabel: r => r.name,
+    initialWorking: () => ({ pass: 'idle' }),
+    read: async () => ({ readAt: 1, fingerprints: {}, data: null }),
+    reconcile: (session, fresh) => ({ derived: fresh, working: session.working, conflicts: [] }),
+    reduce: () => ({ ok: false, reason: 'Unknown action.' }),
+    beginRun: (session, request) => (request === 'pass'
+      ? { ok: true, size: 'pass', what: 'pass', label: 'the pass', total: 2, working: { pass: 'running' } }
+      : { ok: false, reason: 'Unknown run.' }),
+    run: async (_session, _request, _deps, progress, signal) => {
+      await progress({ done: 1, total: 2 });
+      await new Promise(resolve => signal.addEventListener('abort', resolve));
+      return { update: () => ({ pass: 'stopped after 1 of 2' }) };
+    },
+    view: session => session.working,
+  };
+
+  it('starts the run, shows it running with the board locked, and stops it on Stop', async () => {
+    manager = new SessionManager({
+      store: new SessionStore(path.join(dir, 'sessions')),
+      kinds: [registerKind(passKind, () => null)],
+      now: () => Date.now(),
+      confirm: async () => true,
+      saveFile: async () => true,
+    });
+    const opened = await manager.open('pass-demo', { name: 'one' });
+    if (!opened.ok) throw new Error(opened.reason);
+    const tab = { kind: 'pass-demo', id: opened.id };
+    let state = (await ask(tab, 'state')).body;
+    while (state.status !== 'ready') state = (await ask(tab, 'state', { tick: state.tick, wait: 2000 })).body;
+
+    expect((await ask(tab, 'run', { request: 'pass' })).status).toBe(400);
+    const started = await ask(tab, 'run', { revision: state.revision, request: 'pass' });
+    expect(started.body.running).toEqual([{ size: 'pass', what: 'pass', label: 'the pass', done: 0, total: 2 }]);
+    state = started.body;
+    while (state.running?.[0].done !== 1) state = (await ask(tab, 'state', { tick: state.tick, wait: 2000 })).body;
+    expect((await ask(tab, 'run', { revision: state.revision, request: 'pass' })).status).toBe(409);
+
+    expect((await ask(tab, 'stop', { what: 3 })).status).toBe(400);
+    expect((await ask(tab, 'stop')).status).toBe(200);
+    while (state.running) state = (await ask(tab, 'state', { tick: state.tick, wait: 2000 })).body;
+    expect(state.view).toEqual({ pass: 'stopped after 1 of 2' });
+    expect((await ask(tab, 'stop')).status).toBe(409);
+  });
+
+  it('refuses a run on a board that runs no model', async () => {
+    const state = await openReady();
+    expect(await ask(report(state.id), 'run', { revision: state.revision, request: 'pass' })).toMatchObject({ status: 400, body: { error: 'This board runs no model.' } });
+    expect((await ask(report(state.id), 'stop')).status).toBe(409);
   });
 });
 
@@ -256,6 +328,31 @@ describe('the import start screen', () => {
     expect((await askStart(boardHost, 'state')).status).toBe(404);
     expect((await askStart(boardHost, 'apply', { planId: 'x' })).status).toBe(404);
     expect(await askStart(host, 'view')).toEqual({ status: 404, body: { error: 'There is no import start screen here.' } });
+  });
+});
+
+describe('the review start screen', () => {
+  const START = { kind: 'review-start', id: '' };
+
+  async function askReview(boardHost: BoardHost, op: string, body: Record<string, unknown> = {}): Promise<{ status: number; body: any }> {
+    const reply = await answerBoardRequest(manager, START, { id: nextId++, op, body }, boardHost, message => errors.push(message));
+    return reply.ok ? { status: 200, body: reply.data } : { status: reply.status, body: { error: reply.error } };
+  }
+
+  it('answers the page through the start screen, which opens the review board for the link', async () => {
+    const opened: Array<{ url: string }> = [];
+    const boardHost: BoardHost = {
+      ...host,
+      reviewStart: new ReviewStartScreen({ bitbucketHint: async () => undefined, openReview: async input => { opened.push(input); return { ok: true, title: 'Review: PROJ/app#7' }; } }),
+    };
+    const reply = await askReview(boardHost, 'open', { url: 'https://bitbucket.org/team/app/pull-requests/7/overview' });
+    expect(reply).toEqual({ status: 200, body: { url: 'https://bitbucket.org/team/app/pull-requests/7/overview', opened: 'Review: PROJ/app#7' } });
+    expect(opened).toEqual([{ url: 'https://bitbucket.org/team/app/pull-requests/7' }]);
+    expect((await askReview(boardHost, 'state')).status).toBe(404);
+  });
+
+  it('is not there where the host has no review start screen', async () => {
+    expect(await askReview(host, 'view')).toEqual({ status: 404, body: { error: 'There is no review start screen here.' } });
   });
 });
 

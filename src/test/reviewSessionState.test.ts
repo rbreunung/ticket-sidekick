@@ -1,9 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
-  isUsageRequest,
-  buildBitbucketNotConfiguredMessage,
-  buildChatCommandLink,
   neutralizeMarkdownLinks,
+  ALL_PERSONA_IDS,
+  formatReviewForSharing,
+  type ReviewFinding,
+  type ReviewSession,
+} from '../review/reviewSessionState';
+import {
+  isUsageRequest,
+  buildChatCommandLink,
   composeReviewOutput,
   computeBitbucketFollowups,
   isEndSessionRequest,
@@ -12,41 +17,10 @@ import {
   hasStoredBitbucketSession,
   BITBUCKET_SESSION_KEYS,
   parseSmartFallbackReply,
-  ALL_PERSONA_IDS,
-  formatReviewForSharing,
   extractPromptDirectives,
   type BitbucketFollowupState,
-  type ReviewFinding,
-  type ReviewSession,
 } from '../participant/reviewSessionState';
 import { isGreetingOrEmpty } from '../utils/chatPrimitives';
-
-describe('buildBitbucketNotConfiguredMessage', () => {
-  it('names the base URL setting for Data Center when baseUrl is missing', () => {
-    const message = buildBitbucketNotConfiguredMessage({ authType: 'datacenter', baseUrl: undefined, token: undefined });
-
-    expect(message).toContain('ticketSidekick.bitbucket.baseUrl');
-  });
-
-  it('names the Data Center PAT setup command when baseUrl is set but the token is missing', () => {
-    const message = buildBitbucketNotConfiguredMessage({ authType: 'datacenter', baseUrl: 'https://bitbucket.example.com', token: undefined });
-
-    expect(message).toContain('Ticket Sidekick: Set Bitbucket Personal Access Token');
-  });
-
-  it('names the Cloud credentials setup command for Cloud with no token — baseUrl is never mentioned', () => {
-    const message = buildBitbucketNotConfiguredMessage({ authType: 'cloud', baseUrl: undefined, token: undefined });
-
-    expect(message).toContain('Ticket Sidekick: Configure Bitbucket Cloud Credentials');
-    expect(message).not.toContain('baseUrl');
-  });
-
-  it('never emits a trusted MarkdownString command link — plain text only', () => {
-    const message = buildBitbucketNotConfiguredMessage({ authType: 'datacenter', baseUrl: undefined, token: undefined });
-
-    expect(message).not.toContain('(command:');
-  });
-});
 
 describe('buildChatCommandLink', () => {
   it('returns a markdown command link whose decoded query JSON matches the @bitbucket participant + reply text', () => {

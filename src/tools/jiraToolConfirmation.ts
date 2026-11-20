@@ -9,7 +9,7 @@ const MAX_VALUE_CHARS = 1500;
  * A previewed value, such as a whole corrected description, is what the user approves, so it is
  * cut only far beyond any ticket description, never at the input-value limit.
  */
-const MAX_PREVIEW_CHARS = 60_000;
+export const MAX_PREVIEW_CHARS = 60_000;
 
 /** Whether Copilot has to ask before the tool runs: every tool that is not read-only. */
 export function needsConfirmation(tool: ToolDefinition<unknown>): boolean {

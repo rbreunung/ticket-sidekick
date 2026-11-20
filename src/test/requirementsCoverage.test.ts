@@ -7,7 +7,7 @@ import {
   renderCoverageMarkdown,
   renderCoverageText,
   packDiffFiles,
-} from '../participant/bitbucket/requirementsCoverage';
+} from '../review/requirementsCoverage';
 import { UnparseableReplyError } from '../utils/lmRetry';
 
 function reply(name: string): string {

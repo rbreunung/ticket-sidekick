@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as vscode from 'vscode';
 import type { E2eTest } from './index';
 
-// The Jira tools answer when VS Code calls them, and a board opens as an editor tab whose page
+// The Jira and Bitbucket tools answer when VS Code calls them, and a board opens as an editor tab whose page
 // really loads and talks to the extension over the webview's message channel. Nothing here needs
 // Copilot, a proxy setting or a local server.
 
@@ -28,6 +28,14 @@ export function boardTests(extensionId: string): E2eTest[] {
       fn: async () => {
         const result = await vscode.lm.invokeTool('jira_check_connection', { input: {}, toolInvocationToken: undefined });
         assert.match(textOf(result), /token|base URL/i, 'the tool did not answer with the Jira setup hint');
+      },
+    },
+    {
+      name: 'a Bitbucket tool answers when VS Code calls it',
+      fn: async () => {
+        const result = await vscode.lm.invokeTool('bitbucket_check_connection', { input: {}, toolInvocationToken: undefined });
+        assert.match(textOf(result), /Bitbucket/, 'the tool did not answer about the Bitbucket connection');
+        assert.match(textOf(result), /not configured|connection/i, 'the tool did not answer with the Bitbucket setup hint or a connection result');
       },
     },
     {
@@ -59,6 +67,16 @@ export function boardTests(extensionId: string): E2eTest[] {
         const deadline = Date.now() + LOAD_TIMEOUT_MS;
         while (stats().requestsAnswered === before && Date.now() < deadline) await sleep(250);
         assert.ok(stats().requestsAnswered > before, 'the tab is open, but its page sent no request to the extension');
+      },
+    },
+    {
+      name: 'the pull request review opens its start screen as an editor tab from the Command Palette',
+      fn: async () => {
+        await vscode.commands.executeCommand('ticket-sidekick.boards.openReview');
+        const deadline = Date.now() + LOAD_TIMEOUT_MS;
+        while (!boardTab('Review a pull request') && Date.now() < deadline) await sleep(250);
+        assert.ok(boardTab('Review a pull request'), 'no editor tab titled "Review a pull request" was opened');
+        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
       },
     },
   ];

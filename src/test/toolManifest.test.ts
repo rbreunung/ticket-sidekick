@@ -2,30 +2,53 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
+import { BITBUCKET_TOOLS } from '../tools/bitbucketTools/catalog';
 import { JIRA_TOOLS } from '../tools/jiraTools/catalog';
 import { callTool, defineTool, ToolFailure } from '../tools/toolDefinition';
 import { confirmationFor, confirmationWithPreview, needsConfirmation } from '../tools/jiraToolConfirmation';
-import { jiraToolManifest, toolReferenceName } from '../tools/jiraToolManifest';
+import { toolManifest, toolReferenceName } from '../tools/toolManifest';
 
-// The Jira tools as Copilot gets them: VS Code language model tools ("extension tools"), declared
-// in package.json as VS Code wants them, asking before they change anything.
+// The Jira and Bitbucket tools as Copilot gets them: VS Code language model tools ("extension
+// tools"), declared in package.json as VS Code wants them, asking before they change anything.
 
 const manifest = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'));
-const declared = (manifest.contributes.languageModelTools as Array<{ name: string }>).filter(t => t.name.startsWith('jira_'));
+const declared = manifest.contributes.languageModelTools as Array<{ name: string; tags: string[]; when?: string }>;
+const catalogs = [
+  { product: 'jira', tools: JIRA_TOOLS },
+  { product: 'bitbucket', tools: BITBUCKET_TOOLS },
+] as const;
 
-describe('the Jira tools in package.json', () => {
-  it('are exactly the tools of the catalog, with the same descriptions and inputs (run node scripts/sync-jira-tools.mjs after a change)', () => {
-    expect(declared).toEqual(JSON.parse(JSON.stringify(jiraToolManifest(JIRA_TOOLS))));
+describe('the tools in package.json', () => {
+  for (const { product, tools } of catalogs) {
+    it(`are exactly the ${product} catalog's tools, tagged ${product}, with the same descriptions and inputs (run node scripts/sync-tools.mjs after a change)`, () => {
+      const ofProduct = declared.filter(t => t.name.startsWith(`${product}_`));
+      expect(ofProduct).toEqual(JSON.parse(JSON.stringify(toolManifest(tools, product))));
+      for (const tool of ofProduct) expect(tool.tags, tool.name).toEqual([product]);
+    });
+  }
+
+  it('are only the catalogs\' tools', () => {
+    expect(declared.map(t => t.name).sort()).toEqual([...JIRA_TOOLS, ...BITBUCKET_TOOLS].map(t => t.name).sort());
   });
 
   it('are always offered: no setting and no context key hides them', () => {
-    for (const tool of declared as Array<{ name: string; when?: string }>) expect(tool.when, tool.name).toBeUndefined();
+    for (const tool of declared) expect(tool.when, tool.name).toBeUndefined();
     const sections = manifest.contributes.configuration as Array<{ properties: Record<string, unknown> }>;
     expect(sections.some(s => 'ticketSidekick.jira.toolsFrom' in s.properties)).toBe(false);
   });
 
+  it('keep the Bitbucket pull request tools under the names users reference them by', () => {
+    const names = Object.fromEntries(declared.map(t => [t.name, (t as { toolReferenceName?: string }).toolReferenceName]));
+    expect(names).toMatchObject({
+      bitbucket_getPullRequest: 'bitbucketGetPullRequest',
+      bitbucket_getPullRequestDiff: 'bitbucketGetPullRequestDiff',
+      bitbucket_postComment: 'bitbucketPostComment',
+      bitbucket_read_findings: 'bitbucketReadFindings',
+    });
+  });
+
   it('carry required inputs and descriptions the model can read', () => {
-    const view = jiraToolManifest(JIRA_TOOLS).find(t => t.name === 'jira_add_comment')!;
+    const view = toolManifest(JIRA_TOOLS, 'jira').find(t => t.name === 'jira_add_comment')!;
     expect(view.inputSchema).toMatchObject({ type: 'object', required: ['ticketKey', 'comment'] });
     expect((view.inputSchema.properties as Record<string, { description?: string }>).ticketKey.description).toContain('PROJ-123');
     expect(toolReferenceName('jira_add_comment')).toBe('jiraAddComment');
@@ -76,6 +99,11 @@ describe('asking before a tool changes something', () => {
     for (const name of ['jira_view_ticket', 'jira_find_tickets', 'jira_check_connection', 'jira_list_fields', 'jira_open_board']) {
       expect(needsConfirmation(byName(name)), name).toBe(false);
     }
+  });
+
+  it('asks before the Bitbucket tool that posts a comment, and before no Bitbucket tool that only reads or opens the board', () => {
+    const asks = BITBUCKET_TOOLS.filter(t => needsConfirmation(t)).map(t => t.name);
+    expect(asks).toEqual(['bitbucket_postComment']);
   });
 
   it('shows the tool\'s title and every value that will be written', () => {

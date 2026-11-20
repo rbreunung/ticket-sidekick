@@ -80,3 +80,13 @@ export class SessionError extends Error {
     super(message);
   }
 }
+
+/** A model run going on a board: a pass holds the whole board, a call only its own control. */
+export interface RunningState {
+  size: 'pass' | 'call';
+  /** The run's name among the session's runs, e.g. `explain:3`; the page marks that control busy. */
+  what: string;
+  label: string;
+  done: number;
+  total: number;
+}

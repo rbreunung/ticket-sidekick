@@ -438,7 +438,7 @@ describe('a stored ticket list of an older format', () => {
       expect((state.view as { rows: { key: string }[]; selectedCount: number }).rows.map(r => r.key)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
       expect((state.view as { selectedCount: number }).selectedCount).toBe(0);
     } finally {
-      await fs.promises.rm(dir, { recursive: true, force: true });
+      await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
   });
 

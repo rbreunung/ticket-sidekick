@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   createAttemptTracker, errorCodeOf, handleAttemptFailure, describeErrorForLog,
   formatBatchFailureNotice, formatReviewFailedMessage, PARTIAL_REVIEW_WARNING,
-} from '../participant/bitbucket/reviewDiagnostics';
+} from '../review/reviewDiagnostics';
 import { sanitizeDetails } from '../utils/logRedaction';
 
 describe('errorCodeOf', () => {

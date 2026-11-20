@@ -92,3 +92,22 @@ dialog.plan::backdrop { background: rgba(0, 0, 0, 0.5); }
 [role='tabpanel']:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
 .table-wrap { overflow-x: auto; }
 .result-failed, .result-refused { color: var(--vscode-errorForeground); }
+/* The review board: typed text areas and the coverage block, which keeps the line breaks of its text. */
+.field { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+textarea {
+  font: inherit;
+  color: inherit;
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-widget-border);
+  border-radius: 2px;
+  padding: 3px 6px;
+  max-width: 100%;
+}
+fieldset.sources { border: none; padding: 0; margin: 4px 0; }
+fieldset.sources .source { display: block; margin: 4px 0; }
+pre.coverage { white-space: pre-wrap; font-family: var(--vscode-font-family); margin: 8px 0; }
+ol.findings { padding-left: 0; list-style: none; }
+ol.findings li { margin: 6px 0; }
+.severity { font-weight: 600; }
+.severity-critical { color: var(--vscode-errorForeground); }
+.severity-warning { color: var(--ts-warn); }

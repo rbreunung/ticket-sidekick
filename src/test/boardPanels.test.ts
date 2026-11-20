@@ -22,6 +22,7 @@ interface FakePanel {
 }
 
 const created: FakePanel[] = [];
+const clipboard: string[] = [];
 
 function fakePanel(title = ''): FakePanel {
   let receive: ((m: unknown) => unknown) | undefined;
@@ -46,11 +47,13 @@ function fakePanel(title = ''): FakePanel {
 vi.mock('vscode', () => ({
   ViewColumn: { Active: -1 },
   Uri: { joinPath: (base: { fsPath: string }, ...parts: string[]) => ({ fsPath: [base.fsPath, ...parts].join('/') }) },
+  env: { clipboard: { writeText: async (text: string) => { clipboard.push(text); } } },
   window: { createWebviewPanel: (_type: string, title: string) => { const p = fakePanel(title); created.push(p); return p; } },
 }));
 
 import { BoardPanels } from '../boards/boardPanels';
 import { ImportStartScreen, type ImportStartDeps } from '../boards/import/startScreen';
+import { ReviewStartScreen } from '../boards/review/startScreen';
 import { securityReportKind, type SecurityReportDeps } from '../boards/securityReport/kind';
 import { registerKind } from '../sessions/boardKind';
 import { SessionManager } from '../sessions/sessionManager';
@@ -242,6 +245,35 @@ describe('the import start screen', () => {
     expect(restored.disposed).toBe(false);
     await restored.send({ id: 1, op: 'view' });
     expect(restored.posted[0]).toMatchObject({ id: 1, ok: true });
+  });
+});
+
+describe('the clipboard', () => {
+  it('is VS Code\'s own: the review board\'s Copy writes the text the extension built there', async () => {
+    clipboard.length = 0;
+    await panels.copyText('PR #482 — Add export');
+    expect(clipboard).toEqual(['PR #482 — Add export']);
+  });
+});
+
+describe('the review start screen', () => {
+  const reviewStart = () => new ReviewStartScreen({ bitbucketHint: async () => undefined, openReview: async () => ({ ok: true, title: 'Review: PROJ/app#7' }) });
+
+  it('opens as a tab without a session that loads its own page and answers it, and comes back after a restart', async () => {
+    panels = new BoardPanels(manager, ['security-report'], { fsPath: '/ext/out/board-pages' } as never, message => errors.push(message), undefined, undefined, reviewStart());
+    expect(await panels.open('review-start', {})).toEqual({ ok: true, title: 'Review a pull request' });
+    expect(created[0].webview.html).toContain('data-kind="review-start" data-session=""');
+    expect(created[0].webview.html).toContain('src="vscode-resource:/ext/out/board-pages/review-start/page.js"');
+    await created[0].send({ id: 1, op: 'view', body: {} });
+    expect(created[0].posted[0]).toEqual({ id: 1, ok: true, data: { url: '' } });
+
+    const restored = fakePanel();
+    await panels.serializer().deserializeWebviewPanel(restored as never, { kind: 'review-start', id: '', title: 'Review a pull request' });
+    expect(restored.disposed).toBe(false);
+  });
+
+  it('is no board where the extension has no review start screen', async () => {
+    expect(await panels.open('review-start', {})).toEqual({ ok: false, reason: 'there is no board of that name.' });
   });
 });
 

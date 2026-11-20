@@ -1,14 +1,18 @@
 import { randomBytes } from 'crypto';
 import type { DiagLogger } from '../utils/diagTypes';
-import type { ApplyProgressReport, CheckMode, ExportedFile, RegisteredKind } from './boardKind';
+import { capitalised } from '../utils/textCase';
+import type { ApplyProgressReport, CheckMode, ExportedFile, RegisteredKind, RunFinished, RunProgressReport, WorkingUpdate } from './boardKind';
 import { sessionIdFor } from './sessionId';
 import type { SessionStore } from './sessionStore';
-import { SessionError, type ApplyLineResult, type Conflict, type DerivedPart, type PlanLine, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
+import { SessionError, type ApplyLineResult, type Conflict, type DerivedPart, type PlanLine, type RunningState, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
 
 // Owns every session of this window: opens or restores it, runs its actions one after another,
 // checks it against the sources, and guards its writes. A write needs a plan id that only a
 // preview issues, and a risky plan needs the native confirmation as well, so a request that
 // carries only the canvas key cannot change several tickets, close one or post to Bitbucket.
+// A model run (a review pass, one explanation) is started from a board request and does its work
+// outside the queue; each step it reports and its end are merged into the working state as it is
+// then, inside the queue, so nothing changed meanwhile is overwritten. Stop skips the queue.
 
 export type BoardStatus = 'building' | 'ready' | 'checking' | 'failed';
 
@@ -37,6 +41,8 @@ export interface BoardState {
   writesBlocked: boolean;
   /** Set while an Apply runs: how many of its targets are finished. The page disables its controls meanwhile. */
   applying?: { done: number; total: number };
+  /** The model runs going on this board. A pass locks every other control; a call only its own. */
+  running?: RunningState[];
   view?: unknown;
 }
 
@@ -79,8 +85,15 @@ interface Entry {
   error?: string;
   errorCode?: string;
   applying?: { done: number; total: number };
+  /** The runs going on, by name. */
+  runs: Map<string, ActiveRun>;
   queue: Promise<unknown>;
   waiters: Set<() => void>;
+}
+
+interface ActiveRun {
+  state: RunningState;
+  controller: AbortController;
 }
 
 interface PendingPlan {
@@ -92,9 +105,11 @@ interface PendingPlan {
 
 /** Whether a check found what the session already shows: the same data, fingerprints and working state. */
 function unchanged(session: Session<unknown, unknown, unknown>, merged: { derived: DerivedPart<unknown>; working: unknown }): boolean {
-  return JSON.stringify(merged.derived.data) === JSON.stringify(session.derived.data)
+  // The same object is the same state; only a rebuilt one is compared as JSON.
+  const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
+  return same(merged.derived.data, session.derived.data)
     && JSON.stringify(merged.derived.fingerprints) === JSON.stringify(session.derived.fingerprints)
-    && JSON.stringify(merged.working) === JSON.stringify(session.working);
+    && same(merged.working, session.working);
 }
 
 function messageOf(err: unknown): string {
@@ -154,7 +169,7 @@ export class SessionManager {
   private building(id: string, reg: RegisteredKind, recipe: unknown, notice?: string): Entry {
     const entry: Entry = {
       id, reg, recipe, status: 'building', tick: 1, restored: false, stored: false,
-      queue: Promise.resolve(), waiters: new Set(), notice,
+      runs: new Map(), queue: Promise.resolve(), waiters: new Set(), notice,
     };
     this.entries.set(id, entry);
     void this.enqueue(entry, () => this.build(entry));
@@ -195,12 +210,18 @@ export class SessionManager {
     const raced = this.entries.get(id);
     if (raced) return raced;
     const entry: Entry = {
-      id, reg, recipe: stored.session.recipe, session: stored.session, status: 'ready', tick: 1,
-      restored: true, stored: true, queue: Promise.resolve(), waiters: new Set(),
+      id, reg, recipe: stored.session.recipe, session: this.withoutRun(reg, stored.session), status: 'ready', tick: 1,
+      restored: true, stored: true, runs: new Map(), queue: Promise.resolve(), waiters: new Set(),
     };
     this.entries.set(id, entry);
     void this.enqueue(entry, () => this.check(entry));
     return entry;
+  }
+
+  /** A stored session read from the cache: a run it still records was cut off by a restart. */
+  private withoutRun(reg: RegisteredKind, session: Session): Session {
+    const { interrupted } = reg.kind;
+    return interrupted ? { ...session, working: interrupted(session.working) } : session;
   }
 
   private async build(entry: Entry): Promise<void> {
@@ -310,6 +331,7 @@ export class SessionManager {
       ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
       writesBlocked: this.writesBlocked(entry),
       ...(entry.applying ? { applying: { ...entry.applying } } : {}),
+      ...(entry.runs.size > 0 ? { running: [...entry.runs.values()].map(r => ({ ...r.state })) } : {}),
       view: session ? kind.view(session) : undefined,
     };
   }
@@ -341,8 +363,19 @@ export class SessionManager {
   private requireCurrent(entry: Entry, revision: number): Session {
     const session = entry.session;
     if (!session || entry.status === 'building') throw new SessionError(409, 'The board is still loading.');
+    this.requireNoPass(entry);
     if (session.revision !== revision) throw new SessionError(409, 'The board changed meanwhile. It was reloaded; try again.');
     return session;
+  }
+
+  private passRun(entry: Entry): ActiveRun | undefined {
+    return [...entry.runs.values()].find(r => r.state.size === 'pass');
+  }
+
+  /** While a pass runs, nothing else changes the board. */
+  private requireNoPass(entry: Entry): void {
+    const pass = this.passRun(entry);
+    if (pass) throw new SessionError(409, `Not now: ${pass.state.label} is running. Wait until it finishes, or stop it.`);
   }
 
   /** A non-writing action, based on the revision the page last saw. */
@@ -481,6 +514,7 @@ export class SessionManager {
       const session = entry.session;
       if (!session || entry.status === 'building') throw new SessionError(409, 'The board is still loading.');
       if (this.entries.get(id) !== entry) throw new SessionError(404, 'This session no longer exists. Ask for the board again.');
+      if (entry.runs.size > 0) throw new SessionError(409, 'The board cannot change its source while a model run goes on. Wait until it finishes, or stop it.');
       const checked = await revalidate(recipe, await entry.reg.deps());
       if (!checked.ok) throw new SessionError(400, checked.reason);
       const newId = sessionIdFor(kind.kind, kind.sourceKey(checked.recipe));
@@ -500,7 +534,7 @@ export class SessionManager {
       const target: Entry = {
         id: newId, reg: entry.reg, recipe: checked.recipe, session: next, status: 'ready', tick: entry.tick + 1,
         restored: entry.restored, stored: false, notice: entry.notice, error: entry.error, errorCode: entry.errorCode,
-        queue: Promise.resolve(), waiters: new Set(),
+        runs: new Map(), queue: Promise.resolve(), waiters: new Set(),
       };
       this.entries.set(newId, target);
       await this.persist(target);
@@ -532,6 +566,7 @@ export class SessionManager {
   async discard(id: string): Promise<void> {
     const entry = this.entries.get(id);
     this.entries.delete(id);
+    for (const run of entry?.runs.values() ?? []) run.controller.abort();
     for (const [planId, pending] of this.plans) if (pending.sessionId === id) this.plans.delete(planId);
     await this.deps.store.delete(id);
     if (entry) this.changed(entry);
@@ -568,6 +603,120 @@ export class SessionManager {
       });
     }
     return rows.sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+  }
+
+  /**
+   * Starts the model run a page request asks for. The kind names and records it inside the queue,
+   * the work then runs outside it, and this answers as soon as the run has started; the page follows
+   * it through `state`. A pass is refused while any run goes on, a call while a pass or a call of the
+   * same name does.
+   */
+  async startRun(kindName: string, id: string, revision: number, request: unknown): Promise<BoardState> {
+    const entry = await this.entry(kindName, id);
+    const { kind } = entry.reg;
+    const { beginRun, run } = kind;
+    if (!beginRun || !run) throw new SessionError(400, 'This board runs no model.');
+    return this.enqueue(entry, async () => {
+      const session = this.requireCurrent(entry, revision);
+      const begun = beginRun(session, request);
+      if (!begun.ok) throw new SessionError(400, begun.reason);
+      if (begun.size === 'pass' && entry.runs.size > 0) {
+        const other = [...entry.runs.values()][0];
+        throw new SessionError(409, `Not now: ${other.state.label} is running. Start ${begun.label} once it has finished.`);
+      }
+      if (entry.runs.has(begun.what)) throw new SessionError(409, `Not now: ${begun.label} is already running.`);
+      const active: ActiveRun = {
+        state: { size: begun.size, what: begun.what, label: begun.label, done: 0, total: begun.total ?? 0 },
+        controller: new AbortController(),
+      };
+      entry.runs.set(begun.what, active);
+      const started: Session = begun.working === undefined
+        ? session
+        : { ...session, working: begun.working, revision: session.revision + 1, lastUsedAt: this.deps.now() };
+      entry.session = started;
+      if (begun.working !== undefined) await this.persist(entry);
+      this.log('info', 'Board run started', { kind: kind.kind, run: begun.what });
+      this.changed(entry);
+      void this.carryOut(entry, active, started, request);
+      return this.toState(entry);
+    });
+  }
+
+  /** The run's work, outside the queue; its steps and its end are merged inside it. */
+  private async carryOut(entry: Entry, active: ActiveRun, session: Session, request: unknown): Promise<void> {
+    const { kind } = entry.reg;
+    const live = () => Boolean(entry.session) && this.entries.get(entry.id) === entry;
+    const progress = (report: RunProgressReport<unknown>): Promise<void> => this.enqueue(entry, async () => {
+      // A board closed meanwhile is not written back.
+      if (!live()) return;
+      if (report.update) entry.session = { ...entry.session!, working: report.update(entry.session!.working), lastUsedAt: this.deps.now() };
+      active.state = { ...active.state, done: report.done, total: report.total };
+      await this.persist(entry);
+      this.changed(entry);
+    });
+    let finished: RunFinished<unknown> | undefined;
+    let failure: unknown;
+    try {
+      finished = await kind.run!(session, request, await entry.reg.deps(), progress, active.controller.signal);
+    } catch (err) {
+      failure = err;
+    }
+    await this.enqueue(entry, async () => {
+      entry.runs.delete(active.state.what);
+      if (!live()) {
+        this.changed(entry);
+        return;
+      }
+      const current = entry.session!;
+      let update: WorkingUpdate<unknown> | undefined = finished?.update;
+      let working = current.working;
+      if (update) {
+        try {
+          working = update(current.working);
+        } catch (err) {
+          failure = err;
+          update = undefined;
+        }
+      }
+      if (!update) {
+        // A run that threw is treated as one a restart cut off: its finished steps stay.
+        working = kind.interrupted ? kind.interrupted(current.working) : current.working;
+        entry.notice = `${capitalised(active.state.label)} stopped with an error: ${messageOf(failure)}`;
+        this.log('error', 'Board run failed', { kind: kind.kind, run: active.state.what, error: messageOf(failure) });
+      } else {
+        this.log('info', active.controller.signal.aborted ? 'Board run stopped' : 'Board run finished', { kind: kind.kind, run: active.state.what });
+      }
+      entry.session = { ...current, working, revision: current.revision + 1, lastUsedAt: this.deps.now() };
+      await this.persist(entry);
+      this.changed(entry);
+    });
+  }
+
+  /**
+   * The developer's Stop: aborts the run at once, outside the queue, so it is not held up by
+   * anything queued before it. Without `what` it stops the pass. The run then saves how it ended.
+   */
+  async stopRun(kindName: string, id: string, what?: string): Promise<BoardState> {
+    const entry = await this.entry(kindName, id);
+    const active = what === undefined ? this.passRun(entry) : entry.runs.get(what);
+    if (!active) throw new SessionError(409, 'Nothing is running on this board.');
+    active.controller.abort();
+    this.log('info', 'Board run stop asked for', { kind: entry.reg.kind.kind, run: active.state.what });
+    return this.toState(entry);
+  }
+
+  /**
+   * The session as it is now, from memory or from the cache, without opening it: no entry is made,
+   * nothing is read from the sources and no check starts. A stored run that a restart cut off shows
+   * as interrupted. Undefined when there is no such session of this format.
+   */
+  async peek(kindName: string, id: string): Promise<Session | undefined> {
+    const reg = this.kind(kindName);
+    const known = this.entries.get(id);
+    if (known) return known.reg === reg ? known.session : undefined;
+    const stored = await this.deps.store.load(id);
+    if (!stored || stored.session.kind !== reg.kind.kind || stored.session.formatVersion !== reg.kind.formatVersion) return undefined;
+    return this.withoutRun(reg, stored.session);
   }
 
   /** The session itself, for a tool that reads from it (review findings). */

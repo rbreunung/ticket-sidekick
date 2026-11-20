@@ -163,7 +163,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await fs.promises.rm(dir, { recursive: true, force: true });
+  await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 type ImportSession = Session<ImportRecipe, ImportData, ImportWorking>;

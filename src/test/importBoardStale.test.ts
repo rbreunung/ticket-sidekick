@@ -142,7 +142,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await fs.promises.rm(dir, { recursive: true, force: true });
+  await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 /** An open ticket for a flaw the report no longer lists. */
@@ -229,7 +229,7 @@ describe('closing stale tickets', () => {
       const session = (await manager.read('import', opened.id)) as ImportSession;
       expect(session.working.writes.tickets['PROJ-9']).toEqual({ updated: 'w2' });
     } finally {
-      await fs.promises.rm(storeDir, { recursive: true, force: true });
+      await fs.promises.rm(storeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
   });
 

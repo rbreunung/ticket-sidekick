@@ -110,15 +110,18 @@ export function api(op, body) {
 
 /**
  * Runs a board page. `render(view, board, locked, state)` returns the board's own content for the
- * current view; `locked` is true while a request runs or an Apply is in progress, and the page
- * disables its controls then. `board` offers `act`, `preview`, `save` and the current `state`.
- * `loading(state)`, when given, is shown while the session has no view yet.
+ * current view; `locked` is true while a request runs, an Apply is in progress or a model pass runs,
+ * and the page disables its controls then. During a single model call only that call's control is
+ * busy: the page asks `board.running(what)` and disables that one. `board` offers `act`, `preview`,
+ * `run`, `stop`, `save` and the current `state`. `loading(state)`, when given, is shown while the
+ * session has no view yet.
  */
 export function startBoard({ root, render, loading }) {
   let state;
   let message;
   let busy = false;
   let stopped = false;
+  let stopping = false;
   // The plan an Apply is running and the last Apply's results, for pages that show them per row.
   let applyingPlan;
   let lastApply;
@@ -134,9 +137,36 @@ export function startBoard({ root, render, loading }) {
     get lastApply() { return lastApply; },
     /** Draws the page again from the current state, e.g. after a form field that is not sent yet changed the form's shape. */
     repaint() { paint(); },
-    /** A non-writing action. */
-    async act(action) {
-      await run(async () => { state = await api('action', { revision: state.revision, action }); });
+    /**
+     * A non-writing action; true when the session took it. With `quiet`, as for saving a typed field
+     * when the developer leaves it, the page is not locked or drawn while it goes: the press that
+     * moved the focus away must land on the button it was meant for. A refusal still shows.
+     */
+    async act(action, options) {
+      if (options?.quiet) return quietly(async () => { state = await api('action', { revision: state.revision, action }); });
+      return run(async () => { state = await api('action', { revision: state.revision, action }); });
+    },
+    /** Starts a model run the board kind names from `request`; its progress arrives with the state. */
+    async run(request) {
+      return run(async () => { state = await api('run', { revision: state.revision, request }); });
+    },
+    /** Stops a run: the pass without `what`. Sent while the board is locked, since the pass locks it. */
+    async stop(what) {
+      if (stopping) return;
+      stopping = true;
+      message = undefined;
+      paint();
+      try {
+        state = await api('stop', what === undefined ? {} : { what });
+      } catch (err) {
+        message = err.message;
+      }
+      stopping = false;
+      paint();
+    },
+    /** The run of this name while it goes on, `{ size, what, label, done, total }`; undefined otherwise. */
+    running(what) {
+      return state?.running?.find(r => r.what === what);
     },
     async refresh() {
       await run(async () => { state = await api('refresh'); });
@@ -172,25 +202,47 @@ export function startBoard({ root, render, loading }) {
     },
   };
 
-  /** An Apply in progress, on this page or another: nothing else is sent until it ends. */
-  function locked() {
-    return busy || Boolean(state?.applying);
+  /** The model pass going on, which holds the whole board. */
+  function passRun() {
+    return state?.running?.find(r => r.size === 'pass');
   }
 
+  /** An Apply or a model pass in progress, on this page or another: nothing else is sent until it ends. */
+  function locked() {
+    return busy || Boolean(state?.applying) || Boolean(passRun());
+  }
+
+  /** Runs `work` with the board locked; true when it went through, false when it was refused or not started. */
   async function run(work) {
-    if (locked()) return;
+    if (locked()) return false;
     busy = true;
     message = undefined;
     paint();
+    const done = await attempt(work);
+    busy = false;
+    paint();
+    return done;
+  }
+
+  /** Runs `work` without locking the board or drawing it first; nothing goes while an Apply or a pass holds the board. */
+  async function quietly(work) {
+    if (state?.applying || passRun()) return false;
+    const done = await attempt(work);
+    if (done && !busy) message = undefined;
+    if (!busy) paint();
+    return done;
+  }
+
+  async function attempt(work) {
     try {
       await work();
+      return true;
     } catch (err) {
       message = err.message;
       // 409: the board changed meanwhile, so show what it is now.
-      if (err.status === 409 || err.status === 404) await load();
+      if (err.status === 409 || err.status === 404) await load().catch(() => undefined);
+      return false;
     }
-    busy = false;
-    paint();
   }
 
   function showPlan(plan) {
@@ -244,18 +296,48 @@ export function startBoard({ root, render, loading }) {
     return items;
   }
 
+  // While a mouse button is held the page is not drawn again: a click needs its press and release on
+  // the same element, and drawing replaces every element. The drawing waits for the release (and
+  // the click it gives), or a second at most, in case the release happened outside the tab.
+  let pointerHeld = false;
+  let paintWaiting;
+  document.addEventListener('pointerdown', () => { pointerHeld = true; }, true);
+  const released = () => {
+    if (!pointerHeld) return;
+    pointerHeld = false;
+    if (paintWaiting) setTimeout(paintNow, 0);
+  };
+  document.addEventListener('pointerup', released, true);
+  document.addEventListener('pointercancel', released, true);
+  window.addEventListener('blur', released);
+
   function paint() {
+    if (!pointerHeld) {
+      paintNow();
+      return;
+    }
+    if (paintWaiting) return;
+    paintWaiting = setTimeout(() => { pointerHeld = false; paintNow(); }, 1000);
+  }
+
+  function paintNow() {
+    if (paintWaiting) clearTimeout(paintWaiting);
+    paintWaiting = undefined;
     const focusId = document.activeElement?.id;
     const applying = state?.applying;
+    const pass = passRun();
     const header = h('header', {},
       h('h1', {}, state?.title ?? rootElement.dataset.title ?? ''),
       state ? h('p', { class: 'muted', role: 'status' },
         applying ? `Applying: ${applying.done} of ${applying.total} done…`
+          : pass ? `Running ${pass.label}: ${pass.done} of ${pass.total} done…`
           : state.status === 'building' ? 'Reading…'
             : state.status === 'checking' ? `As of ${formatTime(state.asOf)}. Checking for changes…`
               : state.asOf ? `As of ${formatTime(state.asOf)}${state.restored ? ' (restored session)' : ''}.` : '') : null,
       applying ? h('progress', { id: 'apply-progress', max: applying.total, value: applying.done, 'aria-label': 'Apply progress' }) : null,
+      pass ? h('progress', { id: 'run-progress', max: pass.total, value: pass.done, 'aria-label': 'Run progress' }) : null,
       state && !stopped ? h('div', { class: 'bar' },
+        pass ? h('vscode-button', { id: 'stop-run', disabled: stopping, onClick: () => board.stop() }, 'Stop') : null,
         h('vscode-button', { id: 'refresh', secondary: true, disabled: locked() || state.status !== 'ready' && state.status !== 'failed', onClick: () => board.refresh() }, 'Refresh'),
         h('vscode-button', {
           id: 'discard', secondary: true, disabled: locked(), title: 'Closes this tab and forgets the choices not applied yet. Nothing in Jira changes.',

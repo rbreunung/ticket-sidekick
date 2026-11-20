@@ -4,6 +4,7 @@ import { answerBoardRequest, asBoardRequest, SESSIONS_BOARD, type BoardHost } fr
 import { asBoardPanelState, boardPanelHtml, type BoardPanelState } from './boardPanelHtml';
 import type { ReportKind } from './import/recipe';
 import { IMPORT_START_BOARD, IMPORT_START_TITLE, type ImportStartScreen } from './import/startScreen';
+import { REVIEW_START_BOARD, REVIEW_START_TITLE, type ReviewStartScreen } from './review/startScreen';
 
 // Boards as editor tabs. The extension opens a webview tab, writes its document and answers the
 // page's requests over VS Code's message channel. An agent asks for a board through the
@@ -36,7 +37,14 @@ export class BoardPanels implements BoardHost {
     readonly importStart?: ImportStartScreen,
     /** The native open dialog for an import's report file ("Pick the file again"). */
     private readonly pickReport?: (kind: ReportKind) => Promise<string | undefined>,
+    /** The pull request review start screen: a tab without a session that asks for the link. */
+    readonly reviewStart?: ReviewStartScreen,
   ) {}
+
+  /** The system clipboard, for the review board's Copy. */
+  async copyText(text: string): Promise<void> {
+    await vscode.env.clipboard.writeText(text);
+  }
 
   pickReportFile(kind: ReportKind): Promise<string | undefined> {
     return this.pickReport ? this.pickReport(kind) : Promise.resolve(undefined);
@@ -127,6 +135,11 @@ export class BoardPanels implements BoardHost {
       this.reveal({ kind, id: '', title: IMPORT_START_TITLE });
       return { ok: true, title: IMPORT_START_TITLE };
     }
+    if (kind === REVIEW_START_BOARD) {
+      if (!this.reviewStart) return { ok: false, reason: 'there is no board of that name.' };
+      this.reveal({ kind, id: '', title: REVIEW_START_TITLE });
+      return { ok: true, title: REVIEW_START_TITLE };
+    }
     if (!this.kinds.includes(kind)) return { ok: false, reason: 'there is no board of that name.' };
     const opened = await this.manager.open(kind, input ?? {});
     if (!opened.ok) return opened;
@@ -148,7 +161,8 @@ export class BoardPanels implements BoardHost {
     return {
       deserializeWebviewPanel: async (panel, raw) => {
         const state = asBoardPanelState(raw);
-        const sessionless = state?.kind === SESSIONS_BOARD || (state?.kind === IMPORT_START_BOARD && this.importStart !== undefined);
+        const sessionless = state?.kind === SESSIONS_BOARD || (state?.kind === IMPORT_START_BOARD && this.importStart !== undefined)
+          || (state?.kind === REVIEW_START_BOARD && this.reviewStart !== undefined);
         if (!state || (!sessionless && !this.kinds.includes(state.kind))) {
           panel.dispose();
           return;

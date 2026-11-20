@@ -3,6 +3,10 @@ import type { SessionManager } from '../sessions/sessionManager';
 import { SessionError } from '../sessions/sessionTypes';
 import { IMPORT_KIND, withReportPath, type ImportRecipe, type ReportKind } from './import/recipe';
 import { IMPORT_START_BOARD, type ImportStartScreen } from './import/startScreen';
+import { reviewCopyText } from './review/findings';
+import type { ReviewSession } from './review/kind';
+import { REVIEW_KIND } from './review/recipe';
+import { REVIEW_START_BOARD, type ReviewStartScreen } from './review/startScreen';
 
 // What a board page may ask of the extension. A page lives in an editor tab (a webview) and talks
 // to the extension over VS Code's own message channel: it posts a request, the tab's host answers
@@ -10,7 +14,8 @@ import { IMPORT_START_BOARD, type ImportStartScreen } from './import/startScreen
 // nothing here: the tab knows its kind and session, and the session manager does the rest. The
 // import start screen has no session either: its requests go to the start screen the host holds,
 // which also brings the native file dialog and the setting writes, so its page names no file path,
-// no setting key and no session.
+// no setting key and no session. The review start screen is the same: it takes a pull request link
+// and opens that review's board.
 
 export const SESSIONS_BOARD = 'sessions';
 
@@ -36,12 +41,16 @@ export interface BoardHost {
   openStored(kind: string, id: string): Promise<{ ok: true } | { ok: false; reason: string }>;
   /** The import start screen of this window; absent where imports are not available. */
   readonly importStart?: ImportStartScreen;
+  /** The pull request review start screen of this window; absent where reviews are not available. */
+  readonly reviewStart?: ReviewStartScreen;
   /** VS Code's native open dialog for a report of this kind; undefined when it was cancelled. */
   pickReportFile?(kind: ReportKind): Promise<string | undefined>;
   /** Points the tab that shows `fromId` at the session it moved to. */
   followSession?(kind: string, fromId: string, toId: string, title: string): Promise<void>;
   /** Closes the tab that shows this session, after its session was discarded. */
   closeSession?(kind: string, id: string): void;
+  /** Puts text on the system clipboard; the text is always built by the extension. */
+  copyText?(text: string): Promise<void>;
 }
 
 export interface BoardRequest {
@@ -111,6 +120,30 @@ async function pickReportFileAgain(manager: SessionManager, { kind, id }: BoardT
   return { outcome: 'picked', id: moved.id, state: moved.state };
 }
 
+const COPY_FORMATS = new Set(['teams', 'markdown']);
+
+/**
+ * Copy on the review board: the page names the format and the selected finding numbers, and the
+ * text is built from the session. Any text the page sends along is not read.
+ */
+async function copyFindings(manager: SessionManager, { kind, id }: BoardTarget, body: Record<string, unknown>, host: BoardHost): Promise<unknown> {
+  if (kind !== REVIEW_KIND || !host.copyText) throw new BoardRequestError(404, 'Unknown request.');
+  const format = body.format;
+  if (typeof format !== 'string' || !COPY_FORMATS.has(format)) throw new BoardRequestError(400, 'Invalid format.');
+  const numbers = body.numbers ?? [];
+  if (!Array.isArray(numbers) || numbers.some(n => typeof n !== 'number' || !Number.isInteger(n))) throw new BoardRequestError(400, 'Invalid selection.');
+  const session = await manager.read(kind, id) as ReviewSession | undefined;
+  if (!session) throw new BoardRequestError(409, 'The board is still loading.');
+  const built = reviewCopyText(session, format as 'teams' | 'markdown', numbers as number[]);
+  if ('ok' in built) throw new BoardRequestError(400, built.reason);
+  try {
+    await host.copyText(built.text);
+  } catch (err) {
+    return { outcome: 'failed', reason: err instanceof Error ? err.message : String(err) };
+  }
+  return { outcome: 'copied', count: built.count };
+}
+
 async function sessionBoard(manager: SessionManager, target: BoardTarget, op: string, body: Record<string, unknown>, host: BoardHost): Promise<unknown> {
   const { kind, id } = target;
   switch (op) {
@@ -128,6 +161,12 @@ async function sessionBoard(manager: SessionManager, target: BoardTarget, op: st
     case 'apply':
       if (typeof body.planId !== 'string') throw new BoardRequestError(400, 'Invalid plan.');
       return manager.apply(kind, id, body.planId);
+    case 'run':
+      // Starts a model run the board kind names from `request`; the page follows it through `state`.
+      return manager.startRun(kind, id, revisionOf(body.revision), body.request);
+    case 'stop':
+      if (body.what !== undefined && typeof body.what !== 'string') throw new BoardRequestError(400, 'Invalid run.');
+      return manager.stopRun(kind, id, body.what);
     case 'save':
       if (typeof body.format !== 'string') throw new BoardRequestError(400, 'Invalid format.');
       return { outcome: await manager.exportFile(kind, id, body.format) };
@@ -138,6 +177,8 @@ async function sessionBoard(manager: SessionManager, target: BoardTarget, op: st
       return { ok: true };
     case 'pick-file':
       return pickReportFileAgain(manager, target, host);
+    case 'copy':
+      return copyFindings(manager, target, body, host);
     default:
       throw new BoardRequestError(404, 'Unknown request.');
   }
@@ -150,6 +191,10 @@ export async function handleBoardRequest(manager: SessionManager, target: BoardT
     if (target.kind === IMPORT_START_BOARD) {
       if (!host.importStart) throw new BoardRequestError(404, 'There is no import start screen here.');
       return await host.importStart.handle(op, body);
+    }
+    if (target.kind === REVIEW_START_BOARD) {
+      if (!host.reviewStart) throw new BoardRequestError(404, 'There is no review start screen here.');
+      return await host.reviewStart.handle(op, body);
     }
     return await sessionBoard(manager, target, op, body, host);
   } catch (err) {

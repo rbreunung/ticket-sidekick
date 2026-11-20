@@ -9,6 +9,7 @@ A **board** is a page Ticket Sidekick opens in its own editor tab: a large table
 | Cleanup (a ticket list loaded from a cleanup rule) | "run the cleanup Close released bugs" | `/ts-jira cleanup <rule> [in VERSION]` | `Ticket Sidekick: Run a cleanup rule` |
 | Stored sessions | "show the stored sessions" | `/ts-jira sessions` | `Ticket Sidekick: Open stored sessions` |
 | Import (Veracode or OSS report) | "import this Veracode report", with the file's path or the file dragged into the chat | `/ts-jira import <veracode or waltz> [PATH]` | `Ticket Sidekick: Open import board` |
+| Pull request review | | | `Ticket Sidekick: Review a pull request` |
 
 ## What you need
 

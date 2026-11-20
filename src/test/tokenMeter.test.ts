@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTokenMeter, type MeterableModel } from '../participant/bitbucket/tokenMeter';
+import { createTokenMeter, type MeterableModel } from '../review/tokenMeter';
 import type { TokenFigures } from '../utils/tokenUsage';
 
 type Msg = { content: Array<{ value: string }> };

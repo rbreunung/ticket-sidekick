@@ -5,6 +5,8 @@ import {
   ADD_COMMENT_TOOL, CHECK_CONNECTION_TOOL, CORRECT_DESCRIPTION_TOOL, CREATE_TEMPLATE_TOOL, CREATE_TICKET_TOOL, FIND_TICKETS_TOOL, JIRA_TOOLS, LIST_TEMPLATES_TOOL,
   LOAD_TICKET_TOOL, MOVE_TICKET_TOOL, OPEN_BOARD_TOOL, UPDATE_FIELD_TOOL, VIEW_TICKET_TOOL,
 } from '../tools/jiraTools/catalog';
+import { BITBUCKET_TOOLS } from '../tools/bitbucketTools/catalog';
+import { CHECK_CONNECTION_TOOL as BITBUCKET_CHECK_TOOL, OPEN_REVIEW_TOOL, TOKEN_USAGE_TOOL } from '../tools/bitbucketTools/toolNames';
 
 // The skills the extension contributes (package.json `contributes.chatSkills`) are prose an agent
 // follows, so nothing else notices when one names a tool that does not exist, or when VS Code
@@ -15,7 +17,10 @@ import {
 const root = process.cwd();
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf-8'));
 const contributedSkills: Array<{ path: string }> = pkg.contributes.chatSkills ?? [];
-const catalogNames = JIRA_TOOLS.map(t => t.name);
+const jiraNames = JIRA_TOOLS.map(t => t.name);
+const bitbucketNames = BITBUCKET_TOOLS.map(t => t.name);
+/** Every tool a skill may name: a `jira_` name must be in the Jira catalog, a `bitbucket_` name in the Bitbucket one. */
+const catalogNames = [...jiraNames, ...bitbucketNames];
 
 /** The `key: value` lines between the opening and closing `---` of a SKILL.md. */
 function parseFrontmatter(text: string): Record<string, string> | undefined {
@@ -52,7 +57,7 @@ function skillProblems(folder: string, text: string, toolNames: readonly string[
   const explicitOnly = front['disable-model-invocation'] === 'true';
   if (isExplicitOnly(folder) && !explicitOnly) problems.push('is an explicit-only skill but leaves model invocation on');
   if (!isExplicitOnly(folder) && 'disable-model-invocation' in front) problems.push('sets disable-model-invocation, so the agent cannot run it by itself');
-  for (const tool of new Set(text.match(/\bjira_[A-Za-z_]+/g) ?? [])) {
+  for (const tool of new Set(text.match(/\b(?:jira|bitbucket)_[A-Za-z_]+/g) ?? [])) {
     if (!toolNames.includes(tool)) problems.push(`names ${tool}, which the catalog does not offer`);
   }
   return problems;
@@ -95,6 +100,21 @@ describe('the skill guard', () => {
   it('fails a skill that names a tool that does not exist', () => {
     const text = good.replace('`jira_view_ticket`', '`jira_view_ticket`, then `jira_summarize_ticket`');
     expect(skillProblems('jira-sample', text, catalogNames)).toEqual(['names jira_summarize_ticket, which the catalog does not offer']);
+  });
+
+  it('fails a skill that names a bitbucket tool the Bitbucket catalog does not offer', () => {
+    const text = good.replace('`jira_view_ticket`', '`bitbucket_review_everything`');
+    expect(skillProblems('jira-sample', text, catalogNames)).toEqual(['names bitbucket_review_everything, which the catalog does not offer']);
+  });
+
+  it('passes a skill that names a tool the Bitbucket catalog offers', () => {
+    expect(skillProblems('jira-sample', good.replace('`jira_view_ticket`', `\`${OPEN_REVIEW_TOOL}\``), catalogNames)).toEqual([]);
+  });
+
+  it('accepts ts-bitbucket as an explicit-only skill and fails it with model invocation on', () => {
+    const text = good.replace('name: jira-sample', 'name: ts-bitbucket');
+    expect(skillProblems('ts-bitbucket', text, catalogNames)).toEqual(['is an explicit-only skill but leaves model invocation on']);
+    expect(skillProblems('ts-bitbucket', text.replace('description:', 'disable-model-invocation: true\ndescription:'), catalogNames)).toEqual([]);
   });
 
   it('fails a skill that names a removed Agent Mode tool', () => {
@@ -197,6 +217,9 @@ const BASIC_COMMANDS: Record<string, readonly string[]> = {
   check: [CHECK_CONNECTION_TOOL],
   'security-report': [OPEN_BOARD_TOOL],
   cleanup: [OPEN_BOARD_TOOL],
+  '@bitbucket review': [OPEN_REVIEW_TOOL, '/ts-bitbucket'],
+  '@bitbucket check': [BITBUCKET_CHECK_TOOL, '/ts-bitbucket'],
+  '@bitbucket usage': [TOKEN_USAGE_TOOL, '/ts-bitbucket'],
 };
 
 /** The basic commands whose tools or skills do not all exist. */
@@ -217,6 +240,21 @@ describe('basic @jira commands without @jira', () => {
   it('fails for create when the create tool leaves the catalog', () => {
     const withoutCreate = catalogNames.filter(name => name !== CREATE_TICKET_TOOL);
     expect(coverageGaps(BASIC_COMMANDS, withoutCreate, skillNames)).toEqual(['create']);
+  });
+});
+
+describe('the former @bitbucket commands', () => {
+  it.each([
+    ['@bitbucket review', OPEN_REVIEW_TOOL],
+    ['@bitbucket check', BITBUCKET_CHECK_TOOL],
+    ['@bitbucket usage', TOKEN_USAGE_TOOL],
+  ])('%s fails the coverage check when its tool leaves the catalog', (command, tool) => {
+    expect(coverageGaps(BASIC_COMMANDS, catalogNames.filter(name => name !== tool), skillNames)).toEqual([command]);
+  });
+
+  it('fails them when the /ts-bitbucket skill is gone', () => {
+    expect(coverageGaps(BASIC_COMMANDS, catalogNames, skillNames.filter(name => name !== 'ts-bitbucket')))
+      .toEqual(['@bitbucket review', '@bitbucket check', '@bitbucket usage']);
   });
 });
 
@@ -284,29 +322,54 @@ describe('the /ts-jira-template skill', () => {
   });
 });
 
-describe('the /ts-jira command skill', () => {
-  const router = readFileSync(resolve(root, 'skills/ts-jira/SKILL.md'), 'utf-8');
-  /** The table rows: the command word and what the row does. */
-  const rows = [...router.matchAll(/^\| ([a-z][a-z-]*)(?![a-z-])[^|]*\| ([^|]+) \|$/gm)].map(m => ({ command: m[1], action: m[2] }));
+/** A router skill's table rows: the command word and what the row does. */
+function tableRows(router: string): Array<{ command: string; action: string }> {
+  return [...router.matchAll(/^\| ([a-z][a-z-]*)(?![a-z-])[^|]*\| ([^|]+) \|$/gm)].map(m => ({ command: m[1], action: m[2] }));
+}
 
-  it('has a row for every tool, so a new tool cannot be forgotten', () => {
-    const called = rows.flatMap(r => r.action.match(/\bjira_[a-z_]+/g) ?? []);
+/** The router skills: a command the user types, a table of commands and the one call each makes. */
+const ROUTERS = [
+  {
+    skill: 'ts-jira',
+    prefix: 'jira_',
+    tools: jiraNames,
     // Creating is left to the /ts-jira-create skill, which drafts the ticket with the user first.
     // Finding is for Copilot's own lookups and questions; a list for the user opens the ticket list board.
     // Correcting a description and creating a template are left to the /ts-jira-spell-check and
     // /ts-jira-template skills, which show the corrections or ask for the name first.
-    const left = new Set([CREATE_TICKET_TOOL, FIND_TICKETS_TOOL, CORRECT_DESCRIPTION_TOOL, CREATE_TEMPLATE_TOOL]);
-    const direct = catalogNames.filter(name => !left.has(name));
+    left: new Set([CREATE_TICKET_TOOL, FIND_TICKETS_TOOL, CORRECT_DESCRIPTION_TOOL, CREATE_TEMPLATE_TOOL]),
+    case2: 'read `help-brief.md`, `help-create.md`, `help-spell-check.md` or `help-template.md` in this skill\'s folder and reply with its text exactly; read no other file and call no other tool.',
+    helpEnd: ['Without KEY, load and view use the ticket of the git branch.', 'A brief, a guided create, a spell check or a template: help brief, help create, help spell-check, help template'],
+  },
+  {
+    skill: 'ts-bitbucket',
+    prefix: 'bitbucket_',
+    tools: bitbucketNames,
+    // The pull request tools are for Copilot's own reading and commenting; the review runs on the board,
+    // which reads its findings with the read-findings tool.
+    left: new Set(['bitbucket_getPullRequest', 'bitbucket_getPullRequestDiff', 'bitbucket_postComment', 'bitbucket_read_findings']),
+    case2: 'read `help-review.md` in this skill\'s folder and reply with its text exactly; read no other file and call no other tool.',
+    helpEnd: ['How a review works: help review'],
+  },
+];
+
+describe.each(ROUTERS)('the /$skill command skill', ({ skill, prefix, tools, left, case2, helpEnd }) => {
+  const router = readFileSync(resolve(root, 'skills', skill, 'SKILL.md'), 'utf-8');
+  const rows = tableRows(router);
+
+  it('has a row for every tool, so a new tool cannot be forgotten', () => {
+    const called = rows.flatMap(r => r.action.match(new RegExp(`\\b${prefix}[A-Za-z_]+`, 'g')) ?? []);
+    const direct = tools.filter(name => !left.has(name));
     expect([...new Set(called)].sort()).toEqual([...direct].sort());
   });
 
   it('names no skill, so a weak model is not drawn into running one', () => {
-    for (const skill of skillNames.filter(name => name !== 'ts-jira')) expect(router, skill).not.toContain(skill);
+    for (const other of skillNames.filter(name => name !== skill)) expect(router, other).not.toContain(other);
   });
 
   it('puts what the user typed next to the cases', () => {
     const body = router.slice(router.indexOf('\n---', 4) + 4).trim();
-    expect(body.split('\n')[0]).toBe('The user typed after /ts-jira: `$ARGUMENTS`');
+    expect(body.split('\n')[0]).toBe(`The user typed after /${skill}: \`$ARGUMENTS\``);
   });
 
   it('lists every command of the table in its argument hint, in the same order', () => {
@@ -325,7 +388,7 @@ describe('the /ts-jira command skill', () => {
     expect(cases.map(c => c.n)).toEqual([1, 2, 3, 4, 5]);
     expect(cases[0].text).toBe('Nothing typed: call no tool. Reply with exactly the help text below, as a code block. Stop.');
     expect(cases[1].text).toMatch(/^The first word is `help`: run nothing\./);
-    expect(cases[1].text).toContain('read `help-brief.md`, `help-create.md`, `help-spell-check.md` or `help-template.md` in this skill\'s folder and reply with its text exactly; read no other file and call no other tool.');
+    expect(cases[1].text).toContain(case2);
     expect(cases[1].text).toContain('call no tool and reply with only its line as a code block');
     expect(cases[2].text).toBe('The first word is not a command of the table: call no tool. Reply with exactly the help text. Stop.');
     expect(cases[3].text).toMatch(/^An argument in angle brackets that the command needs is missing: call no tool\./);
@@ -335,17 +398,31 @@ describe('the /ts-jira command skill', () => {
 
   it('starts the help with the usage line and sets the commands apart with separator lines', () => {
     const help = router.slice(router.indexOf('```text') + 8, router.indexOf('```', router.indexOf('```text') + 8)).split('\n');
-    expect(help[0]).toBe('Usage: /ts-jira <command> [arguments]');
+    expect(help[0]).toBe(`Usage: /${skill} <command> [arguments]`);
     expect(help[1]).toMatch(/^-{20,}$/);
-    expect(help.at(-4)).toMatch(/^-{20,}$/);
-    expect(help.at(-3)).toBe('Without KEY, load and view use the ticket of the git branch.');
-    expect(help.at(-2)).toBe('A brief, a guided create, a spell check or a template: help brief, help create, help spell-check, help template');
+    expect(help.at(-2 - helpEnd.length)).toMatch(/^-{20,}$/);
+    expect(help.slice(-1 - helpEnd.length, -1)).toEqual(helpEnd);
   });
 
   it('prints a help line for every command of the table, in the same order', () => {
-    const help = router.slice(router.indexOf('Usage: /ts-jira'), router.indexOf('```', router.indexOf('Usage: /ts-jira')));
+    const help = router.slice(router.indexOf(`Usage: /${skill}`), router.indexOf('```', router.indexOf(`Usage: /${skill}`)));
     const helpCommands = [...help.matchAll(/^ {2}([a-z][a-z-]*)(?![a-z-])/gm)].map(m => m[1]);
     expect(helpCommands).toEqual(rows.map(r => r.command));
+  });
+});
+
+describe('the /ts-bitbucket command skill, specifically', () => {
+  const router = readFileSync(resolve(root, 'skills/ts-bitbucket/SKILL.md'), 'utf-8');
+
+  it('maps review, check and usage to their tools', () => {
+    const toolOf = Object.fromEntries(tableRows(router).map(r => [r.command, r.action.match(/\bbitbucket_[A-Za-z_]+/)?.[0]]));
+    expect(toolOf).toEqual({ help: undefined, review: OPEN_REVIEW_TOOL, check: BITBUCKET_CHECK_TOOL, usage: TOKEN_USAGE_TOOL });
+  });
+
+  it('knows no review modes, only the staged review', () => {
+    const help = readFileSync(resolve(root, 'skills/ts-bitbucket/help-review.md'), 'utf-8');
+    for (const text of [router, help]) expect(text).not.toMatch(/\b(quick|smart|deep)\b/i);
+    expect(help).toContain('regular pass');
   });
 });
 

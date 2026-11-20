@@ -1,10 +1,10 @@
-import type { LogLevel } from '../../utils/diagTypes';
-import type { BitbucketPR } from '../../bitbucket/IBitbucketClient';
-import type { PrReviewService } from '../../services/PrReviewService';
-import { formatRequirementsSourceText, type RequirementsTicket } from '../../utils/requirementsSource';
-import { formatCallLine, type FileDiff } from '../reviewSessionState';
+import type { LogLevel } from '../utils/diagTypes';
+import type { BitbucketPR } from '../bitbucket/IBitbucketClient';
+import type { PrReviewService } from '../services/PrReviewService';
+import { formatRequirementsSourceText, type RequirementsTicket } from '../utils/requirementsSource';
+import { formatCallLine, type FileDiff } from './reviewSessionState';
 import { describeErrorForLog, type CallAttemptOut, type CallDiagHooks } from './reviewDiagnostics';
-import { safeErrorText } from './requirementsFlow';
+import { safeErrorText } from './ticketRead';
 import { parseRequirementsReply, buildCoverage, packDiffFiles, type RequirementsCoverage } from './requirementsCoverage';
 
 // `vscode`-free: the model call, the extra-file fetch and the chat stream arrive as parameters, so the
