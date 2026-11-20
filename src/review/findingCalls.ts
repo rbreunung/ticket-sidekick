@@ -1,5 +1,5 @@
 import type { BitbucketPR } from '../bitbucket/IBitbucketClient';
-import { callOnce, describeError, isStop, passContext } from './engine/plumbing';
+import { settleOneCall, type CallFailure } from './engine/plumbing';
 import type { EngineDeps, TokenTotals } from './engine/types';
 import { buildFindingFollowUpPrompt, type ReviewFinding } from './reviewSessionState';
 
@@ -12,7 +12,7 @@ export type CallDeps = Pick<EngineDeps, 'model' | 'recordTokens' | 'signal' | 'o
 
 export type CallResult =
   | { ok: true; text: string; tokens: TokenTotals }
-  | { ok: false; stopped: boolean; error: string; tokens: TokenTotals };
+  | CallFailure;
 
 /** What Explain asks about a finding. */
 export const EXPLAIN_QUESTION =
@@ -35,20 +35,14 @@ export function buildCommentRewritePrompt(comment: string, instruction: string):
   );
 }
 
-async function oneCall(prompt: string, label: string, deps: CallDeps): Promise<CallResult> {
-  const ctx = passContext(deps);
-  try {
-    const text = await callOnce(ctx, prompt);
+function oneCall(prompt: string, label: string, deps: CallDeps): Promise<CallResult> {
+  return settleOneCall<{ text: string }>(deps, prompt, `${label} failed`, (text, log) => {
     if (!text) {
-      ctx.log('warn', `${label} gave an empty reply`);
-      return { ok: false, stopped: false, error: 'The model gave an empty reply.', tokens: ctx.meter.totals() };
+      log('warn', `${label} gave an empty reply`);
+      return { unusable: 'The model gave an empty reply.' };
     }
-    return { ok: true, text, tokens: ctx.meter.totals() };
-  } catch (err) {
-    const stopped = isStop(err, deps.signal);
-    if (!stopped) ctx.log('warn', `${label} failed`, { error: err instanceof Error ? err.message : String(err) });
-    return { ok: false, stopped, error: stopped ? 'Stopped.' : describeError(err), tokens: ctx.meter.totals() };
-  }
+    return { text };
+  });
 }
 
 export function explainFinding(

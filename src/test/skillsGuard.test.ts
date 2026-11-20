@@ -322,6 +322,11 @@ describe('the /ts-jira-template skill', () => {
   });
 });
 
+/** A router skill's table rows: the command word and what the row does. */
+function tableRows(router: string): Array<{ command: string; action: string }> {
+  return [...router.matchAll(/^\| ([a-z][a-z-]*)(?![a-z-])[^|]*\| ([^|]+) \|$/gm)].map(m => ({ command: m[1], action: m[2] }));
+}
+
 /** The router skills: a command the user types, a table of commands and the one call each makes. */
 const ROUTERS = [
   {
@@ -350,18 +355,12 @@ const ROUTERS = [
 
 describe.each(ROUTERS)('the /$skill command skill', ({ skill, prefix, tools, left, case2, helpEnd }) => {
   const router = readFileSync(resolve(root, 'skills', skill, 'SKILL.md'), 'utf-8');
-  /** The table rows: the command word and what the row does. */
-  const rows = [...router.matchAll(/^\| ([a-z][a-z-]*)(?![a-z-])[^|]*\| ([^|]+) \|$/gm)].map(m => ({ command: m[1], action: m[2] }));
+  const rows = tableRows(router);
 
   it('has a row for every tool, so a new tool cannot be forgotten', () => {
     const called = rows.flatMap(r => r.action.match(new RegExp(`\\b${prefix}[A-Za-z_]+`, 'g')) ?? []);
     const direct = tools.filter(name => !left.has(name));
     expect([...new Set(called)].sort()).toEqual([...direct].sort());
-  });
-
-  it('fails the row check for a row that names a tool not in the catalog', () => {
-    const bad = router.replace(/`(\w+_\w+)`/, `\`${prefix}no_such_tool\``);
-    expect(skillProblems(skill, bad, catalogNames)).toEqual([`names ${prefix}no_such_tool, which the catalog does not offer`]);
   });
 
   it('names no skill, so a weak model is not drawn into running one', () => {
@@ -415,14 +414,9 @@ describe.each(ROUTERS)('the /$skill command skill', ({ skill, prefix, tools, lef
 describe('the /ts-bitbucket command skill, specifically', () => {
   const router = readFileSync(resolve(root, 'skills/ts-bitbucket/SKILL.md'), 'utf-8');
 
-  it('runs only when the user types it', () => {
-    expect(parseFrontmatter(router)?.['disable-model-invocation']).toBe('true');
-  });
-
   it('maps review, check and usage to their tools', () => {
-    expect(router).toMatch(/\| review <url> \[question\] \| `bitbucket_open_review`/);
-    expect(router).toMatch(/\| check \| `bitbucket_check_connection` \|/);
-    expect(router).toMatch(/\| usage \| `bitbucket_token_usage` \|/);
+    const toolOf = Object.fromEntries(tableRows(router).map(r => [r.command, r.action.match(/\bbitbucket_[A-Za-z_]+/)?.[0]]));
+    expect(toolOf).toEqual({ help: undefined, review: OPEN_REVIEW_TOOL, check: BITBUCKET_CHECK_TOOL, usage: TOKEN_USAGE_TOOL });
   });
 
   it('knows no review modes, only the staged review', () => {

@@ -87,6 +87,12 @@ export interface TokenTotals {
   estimated: boolean;
 }
 
+/** Two token totals added up; no first total gives the second. */
+export function addTokenTotals(a: TokenTotals | undefined, b: TokenTotals): TokenTotals {
+  if (!a) return b;
+  return { input: a.input + b.input, output: a.output + b.output, calls: a.calls + b.calls, estimated: a.estimated || b.estimated };
+}
+
 /** How one pass ended. */
 export type PassStatus =
   | 'finished'
@@ -174,4 +180,9 @@ export interface EngineDeps {
   onDiag?: DiagLogger;
   /** Waits between retries; tests pass one that does not wait. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Files read at a commit during one run of several passes, by commit and path, so a later pass of
+   * the run does not read them again. Lives for the run only; nothing of it is stored.
+   */
+  runCache?: Map<string, string>;
 }

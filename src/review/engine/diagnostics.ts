@@ -1,9 +1,9 @@
 import { describeErrorForLog } from '../reviewDiagnostics';
-import { formatFindingsFunnel, formatStructuredRunRecord, type FindingsFunnelCounts } from '../reviewSessionState';
+import { buildRunTag, formatFindingsFunnel, formatStructuredRunRecord, type FindingsFunnelCounts } from '../reviewSessionState';
 import type { TokenMeter } from '../tokenMeter';
 import type { BoardModelHandle } from '../../boards/boardModels';
-import type { PassContext } from './plumbing';
-import type { EngineSettings, ReviewStep } from './types';
+import { isStop, passContext, tokenBudgetOf, type PassContext, type TokenBudget } from './plumbing';
+import type { EngineDeps, EngineSettings, ReviewStep, ReviewTarget } from './types';
 
 // The opening, closing and abort lines of a pass's diagnostic timeline in the output channel, and
 // the structured run record written when detailed diagnostics are on. The per-call, retry, split and
@@ -19,15 +19,13 @@ export function logPassOpening(ctx: PassContext, params: {
   model: BoardModelHandle;
   meter: TokenMeter<BoardModelHandle>;
   settings: EngineSettings;
-  tokenBudget: number;
+  budget: TokenBudget;
 }): void {
-  const { step, model, meter, settings, tokenBudget } = params;
-  const resolvedContextTokens = settings.modelContextTokens ?? (model.maxInputTokens || 60000);
-  const ratio = settings.contextBudgetRatio ?? 0.7;
+  const { step, model, meter, settings, budget } = params;
   const contextLines = settings.contextLines ?? 'default';
   const configLine =
-    `${ctx.runTag} model=${model.vendor ?? 'unknown'}/${model.family ?? 'unknown'} tokenBudget=${tokenBudget} ` +
-    `(resolved=${resolvedContextTokens} ratio=${ratio}) passes=${step} critic=${step === 'critic'} contextLines=${contextLines}`;
+    `${ctx.runTag} model=${model.vendor ?? 'unknown'}/${model.family ?? 'unknown'} tokenBudget=${budget.tokens} ` +
+    `(resolved=${budget.contextTokens} ratio=${budget.ratio}) passes=${step} critic=${step === 'critic'} contextLines=${contextLines}`;
   ctx.configLine = configLine;
   ctx.log('info', configLine);
   ctx.log('info', 'model in use', {
@@ -62,4 +60,30 @@ export function logAborted(ctx: PassContext, err: unknown): void {
   ctx.log('error', `Review aborted — [${ctx.runTag}] last stage: ${ctx.stage}`, {
     runTag: ctx.runTag, lastStage: ctx.stage, error: err instanceof Error ? err.message : String(err), ...describeErrorForLog(err),
   });
+}
+
+type PassDeps = Pick<EngineDeps, 'model' | 'recordTokens' | 'signal' | 'onDiag' | 'sleep'>;
+
+/** Starts a pass over `target`: its context, its token budget, and its opening lines. */
+export function openPass(
+  deps: PassDeps, settings: EngineSettings, target: ReviewTarget, step: ReviewStep | 'requirements',
+): { ctx: PassContext; tokenBudget: number } {
+  const ctx = passContext(deps, { runTag: buildRunTag(target.project, target.repo, target.prId), detailedDiagnostics: settings.detailedDiagnostics });
+  const budget = tokenBudgetOf(settings, deps.model);
+  logPassOpening(ctx, { step, model: deps.model, meter: ctx.meter, settings, budget });
+  return { ctx, tokenBudget: budget.tokens };
+}
+
+/** Runs a pass after its opening lines; an error that is not a stop gets the abort line before it is rethrown. */
+export async function runPass<T>(
+  deps: PassDeps, settings: EngineSettings, target: ReviewTarget, step: ReviewStep,
+  body: (ctx: PassContext, tokenBudget: number) => Promise<T>,
+): Promise<T> {
+  const { ctx, tokenBudget } = openPass(deps, settings, target, step);
+  try {
+    return await body(ctx, tokenBudget);
+  } catch (err) {
+    if (!isStop(err, deps.signal)) logAborted(ctx, err);
+    throw err;
+  }
 }

@@ -1,5 +1,5 @@
 import { extractJsonObject } from '../../utils/extractJsonObject';
-import { callOnce, describeError, isStop, passContext } from './plumbing';
+import { settleOneCall, type CallFailure } from './plumbing';
 import type { EngineDeps, TokenTotals } from './types';
 
 // The developer's typed goal reworded for the requirements check: one call that sorts it into
@@ -15,7 +15,7 @@ export interface GoalPoints {
 
 export type GoalRewording =
   | { ok: true; points: GoalPoints; text: string; tokens: TokenTotals }
-  | { ok: false; stopped: boolean; error: string; tokens: TokenTotals };
+  | CallFailure;
 
 /** The goal is quoted as untrusted text; a marker inside it could otherwise close the quote early. */
 function defangFence(text: string): string {
@@ -74,19 +74,13 @@ export function formatGoalPoints(points: GoalPoints): string {
 }
 
 /** One model call; a stop, a failed call or an unreadable reply fails the rewording. */
-export async function rewordGoal(goal: string, deps: Pick<EngineDeps, 'model' | 'recordTokens' | 'signal' | 'onDiag'>): Promise<GoalRewording> {
-  const ctx = passContext(deps);
-  try {
-    const raw = await callOnce(ctx, buildGoalRewordPrompt(goal));
+export function rewordGoal(goal: string, deps: Pick<EngineDeps, 'model' | 'recordTokens' | 'signal' | 'onDiag'>): Promise<GoalRewording> {
+  return settleOneCall<{ points: GoalPoints; text: string }>(deps, buildGoalRewordPrompt(goal), 'Goal rewording failed', (raw, log) => {
     const points = parseGoalRewordReply(raw);
     if (!points) {
-      ctx.log('warn', 'Goal rewording reply was unreadable', { responseChars: raw.length });
-      return { ok: false, stopped: false, error: 'The model reply could not be read.', tokens: ctx.meter.totals() };
+      log('warn', 'Goal rewording reply was unreadable', { responseChars: raw.length });
+      return { unusable: 'The model reply could not be read.' };
     }
-    return { ok: true, points, text: formatGoalPoints(points), tokens: ctx.meter.totals() };
-  } catch (err) {
-    const stopped = isStop(err, deps.signal);
-    if (!stopped) ctx.log('warn', 'Goal rewording failed', { error: err instanceof Error ? err.message : String(err) });
-    return { ok: false, stopped, error: stopped ? 'Stopped.' : describeError(err), tokens: ctx.meter.totals() };
-  }
+    return { points, text: formatGoalPoints(points) };
+  });
 }

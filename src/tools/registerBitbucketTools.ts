@@ -1,10 +1,9 @@
 import type * as vscode from 'vscode';
-import { BitbucketApiClient } from '../bitbucket/BitbucketApiClient';
 import type { RegisteredBoards } from '../boards/registerBoards';
-import type { ReviewDerived, ReviewWorking } from '../boards/review/kind';
-import { REVIEW_KIND, type ReviewRecipe } from '../boards/review/recipe';
+import type { ReviewSession } from '../boards/review/kind';
+import { REVIEW_KIND } from '../boards/review/recipe';
+import { createBitbucketClient } from '../services/bitbucketClient';
 import type { ConfigService } from '../services/ConfigService';
-import type { Session } from '../sessions/sessionTypes';
 import { logDiag } from '../utils/diagLog';
 import { TokenUsageService } from '../utils/tokenUsage';
 import type { BitbucketAccess, BitbucketToolDeps } from './bitbucketTools/bitbucketAccess';
@@ -19,14 +18,7 @@ import { registerCatalog } from './registerCatalog';
 async function getBitbucket(configService: ConfigService): Promise<BitbucketAccess> {
   const config = await configService.getBitbucketConfig();
   if (!configService.isBitbucketConfigured(config)) return { configured: false, config };
-  // Cloud ignores the base URL and talks to api.bitbucket.org; Data Center uses it.
-  const client = new BitbucketApiClient({
-    baseUrl: config.baseUrl ?? '',
-    authType: config.authType,
-    token: config.token!,
-    onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
-  });
-  return { configured: true, config, client };
+  return { configured: true, config, client: createBitbucketClient(config) };
 }
 
 export function registerBitbucketTools(context: vscode.ExtensionContext, configService: ConfigService, boards: RegisteredBoards): void {
@@ -37,7 +29,7 @@ export function registerBitbucketTools(context: vscode.ExtensionContext, configS
     recentWrites: new RecentCallGuard(),
     openReview: input => boards.panels.open(REVIEW_KIND, input),
     // A look at the stored session only: no background check starts and Bitbucket is not asked.
-    storedReview: async id => (await boards.manager.peek(REVIEW_KIND, id)) as Session<ReviewRecipe, ReviewDerived, ReviewWorking> | undefined,
+    storedReview: async id => (await boards.manager.peek(REVIEW_KIND, id)) as ReviewSession | undefined,
     tokenUsage: () => usage.snapshot(),
     now: () => new Date(),
     onDiag: (level, message, details) => logDiag('tools.bitbucket', level, message, details),

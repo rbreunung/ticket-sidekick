@@ -1,8 +1,6 @@
 import { z } from 'zod';
 import type { BitbucketConfig, IBitbucketClient } from '../../bitbucket/IBitbucketClient';
-import type { ReviewDerived, ReviewWorking } from '../../boards/review/kind';
-import type { ReviewRecipe } from '../../boards/review/recipe';
-import type { Session } from '../../sessions/sessionTypes';
+import type { ReviewSession } from '../../boards/review/kind';
 import type { DiagLogger } from '../../utils/diagTypes';
 import type { UsageStore } from '../../utils/tokenUsage';
 import { buildBitbucketNotConfiguredMessage } from '../../services/setupHints';
@@ -18,7 +16,7 @@ export type BitbucketAccess =
   | { configured: true; config: BitbucketConfig; client: IBitbucketClient }
   | { configured: false; config: BitbucketConfig };
 
-export type StoredReview = Session<ReviewRecipe, ReviewDerived, ReviewWorking>;
+export type StoredReview = ReviewSession;
 
 export interface BitbucketToolDeps {
   /** The current Bitbucket settings, plus a client when Bitbucket is configured. */

@@ -1,9 +1,9 @@
-import { aggregateRecommendedPersonas, buildAdaptiveChunks, buildRunTag } from '../reviewSessionState';
-import { logAborted, logFindingsFunnel, logPassOpening, writeRunRecord } from './diagnostics';
+import { aggregateRecommendedPersonas, buildAdaptiveChunks } from '../reviewSessionState';
+import { logAborted, logFindingsFunnel, runPass, writeRunRecord } from './diagnostics';
 import type { RequirementsCoverage } from '../requirementsCoverage';
 import { reviewBatch } from './batchReview';
 import { addFindings, emptyStore, markStepRun, type NewFinding } from './findingStore';
-import { emptyOutcome, extraInstructionsOf, isStop, passContext, serviceFor, throwIfStopped, tokenBudgetOf, type PassContext } from './plumbing';
+import { emptyOutcome, extraInstructionsOf, isStop, serviceFor, throwIfStopped, type PassContext } from './plumbing';
 import { checkRequirements } from './requirementsCheck';
 import { readReviewDiff, snapshotFiles } from './snapshot';
 import type {
@@ -40,16 +40,7 @@ export async function runRegularPass(
   input: { target: ReviewTarget; requirements: RequirementsChoice; settings: EngineSettings },
   deps: EngineDeps,
 ): Promise<RegularPassResult> {
-  const { target, settings } = input;
-  const ctx = passContext(deps, { runTag: buildRunTag(target.project, target.repo, target.prId), detailedDiagnostics: settings.detailedDiagnostics });
-  const tokenBudget = tokenBudgetOf(settings, deps.model);
-  logPassOpening(ctx, { step: 'regular', model: deps.model, meter: ctx.meter, settings, tokenBudget });
-  try {
-    return await regularPass(input, deps, ctx, tokenBudget);
-  } catch (err) {
-    if (!isStop(err, deps.signal)) logAborted(ctx, err);
-    throw err;
-  }
+  return runPass(deps, input.settings, input.target, 'regular', (ctx, tokenBudget) => regularPass(input, deps, ctx, tokenBudget));
 }
 
 async function regularPass(

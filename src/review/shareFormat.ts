@@ -1,5 +1,5 @@
 import type { BitbucketPR } from '../bitbucket/IBitbucketClient';
-import { formatReviewForSharing, normalizeShareText, type ReviewFinding } from './reviewSessionState';
+import { countFindings, formatReviewForSharing, normalizeShareText, SHARE_SEVERITY_ORDER, type ReviewFinding } from './reviewSessionState';
 
 // The review as text to share: plain text for Teams, which shows pasted Markdown as raw characters,
 // and Markdown for places that render it, such as a Bitbucket comment or Confluence. Both are built
@@ -98,12 +98,7 @@ function paragraphs(value: string): string {
     .join('\n');
 }
 
-const SEVERITY_ORDER: Array<ReviewFinding['severity']> = ['critical', 'warning', 'suggestion'];
 const SEVERITY_LABEL: Record<ReviewFinding['severity'], string> = { critical: 'Critical', warning: 'Warning', suggestion: 'Suggestion' };
-
-function countFindings(n: number): string {
-  return `${n} finding${n !== 1 ? 's' : ''}`;
-}
 
 /** Copy as Markdown: the same content as the plain text, every untrusted part escaped. */
 export function formatShareMarkdown(input: ShareInput): SharedText {
@@ -119,7 +114,7 @@ export function formatShareMarkdown(input: ShareInput): SharedText {
     parts.push('No issues found.');
     return { text: parts.join('\n\n'), count: 0 };
   }
-  for (const severity of SEVERITY_ORDER) {
+  for (const severity of SHARE_SEVERITY_ORDER) {
     const rows = selected.filter((f) => f.severity === severity);
     if (rows.length === 0) continue;
     parts.push(`**${SEVERITY_LABEL[severity]} (${rows.length})**`);

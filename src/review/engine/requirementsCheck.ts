@@ -5,8 +5,8 @@ import type { RequirementsCoverage } from '../requirementsCoverage';
 import { runRequirementsPass } from '../requirementsPass';
 import { readTicketGuarded } from '../ticketRead';
 import { buildRunTag, type FileDiff } from '../reviewSessionState';
-import { logAborted, logPassOpening, writeRunRecord } from './diagnostics';
-import { callWithRetry, fetchAndBudgetContextFiles, isStop, passContext, serviceFor, tokenBudgetOf, type PassContext } from './plumbing';
+import { logAborted, openPass, writeRunRecord } from './diagnostics';
+import { callWithRetry, fetchAndBudgetContextFiles, isStop, passContext, serviceFor, type PassContext } from './plumbing';
 import { snapshotFiles } from './snapshot';
 import type { EngineDeps, EngineSettings, RequirementsChoice, RequirementsOutcome, StagedReview, TokenTotals } from './types';
 
@@ -97,13 +97,12 @@ export async function recheckRequirements(
 ): Promise<{ review: StagedReview; outcome: RequirementsOutcome; tokens: TokenTotals }> {
   const { snapshot } = review;
   const { target } = snapshot;
-  const ctx = passContext(deps, { runTag: buildRunTag(target.project, target.repo, target.prId), detailedDiagnostics: settings.detailedDiagnostics });
   if (choice.kind === 'none') {
+    const ctx = passContext(deps, { runTag: buildRunTag(target.project, target.repo, target.prId), detailedDiagnostics: settings.detailedDiagnostics });
     const { coverage: _dropped, ...rest } = review;
     return { review: { ...rest, requirements: choice }, outcome: { status: 'not-run' }, tokens: ctx.meter.totals() };
   }
-  const tokenBudget = tokenBudgetOf(settings, deps.model);
-  logPassOpening(ctx, { step: 'requirements', model: deps.model, meter: ctx.meter, settings, tokenBudget });
+  const { ctx, tokenBudget } = openPass(deps, settings, target, 'requirements');
   ctx.stage = 'requirements check';
   let result: Awaited<ReturnType<typeof checkRequirements>>;
   try {

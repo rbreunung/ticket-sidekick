@@ -1,11 +1,8 @@
 import type { BitbucketPR } from '../../bitbucket/IBitbucketClient';
 import type { PrReviewService } from '../../services/PrReviewService';
-import { withEasierRetry } from '../../utils/lmRetry';
-import { formatBatchFailureText, handleAttemptFailure } from '../reviewDiagnostics';
+import { formatBatchFailureText } from '../reviewDiagnostics';
 import {
   buildTruncationEvent,
-  createAttemptTracker,
-  formatCallLine,
   formatRecoveryDecision,
   mergePass2Findings,
   parseReviewReply,
@@ -17,17 +14,15 @@ import {
 } from '../reviewSessionState';
 import {
   assertReadableReply,
-  callOnce,
+  callBatchWithSplit,
   callWithRetry,
   describeError,
   fetchAndBudgetContextFiles,
   isStop,
-  rethrowStop,
-  splitInHalf,
   type PassContext,
 } from './plumbing';
 
-// One batch of a review pass: the first call (split and retried as today), the continuation of a
+// One batch of a review pass: the first call (retried, then split in half), the continuation of a
 // cut-off reply, and one more call with the whole files the model asked for. The regular pass and
 // the persona passes share it; only the prompt differs. vscode-free.
 
@@ -76,39 +71,13 @@ export interface BatchReviewResult {
 export async function reviewBatch(p: BatchReviewParams): Promise<BatchReviewResult> {
   const { ctx, files, label, batch, totalBatches } = p;
   const initial = p.initialContext && p.initialContext.size > 0 ? p.initialContext : undefined;
-  const tracker = createAttemptTracker<FileDiff>();
-  let promptChars = 0;
-  const parts = await withEasierRetry(
-    files,
-    async (items) => {
-      const attempt = tracker.start(items);
-      const prompt = p.buildPrompt(items, initial);
-      promptChars = prompt.length;
-      const raw = await callOnce(ctx, prompt);
-      assertReadableReply(raw);
-      ctx.log('info', formatCallLine({
-        runTag: ctx.runTag, pass: p.pass, batch, totalBatches, attempt, itemCount: items.length, promptChars: prompt.length,
-        responseChars: raw.length, durationMs: tracker.elapsedMs(), status: parseReviewReply(raw).truncated ? 'truncated' : 'ok',
-      }));
-      return raw;
-    },
-    splitInHalf,
-    {
-      ...(ctx.sleep ? { sleep: ctx.sleep } : {}),
-      onAttemptFailed: (attempt, err, items) => {
-        if (isStop(err, ctx.signal)) return;
-        handleAttemptFailure({
-          runTag: ctx.runTag, pass: p.pass, batch, totalBatches, libraryAttempt: attempt, err, items, originalItems: files,
-          tracker, promptChars, split: splitInHalf,
-          logFailure: (a, e) => ctx.log('warn', `Model call failed — ${label} (attempt ${a})`, {
-            files: items.map((f) => f.path), error: e instanceof Error ? e.message : String(e),
-          }),
-          logReview: ctx.log,
-        });
-      },
-    },
-  );
-  rethrowStop(parts.map((part) => part.error), ctx.signal);
+  const parts = await callBatchWithSplit(ctx, {
+    items: files, pass: p.pass, batch, totalBatches, label,
+    buildPrompt: (items) => p.buildPrompt(items, initial),
+    validate: assertReadableReply,
+    statusOf: (raw) => (parseReviewReply(raw).truncated ? 'truncated' : 'ok'),
+    failureDetails: (items) => ({ files: items.map((f) => f.path) }),
+  });
 
   const result: BatchReviewResult = {
     findings: [], contextPaths: initial ? [...initial.keys()] : [], reviewedFiles: 0, failedFiles: 0, failures: [],

@@ -1,18 +1,16 @@
 import { PERSONAS, type Persona, type PersonaId } from '../../services/PrReviewService';
-import { buildRunTag } from '../reviewSessionState';
 import { reviewBatch } from './batchReview';
-import { logAborted, logFindingsFunnel, logPassOpening, writeRunRecord } from './diagnostics';
+import { logFindingsFunnel, runPass, writeRunRecord } from './diagnostics';
 import { addFindings, markStepRun, type NewFinding } from './findingStore';
 import {
   budgetStoredContext,
   emptyOutcome,
   extraInstructionsOf,
   isStop,
-  passContext,
+  keepInRunCache,
   readContextAtCommit,
   serviceFor,
   throwIfStopped,
-  tokenBudgetOf,
   type PassContext,
 } from './plumbing';
 import type { EngineDeps, EngineSettings, PassOutcome, StagedReview } from './types';
@@ -26,16 +24,7 @@ export async function runExtraPass(
 ): Promise<{ review: StagedReview; outcome: PassOutcome }> {
   const persona = PERSONAS.find((p) => p.id === personaId);
   if (!persona) throw new Error(`Unknown review pass: ${personaId}`);
-  const { target } = review.snapshot;
-  const ctx = passContext(deps, { runTag: buildRunTag(target.project, target.repo, target.prId), detailedDiagnostics: settings.detailedDiagnostics });
-  const tokenBudget = tokenBudgetOf(settings, deps.model);
-  logPassOpening(ctx, { step: personaId, model: deps.model, meter: ctx.meter, settings, tokenBudget });
-  try {
-    return await extraPass(review, persona, settings, deps, ctx, tokenBudget);
-  } catch (err) {
-    if (!isStop(err, deps.signal)) logAborted(ctx, err);
-    throw err;
-  }
+  return runPass(deps, settings, review.snapshot.target, personaId, (ctx, tokenBudget) => extraPass(review, persona, settings, deps, ctx, tokenBudget));
 }
 
 async function extraPass(
@@ -48,7 +37,9 @@ async function extraPass(
   const outcome = emptyOutcome(personaId, batches.length);
 
   // Every stored context file is read at the reviewed commit before the first model call.
-  const read = await readContextAtCommit(deps.client, target.project, target.repo, reviewedCommit, [...new Set(batches.flatMap((b) => b.contextPaths))]);
+  const read = await readContextAtCommit(
+    deps.client, target.project, target.repo, reviewedCommit, [...new Set(batches.flatMap((b) => b.contextPaths))], deps.runCache,
+  );
   if (!read.ok) {
     ctx.log('warn', `The reviewed commit can no longer be read — ${persona.id} pass not run`, { path: read.path, error: read.error });
     writeRunRecord(ctx, '(no findings: the reviewed commit can no longer be read)');
@@ -98,6 +89,7 @@ async function extraPass(
     deps.onProgress?.({ step: personaId, batchesDone: i + 1, batchesTotal: batches.length, review: withFindings(addFindings(review.store, findings).store) });
   }
 
+  keepInRunCache(deps.runCache, reviewedCommit, cache);
   const added = addFindings(review.store, findings);
   const next = withFindings(stopped ? added.store : markStepRun(added.store, personaId));
   ctx.log('info', `${persona.displayName} pass ${stopped ? 'stopped' : 'finished'}`, {

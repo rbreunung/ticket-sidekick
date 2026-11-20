@@ -1,21 +1,18 @@
 import {
-  recheckRequirements, runCritic, runExtraPass, runRegularPass, uncheckedFindings,
-  type EngineDeps, type EngineProgress, type PassOutcome, type RequirementsChoice, type ReviewStep, type StagedReview, type TokenTotals,
+  addTokenTotals, recheckRequirements, runCritic, runExtraPass, runRegularPass, uncheckedFindings,
+  type EngineDeps, type EngineProgress, type PassOutcome, type RequirementsChoice, type ReviewStep, type StagedReview,
 } from '../../review/engine';
 import { PERSONAS, type PersonaId } from '../../services/PrReviewService';
 import type { RunFinished, RunProgress } from '../../sessions/boardKind';
-import type { Session } from '../../sessions/sessionTypes';
 import { REVIEW_MODEL_SETTING, type BoardModelHandle } from '../boardModels';
-import type { ReviewBoardDeps } from './deps';
-import type { ReviewRecipe } from './recipe';
-import type { ActivePass, PassRecord, ReviewDerived, ReviewWorking, StartedWith } from './kind';
+import { DEFAULT_CONFIDENCE_THRESHOLD, type ReviewBoardDeps } from './deps';
+import { sameReview } from './findings';
+import type { ActivePass, PassRecord, ReviewSession, ReviewWorking, StartedWith } from './kind';
 
 // The review board's model runs after the first step: the regular pass (Start and Run again), the
 // extra passes the developer picked (persona passes first, the critic last, in one run), and the
 // requirements re-check. Each step's result is saved as it finishes, so a restart keeps the steps
 // done; a pass a restart cut off is marked interrupted. vscode-free.
-
-type ReviewSession = Session<ReviewRecipe, ReviewDerived, ReviewWorking>;
 
 /** The extra passes in the order a run does them: the four persona passes, then the critic. */
 export const EXTRA_STEPS: ReviewStep[] = [...PERSONAS.map(p => p.id), 'critic'];
@@ -67,7 +64,8 @@ export function pickedSteps(working: ReviewWorking): ReviewStep[] {
   return EXTRA_STEPS.filter(step => picks.includes(step) && !stepBlocker(review, step));
 }
 
-function withNotice(notice: string, firstStep: boolean): RunFinished<ReviewWorking> {
+/** A run that did nothing: the notice says why, on the first step or on the results. */
+export function withNotice(notice: string, firstStep: boolean): RunFinished<ReviewWorking> {
   return { update: w => (firstStep ? { ...w, firstStep: { ...w.firstStep, notice } } : { ...w, notice }) };
 }
 
@@ -106,7 +104,33 @@ async function engineDeps(
   };
 }
 
-/** Reports engine progress in order: each report waits for the one before it. */
+/**
+ * What an extra pass or the critic changed in the stored review after its last finished batch: the
+ * findings, and the batches' context paths when the pass added any. The stored review keeps the rest.
+ */
+function partialChanges(stored: StagedReview, partial: StagedReview): NonNullable<ActivePass['partialChanges']> {
+  const contextPaths = partial.snapshot.batches.map(b => b.contextPaths);
+  const same = contextPaths.length === stored.snapshot.batches.length
+    && contextPaths.every((paths, i) => paths.length === stored.snapshot.batches[i].contextPaths.length
+      && paths.every((path, j) => path === stored.snapshot.batches[i].contextPaths[j]));
+  return { store: partial.store, ...(same ? {} : { contextPaths: contextPaths.map(paths => [...paths]) }) };
+}
+
+/** The stored review with a running extra pass's changes merged in. */
+function withPartialChanges(review: StagedReview, changes: NonNullable<ActivePass['partialChanges']>): StagedReview {
+  const { contextPaths } = changes;
+  if (!contextPaths) return { ...review, store: changes.store };
+  return {
+    ...review,
+    snapshot: { ...review.snapshot, batches: review.snapshot.batches.map((b, i) => ({ ...b, contextPaths: [...(contextPaths[i] ?? b.contextPaths)] })) },
+    store: changes.store,
+  };
+}
+
+/**
+ * Reports engine progress in order: each report waits for the one before it. The regular pass saves
+ * the review as it stands; an extra pass or the critic saves only what it changed in the stored review.
+ */
 function progressReporter(progress: RunProgress<ReviewWorking>) {
   let reported = Promise.resolve();
   return {
@@ -115,7 +139,10 @@ function progressReporter(progress: RunProgress<ReviewWorking>) {
         update: w => {
           if (!w.active) return w;
           const active: ActivePass = { ...w.active, step: p.step, done: p.batchesDone, total: p.batchesTotal };
-          if (p.review) active.partial = p.review;
+          if (p.review) {
+            if (active.what === 'passes' && w.review) active.partialChanges = partialChanges(w.review, p.review);
+            else active.partial = p.review;
+          }
           return { ...w, active };
         },
         done: p.batchesDone,
@@ -177,12 +204,8 @@ export async function regularRun(
       };
       delete next.firstStep.notice;
       delete next.active;
-      delete next.picked;
       delete next.notice;
-      delete next.recheckTokens;
-      delete next.selected;
-      delete next.failures;
-      delete next.callTokens;
+      withoutResultsState(next);
       if (result.review) next.review = result.review;
       else delete next.review;
       return next;
@@ -208,7 +231,8 @@ export async function extraPassesRun(
   const modelId = model.handle.id;
   await progress({ update: w => ({ ...w, active: { what: 'passes', steps, step: steps[0], done: 0, total: 0, modelId, run } }), done: 0, total: 0 });
   const reporter = progressReporter(progress);
-  const engine = await engineDeps(deps, model.handle, bitbucket.client, signal, reporter.report);
+  // One cache for the run, so the steps after the first do not read the same context files again.
+  const engine: EngineDeps = { ...await engineDeps(deps, model.handle, bitbucket.client, signal, reporter.report), runCache: new Map() };
   const worked = workedOn(working);
 
   for (const step of steps) {
@@ -226,6 +250,7 @@ export async function extraPassesRun(
         if (next.active) {
           next.active = { ...next.active };
           delete next.active.partial;
+          delete next.active.partialChanges;
         }
         return next;
       },
@@ -266,22 +291,17 @@ export async function recheckRun(
   return {
     update: w => {
       // A review replaced meanwhile is not given this coverage.
-      if (!w.review || w.review.snapshot.reviewedCommit !== review.snapshot.reviewedCommit || w.review.snapshot.pr.id !== review.snapshot.pr.id) return w;
+      if (!sameReview(w, session.working)) return w;
       // A failed or stopped check keeps the source and the coverage it had.
-      const nextReview: StagedReview = { ...w.review, requirements: result.review.requirements };
+      const nextReview: StagedReview = { ...w.review!, requirements: result.review.requirements };
       if (result.review.coverage) nextReview.coverage = result.review.coverage;
       else delete nextReview.coverage;
-      const next: ReviewWorking = { ...w, review: nextReview, requirements: result.outcome, recheckTokens: addTokens(w.recheckTokens, result.tokens) };
+      const next: ReviewWorking = { ...w, review: nextReview, requirements: result.outcome, recheckTokens: addTokenTotals(w.recheckTokens, result.tokens) };
       // Run again redoes the review with the source the coverage now comes from.
       if (w.startedWith) next.startedWith = { ...w.startedWith, requirements: result.review.requirements };
       return next;
     },
   };
-}
-
-function addTokens(a: TokenTotals | undefined, b: TokenTotals): TokenTotals {
-  if (!a) return b;
-  return { input: a.input + b.input, output: a.output + b.output, calls: a.calls + b.calls, estimated: a.estimated || b.estimated };
 }
 
 /**
@@ -312,6 +332,15 @@ function emptyRecord(step: ReviewStep, active: ActivePass, run: number): PassRec
   return { ...outcome, status: 'interrupted', modelId: active.modelId, run };
 }
 
+/** Clears what belongs to the results of the review being replaced: the picks, the re-check tokens, the selection, the failed calls and their tokens. */
+function withoutResultsState(working: ReviewWorking): void {
+  delete working.picked;
+  delete working.recheckTokens;
+  delete working.selected;
+  delete working.failures;
+  delete working.callTokens;
+}
+
 /** The working state of a board whose pass a restart cut off: the steps saved so far stay. */
 export function interruptedWorking(working: ReviewWorking): ReviewWorking {
   const { active } = working;
@@ -320,7 +349,7 @@ export function interruptedWorking(working: ReviewWorking): ReviewWorking {
   delete next.active;
   if (active.what === 'regular') {
     // The findings of the batches that finished stay, as after a stop; the review it replaced is gone.
-    const startedWith: StartedWith = { ...active.startedWith!, confidenceThreshold: working.startedWith?.confidenceThreshold ?? 0.7 };
+    const startedWith: StartedWith = { ...active.startedWith!, confidenceThreshold: working.startedWith?.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD };
     const step = active.step === 'requirements' ? 'regular' : active.step;
     const result: ReviewWorking = {
       ...next, stage: 'review', startedWith, passes: [emptyRecord(step, active, active.run)], explanations: {}, drafts: {},
@@ -328,16 +357,13 @@ export function interruptedWorking(working: ReviewWorking): ReviewWorking {
     if (active.partial) result.review = active.partial;
     else delete result.review;
     delete result.requirements;
-    delete result.picked;
-    delete result.recheckTokens;
-    delete result.selected;
-    delete result.failures;
-    delete result.callTokens;
+    withoutResultsState(result);
     return result;
   }
   const step = active.step === 'requirements' ? active.steps[0] : active.step;
   // The running step's finished batches join the review; the steps finished before it were saved already.
-  if (active.partial) next.review = active.partial;
+  if (active.partialChanges && next.review) next.review = withPartialChanges(next.review, active.partialChanges);
+  else if (active.partial) next.review = active.partial;
   const review = next.review;
   const left = active.steps.filter(s => !review?.store.stepsRun.includes(s));
   if (left.length > 0) next.picked = left;

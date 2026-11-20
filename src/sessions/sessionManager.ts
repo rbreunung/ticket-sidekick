@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto';
 import type { DiagLogger } from '../utils/diagTypes';
+import { capitalised } from '../utils/textCase';
 import type { ApplyProgressReport, CheckMode, ExportedFile, RegisteredKind, RunFinished, RunProgressReport, WorkingUpdate } from './boardKind';
 import { sessionIdFor } from './sessionId';
 import type { SessionStore } from './sessionStore';
@@ -104,13 +105,11 @@ interface PendingPlan {
 
 /** Whether a check found what the session already shows: the same data, fingerprints and working state. */
 function unchanged(session: Session<unknown, unknown, unknown>, merged: { derived: DerivedPart<unknown>; working: unknown }): boolean {
-  return JSON.stringify(merged.derived.data) === JSON.stringify(session.derived.data)
+  // The same object is the same state; only a rebuilt one is compared as JSON.
+  const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
+  return same(merged.derived.data, session.derived.data)
     && JSON.stringify(merged.derived.fingerprints) === JSON.stringify(session.derived.fingerprints)
-    && JSON.stringify(merged.working) === JSON.stringify(session.working);
-}
-
-function capitalised(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
+    && same(merged.working, session.working);
 }
 
 function messageOf(err: unknown): string {

@@ -9,13 +9,16 @@ import type { BoardModels, ModelSettings } from '../boardModels';
 // moment it is needed, so a token or a setting changed while the board is open is seen. The VS Code
 // bindings are in registerBoards.ts. vscode-free.
 
-export type BitbucketAccess = { configured: true; client: IBitbucketClient } | { configured: false; hint: string };
+export type ReviewBitbucketAccess = { configured: true; client: IBitbucketClient } | { configured: false; hint: string };
+
+/** The confidence below which a finding is marked as low confidence, when no setting gives one. */
+export const DEFAULT_CONFIDENCE_THRESHOLD = 0.7;
 
 /** The review settings, plus the confidence below which a finding is marked as low confidence. */
 export type ReviewSettings = Omit<EngineSettings, 'focus'> & { confidenceThreshold: number };
 
 export interface ReviewBoardDeps {
-  bitbucket(): Promise<BitbucketAccess>;
+  bitbucket(): Promise<ReviewBitbucketAccess>;
   /** Reads a ticket's requirements text; undefined while Jira is not configured. */
   jira(): Promise<{ readRequirements(key: string): Promise<RequirementsSourceResult> } | undefined>;
   models: Pick<BoardModels, 'list' | 'handle'>;

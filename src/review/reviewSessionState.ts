@@ -209,7 +209,8 @@ export function sanitizeGfmCellText(value: string): string {
   return value.replace(/\r\n|\r|\n/g, ' ').replace(/\|/g, '/');
 }
 
-const SHARE_SEVERITY_ORDER: Array<ReviewFinding['severity']> = ['critical', 'warning', 'suggestion'];
+/** The order findings are grouped and sorted in: the most severe first. */
+export const SHARE_SEVERITY_ORDER: ReadonlyArray<ReviewFinding['severity']> = ['critical', 'warning', 'suggestion'];
 
 function shareSeverityIcon(severity: ReviewFinding['severity']): string {
   return severity === 'critical' ? '🔴' : severity === 'warning' ? '🟡' : '🔵';
@@ -229,7 +230,8 @@ function shareParagraphLines(value: string): string[] {
   return lines.filter((l, i) => l !== '' || (i > 0 && lines[i - 1] !== '')).join('\n').trim().split('\n');
 }
 
-function countFindings(n: number): string {
+/** "1 finding", "3 findings". */
+export function countFindings(n: number): string {
   return `${n} finding${n !== 1 ? 's' : ''}`;
 }
 

@@ -19,8 +19,8 @@ function withoutNumber(f: StoredFinding): NewFinding {
 }
 
 /**
- * Adds one pass's findings. They are first deduped among themselves (as one run of today's pipeline
- * does), then each is merged into the first numbered finding it duplicates, or numbered anew.
+ * Adds one pass's findings. They are first deduped among themselves, then each is merged into the
+ * first numbered finding it duplicates, or numbered anew.
  */
 export function addFindings(store: FindingStore, incoming: NewFinding[]): { store: FindingStore; added: number[]; merged: number[] } {
   const findings = store.findings.map((f) => ({ ...f }));

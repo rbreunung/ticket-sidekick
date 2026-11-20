@@ -1,10 +1,11 @@
 import { ModelRequestCancelledError, type BoardModelHandle } from '../../boards/boardModels';
 import { PrReviewService } from '../../services/PrReviewService';
 import type { DiagLogger } from '../../utils/diagTypes';
-import { isTransientLmError, PartialLmResponseError, UnparseableReplyError, withLmRetry } from '../../utils/lmRetry';
+import { isTransientLmError, PartialLmResponseError, UnparseableReplyError, withEasierRetry, withLmRetry, type SplitBatch } from '../../utils/lmRetry';
 import { sanitizeDetails } from '../../utils/logRedaction';
 import { createTokenMeter, type TokenMeter } from '../tokenMeter';
 import {
+  createAttemptTracker,
   estimateChunkTokens,
   formatCallLine,
   formatRecoveryDecision,
@@ -14,8 +15,8 @@ import {
   type FileDiff,
   type ReviewPass,
 } from '../reviewSessionState';
-import { describeErrorForLog, errorCodeOf, errorNameOf, type CallDiagHooks } from '../reviewDiagnostics';
-import type { EngineDeps, EngineSettings, PassOutcome, ReviewStep } from './types';
+import { describeErrorForLog, errorCodeOf, errorNameOf, handleAttemptFailure, type CallDiagHooks } from '../reviewDiagnostics';
+import type { EngineDeps, EngineSettings, PassOutcome, ReviewStep, TokenTotals } from './types';
 
 // The pieces every pass shares: the metered model call, stop handling, the token budget and the
 // context-file reads at the reviewed commit. vscode-free.
@@ -91,7 +92,7 @@ export async function callOnce(ctx: PassContext, prompt: string): Promise<string
 }
 
 /**
- * One model call with today's three identical tries; `validate` throws on a reply that is no use.
+ * One model call with three identical tries; `validate` throws on a reply that is no use.
  * With a `site`, each attempt gets its call line and each failure its retry or give-up line; `hooks`
  * hands the attempt and its duration to a caller that logs its own call line.
  */
@@ -145,10 +146,79 @@ export function splitInHalf<T>(items: T[]): [T[], T[]] {
   return [items.slice(0, mid), items.slice(mid)];
 }
 
+/**
+ * One batch's first call over `items`: tried twice, then split in half with one try per half. Each
+ * attempt gets its call line and each failure its failure, call and recovery lines. A stop throws;
+ * a part that failed after its tries is returned with its error.
+ */
+export async function callBatchWithSplit<T>(ctx: PassContext, params: {
+  items: T[];
+  pass: ReviewPass;
+  batch: number;
+  totalBatches: number;
+  label: string;
+  buildPrompt: (items: T[]) => string;
+  /** Throws on a reply that is no use, so it is retried and split like a provider error. */
+  validate?: (raw: string) => void;
+  statusOf: (raw: string) => 'ok' | 'truncated';
+  /** Extra details on the failure line, before the error. */
+  failureDetails?: (items: T[]) => Record<string, unknown>;
+}): Promise<Array<SplitBatch<T, string>>> {
+  const { items, pass, batch, totalBatches, label } = params;
+  const tracker = createAttemptTracker<T>();
+  let promptChars = 0;
+  const parts = await withEasierRetry(
+    items,
+    async (subset) => {
+      const attempt = tracker.start(subset);
+      const prompt = params.buildPrompt(subset);
+      promptChars = prompt.length;
+      const raw = await callOnce(ctx, prompt);
+      params.validate?.(raw);
+      ctx.log('info', formatCallLine({
+        runTag: ctx.runTag, pass, batch, totalBatches, attempt, itemCount: subset.length, promptChars: prompt.length,
+        responseChars: raw.length, durationMs: tracker.elapsedMs(), status: params.statusOf(raw),
+      }));
+      return raw;
+    },
+    splitInHalf,
+    {
+      ...(ctx.sleep ? { sleep: ctx.sleep } : {}),
+      onAttemptFailed: (attempt, err, subset) => {
+        if (isStop(err, ctx.signal)) return;
+        handleAttemptFailure({
+          runTag: ctx.runTag, pass, batch, totalBatches, libraryAttempt: attempt, err, items: subset, originalItems: items,
+          tracker, promptChars, split: splitInHalf,
+          logFailure: (a, e) => ctx.log('warn', `Model call failed — ${label} (attempt ${a})`, {
+            ...params.failureDetails?.(subset), error: e instanceof Error ? e.message : String(e),
+          }),
+          logReview: ctx.log,
+        });
+      },
+    },
+  );
+  rethrowStop(parts.map((part) => part.error), ctx.signal);
+  return parts;
+}
+
+/** The context size used when neither the setting nor the model gives one. */
+export const DEFAULT_CONTEXT_TOKENS = 60000;
+/** The share of the context a call may fill when the setting gives none. */
+export const DEFAULT_CONTEXT_BUDGET_RATIO = 0.7;
+
+export interface TokenBudget {
+  /** The setting, else the model's own context size, else the default. */
+  contextTokens: number;
+  ratio: number;
+  /** Tokens per call: the context size times the ratio. */
+  tokens: number;
+}
+
 /** Token budget per call: the setting, else the model's own context size, else 60000, times the ratio. */
-export function tokenBudgetOf(settings: EngineSettings, model: Pick<BoardModelHandle, 'maxInputTokens'>): number {
-  const contextTokens = settings.modelContextTokens ?? (model.maxInputTokens || 60000);
-  return Math.floor(contextTokens * (settings.contextBudgetRatio ?? 0.7));
+export function tokenBudgetOf(settings: EngineSettings, model: Pick<BoardModelHandle, 'maxInputTokens'>): TokenBudget {
+  const contextTokens = settings.modelContextTokens ?? (model.maxInputTokens || DEFAULT_CONTEXT_TOKENS);
+  const ratio = settings.contextBudgetRatio ?? DEFAULT_CONTEXT_BUDGET_RATIO;
+  return { contextTokens, ratio, tokens: Math.floor(contextTokens * ratio) };
 }
 
 /** The text every review prompt gets as additional instructions. */
@@ -163,7 +233,7 @@ export function describeError(err: unknown): string {
 
 /**
  * Fetches the requested files not yet in `cache` at `commit`, then picks as many of the requested
- * files as fit the budget left after `budgetAgainst`. The same rule Pass 2 and the critic use today.
+ * files as fit the budget left after `budgetAgainst`. Pass 2 and the critic use the same rule.
  */
 export async function fetchAndBudgetContextFiles(params: {
   requested: string[];
@@ -191,22 +261,43 @@ export function budgetStoredContext(paths: string[], cache: Map<string, string>,
   return selectFilesWithinBudget(entries, Math.max(0, tokenBudget - estimateChunkTokens(files))).selected;
 }
 
+/** The key of a file read at a commit, in a run's shared cache. */
+function contextCacheKey(commit: string, path: string): string {
+  return `${commit}\n${path}`;
+}
+
+/** Keeps the files a pass read at `commit` in the run's shared cache, for the next pass of the run. */
+export function keepInRunCache(runCache: Map<string, string> | undefined, commit: string, files: Map<string, string>): void {
+  if (!runCache) return;
+  for (const [path, content] of files) runCache.set(contextCacheKey(commit, path), content);
+}
+
 /**
  * Reads every path at the reviewed commit before a later pass calls the model. Any failed read means
  * the commit can no longer be read (a force-push removed it, or access was lost), and the pass must
- * not run; it never falls back to a newer head.
+ * not run; it never falls back to a newer head. The paths are read at once; the first failure in
+ * path order is reported. A file an earlier pass of the same run read at this commit is taken from
+ * `runCache`.
  */
 export async function readContextAtCommit(
   client: Pick<EngineDeps['client'], 'getFileContent'>, project: string, repo: string, commit: string, paths: string[],
+  runCache?: Map<string, string>,
 ): Promise<{ ok: true; files: Map<string, string> } | { ok: false; path: string; error: string }> {
-  const files = new Map<string, string>();
-  for (const path of paths) {
+  const reads = await Promise.all(paths.map(async (path): Promise<{ path: string; content: string } | { path: string; error: string }> => {
+    const cached = runCache?.get(contextCacheKey(commit, path));
+    if (cached !== undefined) return { path, content: cached };
     try {
-      files.set(path, await client.getFileContent(project, repo, path, commit));
+      return { path, content: await client.getFileContent(project, repo, path, commit) };
     } catch (err) {
-      return { ok: false, path, error: err instanceof Error ? err.message : String(err) };
+      return { path, error: err instanceof Error ? err.message : String(err) };
     }
+  }));
+  const files = new Map<string, string>();
+  for (const read of reads) {
+    if ('error' in read) return { ok: false, path: read.path, error: read.error };
+    files.set(read.path, read.content);
   }
+  keepInRunCache(runCache, commit, files);
   return { ok: true, files };
 }
 
@@ -219,4 +310,30 @@ export function emptyOutcome(step: ReviewStep, batchesTotal: number): PassOutcom
 
 export function serviceFor(deps: Pick<EngineDeps, 'client' | 'onDiag'>): PrReviewService {
   return new PrReviewService(deps.client, deps.onDiag);
+}
+
+/** A single call that failed, was stopped, or gave a reply the caller could not read. */
+export type CallFailure = { ok: false; stopped: boolean; error: string; tokens: TokenTotals };
+
+/**
+ * One metered model call with no retry, settled into a result: `read` turns the reply into the
+ * caller's fields, or names why it cannot be used. A stop or a failed call fails it too.
+ */
+export async function settleOneCall<T extends object>(
+  deps: Pick<EngineDeps, 'model' | 'recordTokens' | 'signal' | 'onDiag'>,
+  prompt: string,
+  failedLine: string,
+  read: (raw: string, log: DiagLogger) => T | { unusable: string },
+): Promise<(T & { ok: true; tokens: TokenTotals }) | CallFailure> {
+  const ctx = passContext(deps);
+  try {
+    const raw = await callOnce(ctx, prompt);
+    const value = read(raw, ctx.log);
+    if ('unusable' in value) return { ok: false, stopped: false, error: value.unusable, tokens: ctx.meter.totals() };
+    return { ok: true, ...value, tokens: ctx.meter.totals() };
+  } catch (err) {
+    const stopped = isStop(err, deps.signal);
+    if (!stopped) ctx.log('warn', failedLine, { error: err instanceof Error ? err.message : String(err) });
+    return { ok: false, stopped, error: stopped ? 'Stopped.' : describeError(err), tokens: ctx.meter.totals() };
+  }
 }

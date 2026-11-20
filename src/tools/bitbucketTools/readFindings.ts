@@ -4,7 +4,8 @@ import { parseReviewUrl, reviewSessionId } from '../../boards/review/recipe';
 import type { StoredFinding } from '../../review/engine';
 import type { RequirementsCoverage } from '../../review/requirementsCoverage';
 import { renderCoverageText } from '../../review/requirementsCoverage';
-import { normalizeShareText } from '../../review/reviewSessionState';
+import { DEFAULT_CONFIDENCE_THRESHOLD } from '../../boards/review/deps';
+import { normalizeShareText, SHARE_SEVERITY_ORDER } from '../../review/reviewSessionState';
 import { markdownToPlain } from '../../review/shareFormat';
 import { defineTool } from '../toolDefinition';
 import { withBitbucket, type BitbucketToolDeps, type StoredReview } from './bitbucketAccess';
@@ -22,7 +23,6 @@ const readFindingsShape = {
 };
 
 type Severity = StoredFinding['severity'];
-const SEVERITIES: Severity[] = ['critical', 'warning', 'suggestion'];
 const SEVERITY_PLURAL: Record<Severity, string> = { critical: 'critical', warning: 'warnings', suggestion: 'suggestions' };
 
 /** The review's verdict: the highest severity found, not counting findings labelled as probably a false alarm. */
@@ -68,7 +68,7 @@ function coverageSummary(coverage: RequirementsCoverage): string {
 }
 
 function sorted(findings: StoredFinding[]): StoredFinding[] {
-  return findings.slice().sort((a, b) => SEVERITIES.indexOf(a.severity) - SEVERITIES.indexOf(b.severity) || a.id - b.id);
+  return findings.slice().sort((a, b) => SHARE_SEVERITY_ORDER.indexOf(a.severity) - SHARE_SEVERITY_ORDER.indexOf(b.severity) || a.id - b.id);
 }
 
 function header(session: StoredReview): string[] {
@@ -100,7 +100,7 @@ function summary(session: StoredReview): string {
   lines.push(`Reviewed commit: ${reviewed.slice(0, 12)}`);
   if (head && head !== reviewed) lines.push(`Out of date: the pull request's head is now ${head.slice(0, 12)}. Run again on the board reviews the newest commit.`);
   lines.push(`Passes run: ${stepsRun.length > 0 ? stepsRun.map(step => STEP_LABELS[step]).join(', ') : 'none went over every batch'}`);
-  const counts = SEVERITIES.map(s => `${findings.filter(f => f.severity === s).length} ${SEVERITY_PLURAL[s]}`).join(', ');
+  const counts = SHARE_SEVERITY_ORDER.map(s => `${findings.filter(f => f.severity === s).length} ${SEVERITY_PLURAL[s]}`).join(', ');
   const labelled = findings.filter(f => f.probablyFalseAlarm).length;
   lines.push(`Findings: ${findings.length} (${counts})${labelled > 0 ? `; ${labelled} labelled probably a false alarm` : ''}`);
   lines.push(`Verdict: ${reviewVerdict(findings)}`);
@@ -114,7 +114,7 @@ function summary(session: StoredReview): string {
 
 function findingsList(session: StoredReview): string {
   const review = session.working.review!;
-  const threshold = session.working.startedWith?.confidenceThreshold ?? 0.7;
+  const threshold = session.working.startedWith?.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
   const lines = header(session);
   const running = runningLine(session);
   if (running) lines.push(running);
@@ -134,7 +134,7 @@ function oneFinding(session: StoredReview, number: number): string {
     const numbers = sorted(review.store.findings).map(x => `#${x.id}`);
     return `There is no finding #${number} in this review. ${numbers.length > 0 ? `Its findings are ${numbers.join(', ')}.` : 'It has no findings.'}`;
   }
-  const threshold = session.working.startedWith?.confidenceThreshold ?? 0.7;
+  const threshold = session.working.startedWith?.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
   const markers = markersOf(f, threshold);
   const lines = [
     `Finding #${f.id} (${f.severity}) at ${locationOf(f)} in ${session.recipe.project}/${session.recipe.repo}#${session.recipe.prId}`,

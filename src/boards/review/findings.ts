@@ -1,14 +1,13 @@
 import type { IBitbucketClient } from '../../bitbucket/IBitbucketClient';
-import type { StoredFinding, TokenTotals } from '../../review/engine';
+import { addTokenTotals, type StoredFinding, type TokenTotals } from '../../review/engine';
 import { explainFinding, rewriteComment, type CallResult } from '../../review/findingCalls';
 import { renderCoverageText } from '../../review/requirementsCoverage';
 import { formatShare, type ShareFormat, type SharedText } from '../../review/shareFormat';
 import { PrReviewService } from '../../services/PrReviewService';
 import type { Applied, ApplyProgress, Planned, Reduced, RunBegun, RunFinished } from '../../sessions/boardKind';
-import type { ApplyLineResult, Session, WritePlan } from '../../sessions/sessionTypes';
-import type { ReviewBoardDeps } from './deps';
-import type { Draft, ReviewDerived, ReviewWorking } from './kind';
-import type { ReviewRecipe } from './recipe';
+import type { ApplyLineResult, WritePlan } from '../../sessions/sessionTypes';
+import { DEFAULT_CONFIDENCE_THRESHOLD, type ReviewBoardDeps } from './deps';
+import type { Draft, ReviewDerived, ReviewSession, ReviewWorking } from './kind';
 import { modelFor } from './runs';
 
 // What the developer does with the findings of a review: Explain one (one model call that answers
@@ -17,8 +16,6 @@ import { modelFor } from './runs';
 // Post the selected drafts after a preview and the native confirmation, and Copy the selection, or
 // every finding, as plain text or Markdown. The copied text is built here from the session, never
 // taken from the page. vscode-free.
-
-type ReviewSession = Session<ReviewRecipe, ReviewDerived, ReviewWorking>;
 
 export type FindingAction =
   | { type: 'select'; numbers: number[]; selected: boolean }
@@ -153,19 +150,14 @@ export function beginFindingRun(session: ReviewSession, request: FindingRunReque
   return { ok: true, size: 'call', what: `rewrite:${finding.id}`, label: `the rewrite of the comment of #${finding.id}`, total: 1 };
 }
 
-function addTokens(a: TokenTotals | undefined, b: TokenTotals): TokenTotals | undefined {
-  if (b.calls === 0) return a;
-  if (!a) return b;
-  return { input: a.input + b.input, output: a.output + b.output, calls: a.calls + b.calls, estimated: a.estimated || b.estimated };
-}
-
+/** A call that made no model call leaves the token count as it was. */
 function withTokens(working: ReviewWorking, tokens: TokenTotals): ReviewWorking {
-  const callTokens = addTokens(working.callTokens, tokens);
+  const callTokens = tokens.calls === 0 ? working.callTokens : addTokenTotals(working.callTokens, tokens);
   return callTokens ? { ...working, callTokens } : working;
 }
 
 /** The same review as the one a run started on: a review replaced meanwhile is not changed. */
-function sameReview(a: ReviewWorking, b: ReviewWorking): boolean {
+export function sameReview(a: ReviewWorking, b: ReviewWorking): boolean {
   return Boolean(a.review && b.review) && a.review!.snapshot.reviewedCommit === b.review!.snapshot.reviewedCommit
     && a.review!.snapshot.pr.id === b.review!.snapshot.pr.id;
 }
@@ -294,6 +286,6 @@ export function reviewCopyText(session: ReviewSession, format: ShareFormat, numb
     ...(targets.length > 0 ? { targets } : {}),
     explanations,
     ...(review.coverage ? { coverageText: renderCoverageText(review.coverage) } : {}),
-    confidenceThreshold: working.startedWith?.confidenceThreshold ?? 0.7,
+    confidenceThreshold: working.startedWith?.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD,
   });
 }

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as os from 'os';
 import * as path from 'path';
-import { BitbucketApiClient } from '../bitbucket/BitbucketApiClient';
+import { createBitbucketClient } from '../services/bitbucketClient';
 import { ConfigService } from '../services/ConfigService';
 import { TicketService } from '../services/TicketService';
 import { TemplateService } from '../templates/TemplateService';
@@ -27,7 +27,7 @@ import { importJiraDeps } from './import/jiraDeps';
 import type { ImportDescriptors } from './import/read';
 import { IMPORT_KIND, type ReportKind } from './import/recipe';
 import { IMPORT_START_BOARD, ImportStartScreen, reportReaderOf, type ReportReader } from './import/startScreen';
-import { BITBUCKET_NOT_CONFIGURED, type BitbucketAccess, type ReviewBoardDeps } from './review/deps';
+import { BITBUCKET_NOT_CONFIGURED, DEFAULT_CONFIDENCE_THRESHOLD, type ReviewBitbucketAccess, type ReviewBoardDeps } from './review/deps';
 import { reviewKind } from './review/kind';
 import { REVIEW_KIND } from './review/recipe';
 import { REVIEW_START_BOARD, ReviewStartScreen } from './review/startScreen';
@@ -69,10 +69,11 @@ function importDescriptors(workspaceFolder: () => string | undefined, log: (leve
 
 /** The models a board calls, over VS Code's language model API: no chat request is needed. */
 export function vscodeBoardModels(justification: string): BoardModels {
+  const modelById = async (id: string): Promise<vscode.LanguageModelChat | undefined> => (await vscode.lm.selectChatModels({ id }))[0];
   return {
     list: async () => (await vscode.lm.selectChatModels()).map(m => ({ id: m.id, name: m.name, vendor: m.vendor, family: m.family })),
     send: async (id, prompt) => {
-      const [model] = await vscode.lm.selectChatModels({ id });
+      const model = await modelById(id);
       if (!model) throw new Error(`The model ${id} is not available.`);
       // No caller cancels a board's call; the token is only required by the API.
       const source = new vscode.CancellationTokenSource();
@@ -86,7 +87,7 @@ export function vscodeBoardModels(justification: string): BoardModels {
       }
     },
     handle: async id => {
-      const [model] = await vscode.lm.selectChatModels({ id });
+      const model = await modelById(id);
       if (!model) {
         logDiag('boards.models', 'warn', 'The model a board asked for is not available', { modelId: id });
         return undefined;
@@ -193,18 +194,10 @@ export function registerBoards(
   });
   const configService = new ConfigService(context);
   /** Bitbucket as configured now: the client, or the setup hint. */
-  const bitbucketAccess = async (): Promise<BitbucketAccess> => {
+  const bitbucketAccess = async (): Promise<ReviewBitbucketAccess> => {
     const config = await configService.getBitbucketConfig();
     if (!configService.isBitbucketConfigured(config)) return { configured: false, hint: BITBUCKET_NOT_CONFIGURED };
-    return {
-      configured: true,
-      client: new BitbucketApiClient({
-        baseUrl: config.baseUrl ?? '',
-        authType: config.authType,
-        token: config.token!,
-        onDiag: (level, message, details) => logDiag('bitbucket.apiClient', level, message, details),
-      }),
-    };
+    return { configured: true, client: createBitbucketClient(config) };
   };
   // One counter store per window, the same monthly per-model counters `@bitbucket usage` shows.
   const tokenUsage = new TokenUsageService(context.globalState);
@@ -227,7 +220,7 @@ export function registerBoards(
         ...(config.modelContextTokens ? { modelContextTokens: config.modelContextTokens } : {}),
         ...(config.contextBudgetRatio !== undefined ? { contextBudgetRatio: config.contextBudgetRatio } : {}),
         ...(config.detailedDiagnostics ? { detailedDiagnostics: true } : {}),
-        confidenceThreshold: config.confidenceThreshold ?? 0.7,
+        confidenceThreshold: config.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD,
       };
     },
     recordTokens: (modelId, figures) => tokenUsage.record(modelId, figures),

@@ -1,24 +1,19 @@
-import { withEasierRetry } from '../../utils/lmRetry';
-import { handleAttemptFailure } from '../reviewDiagnostics';
-import { buildRunTag, createAttemptTracker, formatCallLine, parseCriticAdditionalFiles, parseCriticKeep, type ReviewFinding } from '../reviewSessionState';
-import { logAborted, logFindingsFunnel, logPassOpening, writeRunRecord } from './diagnostics';
+import { parseCriticAdditionalFiles, parseCriticKeep, type ReviewFinding } from '../reviewSessionState';
+import { logFindingsFunnel, runPass, writeRunRecord } from './diagnostics';
 import { applyCriticVerdicts, markStepRun, uncheckedFindings } from './findingStore';
 import {
   budgetStoredContext,
-  callOnce,
+  callBatchWithSplit,
   callWithRetry,
   describeError,
   emptyOutcome,
   extraInstructionsOf,
   fetchAndBudgetContextFiles,
   isStop,
-  passContext,
+  keepInRunCache,
   readContextAtCommit,
-  rethrowStop,
   serviceFor,
-  splitInHalf,
   throwIfStopped,
-  tokenBudgetOf,
   type PassContext,
 } from './plumbing';
 import type { EngineDeps, EngineSettings, PassOutcome, StagedReview, StoredFinding } from './types';
@@ -32,7 +27,8 @@ const FINAL_ROUND_NOTE =
   'This is the final verification round — no further files will be provided. ' +
   'Decide "keep" using only the files you now have.';
 
-function withoutNumber(f: StoredFinding): Omit<ReviewFinding, 'id'> {
+/** A finding as the critic is shown it: no number, batch or false-alarm label. */
+function forCritic(f: StoredFinding): Omit<ReviewFinding, 'id'> {
   const { id: _id, batch: _batch, probablyFalseAlarm: _label, ...rest } = f;
   return rest;
 }
@@ -44,16 +40,7 @@ function withoutNumber(f: StoredFinding): Omit<ReviewFinding, 'id'> {
 export async function runCritic(
   review: StagedReview, workedOn: readonly number[], settings: EngineSettings, deps: EngineDeps,
 ): Promise<{ review: StagedReview; outcome: PassOutcome }> {
-  const { target } = review.snapshot;
-  const ctx = passContext(deps, { runTag: buildRunTag(target.project, target.repo, target.prId), detailedDiagnostics: settings.detailedDiagnostics });
-  const tokenBudget = tokenBudgetOf(settings, deps.model);
-  logPassOpening(ctx, { step: 'critic', model: deps.model, meter: ctx.meter, settings, tokenBudget });
-  try {
-    return await critic(review, workedOn, settings, deps, ctx, tokenBudget);
-  } catch (err) {
-    if (!isStop(err, deps.signal)) logAborted(ctx, err);
-    throw err;
-  }
+  return runPass(deps, settings, review.snapshot.target, 'critic', (ctx, tokenBudget) => critic(review, workedOn, settings, deps, ctx, tokenBudget));
 }
 
 async function critic(
@@ -69,6 +56,7 @@ async function critic(
 
   const read = await readContextAtCommit(
     deps.client, target.project, target.repo, reviewedCommit, [...new Set(order.flatMap((i) => snapshot.batches[i]?.contextPaths ?? []))],
+    deps.runCache,
   );
   if (!read.ok) {
     ctx.log('warn', 'The reviewed commit can no longer be read — critic not run', { path: read.path, error: read.error });
@@ -91,8 +79,6 @@ async function critic(
     const label = `critic batch ${batchIndex + 1}/${snapshot.batches.length}`;
     const where = { batch: batchIndex + 1, totalBatches: snapshot.batches.length };
     ctx.stage = `batch ${where.batch}/${where.totalBatches} critic`;
-    const tracker = createAttemptTracker<StoredFinding>();
-    let promptChars = 0;
     const diffsFor = (items: StoredFinding[]) => {
       const referenced = new Set(items.map((f) => f.file));
       return (batch?.files ?? []).filter((d) => referenced.has(d.path));
@@ -101,36 +87,15 @@ async function critic(
     let failed = false;
     try {
       throwIfStopped(deps.signal);
-      const parts = await withEasierRetry(
-        candidates,
-        async (items) => {
-          const attempt = tracker.start(items);
+      const parts = await callBatchWithSplit(ctx, {
+        items: candidates, pass: 'critic', ...where, label,
+        buildPrompt: (items) => {
           const diffs = diffsFor(items);
           const context = budgetStoredContext(batch?.contextPaths ?? [], cache, tokenBudget, diffs);
-          const prompt = service.buildCriticPrompt(pr, diffs, items.map(withoutNumber), extra, context.size > 0 ? context : undefined);
-          promptChars = prompt.length;
-          const raw = await callOnce(ctx, prompt);
-          ctx.log('info', formatCallLine({
-            runTag: ctx.runTag, pass: 'critic', ...where, attempt, itemCount: items.length, promptChars: prompt.length,
-            responseChars: raw.length, durationMs: tracker.elapsedMs(), status: 'ok',
-          }));
-          return raw;
+          return service.buildCriticPrompt(pr, diffs, items.map(forCritic), extra, context.size > 0 ? context : undefined);
         },
-        splitInHalf,
-        {
-          ...(ctx.sleep ? { sleep: ctx.sleep } : {}),
-          onAttemptFailed: (attempt, err, items) => {
-            if (isStop(err, deps.signal)) return;
-            handleAttemptFailure({
-              runTag: ctx.runTag, pass: 'critic', ...where, libraryAttempt: attempt, err, items, originalItems: candidates,
-              tracker, promptChars, split: splitInHalf,
-              logFailure: (a, e) => ctx.log('warn', `Model call failed — ${label} (attempt ${a})`, { error: e instanceof Error ? e.message : String(e) }),
-              logReview: ctx.log,
-            });
-          },
-        },
-      );
-      rethrowStop(parts.map((p) => p.error), deps.signal);
+        statusOf: () => 'ok',
+      });
 
       for (const part of parts) {
         if (part.error !== undefined) {
@@ -150,7 +115,7 @@ async function critic(
             });
             if (contents.size > 0) {
               const round2 = await callWithRetry(
-                ctx, service.buildCriticPrompt(pr, diffs, part.items.map(withoutNumber), extra ? `${FINAL_ROUND_NOTE}\n${extra}` : FINAL_ROUND_NOTE, contents),
+                ctx, service.buildCriticPrompt(pr, diffs, part.items.map(forCritic), extra ? `${FINAL_ROUND_NOTE}\n${extra}` : FINAL_ROUND_NOTE, contents),
                 `${label} round 2`, undefined,
                 { site: { pass: 'critic-r2', ...where, itemCount: part.items.length } },
               );
@@ -185,6 +150,7 @@ async function critic(
     deps.onProgress?.({ step: 'critic', batchesDone: n + 1, batchesTotal: order.length, review: { ...review, store } });
   }
 
+  keepInRunCache(deps.runCache, reviewedCommit, cache);
   if (!stopped) store = markStepRun(store, 'critic');
   ctx.log('info', `Critic ${stopped ? 'stopped' : 'finished'}`, {
     batchesDone: outcome.batchesDone, batchesTotal: order.length, removed: outcome.removed.length, labelled: outcome.labelled.length,

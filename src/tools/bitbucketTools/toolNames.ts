@@ -1,7 +1,6 @@
 // The names of the Bitbucket tools the extension offers to Copilot. Kept apart from the catalog so
 // that tool modules and the message text they build can name another tool without importing the
-// catalog, which imports them. The three pull request tools keep the names they had before the
-// catalog; the newer ones follow the Jira tools' style.
+// catalog, which imports them.
 
 export const GET_PULL_REQUEST_TOOL = 'bitbucket_getPullRequest';
 export const GET_PULL_REQUEST_DIFF_TOOL = 'bitbucket_getPullRequestDiff';

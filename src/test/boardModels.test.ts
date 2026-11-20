@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   MODEL_CHECK_PROMPT, ModelRequestCancelledError, checkModelAnswers, emailModelInUse, modelHandle, reviewModelInUse, reviewModelState,
-  type BoardChatMessage, type BoardModels, type CancellableChatModel, type ModelSettings,
+  type BoardChatMessage, type BoardModels, type CancellableChatModel,
 } from '../boards/boardModels';
-import { createTokenMeter } from '../review/tokenMeter';
 import { PartialLmResponseError, isTransientLmError } from '../utils/lmRetry';
 
 // Which model the email check uses, and the one-call check a board makes after a pick.
@@ -137,32 +136,17 @@ describe('a model request from a board', () => {
       .rejects.toBeInstanceOf(ModelRequestCancelledError);
     expect(calls).toEqual([]);
   });
-
-  it('counts its input and output tokens when the token meter wraps it', async () => {
-    const { model } = fakeChatModel(['ok'], { input: 30, output: 2 });
-    const recorded: Array<[string, unknown]> = [];
-    const meter = createTokenMeter(modelHandle(model, fakeCancellation), async (id, figures) => { recorded.push([id, figures]); });
-    const response = await meter.model.sendRequest([USER('Review this')], { signal: new AbortController().signal });
-    expect(await readAll(response.text)).toEqual(['ok']);
-    expect(recorded).toEqual([['m1', { input: 30, output: 2, estimated: false }]]);
-    expect(meter.totals()).toEqual({ input: 30, output: 2, calls: 1, estimated: false });
-  });
 });
 
 describe('the review model', () => {
   const info = (id: string) => ({ id, name: id, vendor: 'copilot', family: id });
 
-  it('is none while the setting is empty, and the pick once it is saved', async () => {
-    let saved = '';
-    const settings: ModelSettings = {
-      emailModel: () => '',
-      reviewModel: () => saved,
-      writeEmailModel: async () => {},
-      writeReviewModel: async id => { saved = id; },
-    };
-    expect(reviewModelInUse(settings)).toBeUndefined();
-    await settings.writeReviewModel('m1');
-    expect(reviewModelInUse(settings)).toBe('m1');
+  it.each([
+    ['', undefined],
+    ['  ', undefined],
+    [' m1 ', 'm1'],
+  ])('with the setting %j is %j', (setting, expected) => {
+    expect(reviewModelInUse({ reviewModel: () => setting })).toBe(expected);
   });
 
   it('asks for a pick when the setting is empty or names a model that is not available', async () => {

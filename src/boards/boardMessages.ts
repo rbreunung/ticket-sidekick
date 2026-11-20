@@ -1,11 +1,11 @@
 import { isSessionId } from '../sessions/sessionId';
 import type { SessionManager } from '../sessions/sessionManager';
-import { SessionError, type Session } from '../sessions/sessionTypes';
+import { SessionError } from '../sessions/sessionTypes';
 import { IMPORT_KIND, withReportPath, type ImportRecipe, type ReportKind } from './import/recipe';
 import { IMPORT_START_BOARD, type ImportStartScreen } from './import/startScreen';
 import { reviewCopyText } from './review/findings';
-import type { ReviewDerived, ReviewWorking } from './review/kind';
-import { REVIEW_KIND, type ReviewRecipe } from './review/recipe';
+import type { ReviewSession } from './review/kind';
+import { REVIEW_KIND } from './review/recipe';
 import { REVIEW_START_BOARD, type ReviewStartScreen } from './review/startScreen';
 
 // What a board page may ask of the extension. A page lives in an editor tab (a webview) and talks
@@ -132,7 +132,7 @@ async function copyFindings(manager: SessionManager, { kind, id }: BoardTarget, 
   if (typeof format !== 'string' || !COPY_FORMATS.has(format)) throw new BoardRequestError(400, 'Invalid format.');
   const numbers = body.numbers ?? [];
   if (!Array.isArray(numbers) || numbers.some(n => typeof n !== 'number' || !Number.isInteger(n))) throw new BoardRequestError(400, 'Invalid selection.');
-  const session = await manager.read(kind, id) as Session<ReviewRecipe, ReviewDerived, ReviewWorking> | undefined;
+  const session = await manager.read(kind, id) as ReviewSession | undefined;
   if (!session) throw new BoardRequestError(409, 'The board is still loading.');
   const built = reviewCopyText(session, format as 'teams' | 'markdown', numbers as number[]);
   if ('ok' in built) throw new BoardRequestError(400, built.reason);
