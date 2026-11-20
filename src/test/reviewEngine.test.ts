@@ -395,6 +395,30 @@ describe('extra passes', () => {
     expect(result.review.store.stepsRun).toEqual(['regular', 'security']);
   });
 
+  it('fails, with the first failure, and is not marked as run when every batch failed, so it can be picked again', async () => {
+    const { t, review } = await reviewedTwoFiles(() => { throw new Error('The model is overloaded'); });
+
+    const result = await runExtraPass(review, 'security', ONE_FILE_PER_BATCH, t.deps);
+
+    expect(result.outcome).toMatchObject({ status: 'failed', batchesTotal: 2, failedBatches: 2 });
+    expect(result.outcome.error).toMatch(/overloaded/);
+    expect(result.outcome.error).toBe(result.outcome.notes[0]);
+    expect(result.review.store.stepsRun).toEqual(['regular']);
+    expect(result.review.store.findings.map((f) => f.id)).toEqual([1, 2, 3]);
+  });
+
+  it('with one batch failed and one reviewed, finishes and is marked as run', async () => {
+    const { t, review } = await reviewedTwoFiles((c) => {
+      if (c.file === 2) throw new Error('The model is overloaded');
+      return reviewReply([{ file: 1, line: 6, title: 'Timing leak' }]);
+    });
+
+    const result = await runExtraPass(review, 'security', ONE_FILE_PER_BATCH, t.deps);
+
+    expect(result.outcome).toMatchObject({ status: 'finished', failedBatches: 1, added: [4] });
+    expect(result.review.store.stepsRun).toEqual(['regular', 'security']);
+  });
+
   it('does not run when the reviewed commit can no longer be read', async () => {
     const { t, review } = await reviewedTwoFiles(() => reviewReply([{ file: 1, line: 6, title: 'Timing leak' }]));
     vi.spyOn(t.client, 'getFileContent').mockRejectedValue(new Error('404 commit not found'));
@@ -457,6 +481,76 @@ describe('critic', () => {
     expect(t.calls[0].prompt).toContain('Swallowed error');
     expect(t.calls[0].prompt).not.toContain('Magic number');
     expect(result.review.store.findings.map((f) => f.id)).toEqual([1, 2, 3]);
+  });
+
+  it('a failed critic call leaves its findings in the review, unchecked, with a note saying so', async () => {
+    const { t, review } = await reviewedTwoFiles(() => { throw Object.assign(new Error('The model is overloaded'), { code: 'Unknown' }); });
+
+    const result = await runCritic(review, [], ONE_FILE_PER_BATCH, t.deps);
+
+    expect(result.review.store.findings.map((f) => f.id)).toEqual([1, 2, 3]);
+    expect(result.review.store.criticChecked).toEqual([]);
+    expect(result.outcome).toMatchObject({ failedBatches: 2, removed: [] });
+    expect(result.outcome.notes.length).toBeGreaterThan(0);
+    for (const note of result.outcome.notes) expect(note).toMatch(/^critic batch \d\/2: \d finding\(s\) could not be checked and stay unchecked \(.*overloaded.*\)$/);
+  });
+
+  it('an unreadable verdict removes nothing and leaves the findings unchecked', async () => {
+    const { t, review } = await reviewedTwoFiles(() => 'I had a look and most of these seem fine to me.');
+
+    const result = await runCritic(review, [], ONE_FILE_PER_BATCH, t.deps);
+
+    expect(result.review.store.findings.map((f) => f.id)).toEqual([1, 2, 3]);
+    expect(result.review.store.criticChecked).toEqual([]);
+    expect(result.outcome.removed).toEqual([]);
+    expect(result.outcome.notes).toEqual([
+      'critic batch 1/2: the verdict was unreadable, so 2 finding(s) stay unchecked',
+      'critic batch 2/2: the verdict was unreadable, so 1 finding(s) stay unchecked',
+    ]);
+  });
+
+  it('a critic asking for more files gets one more round with them, whose verdict counts', async () => {
+    const { t, review } = await reviewedTwoFiles((c) => (c.prompt.includes('This is the final verification round')
+      ? '{"keep":[1]}'
+      : '{"keep":[],"additionalFilesNeeded":["src/auth.ts"]}'));
+    t.client.fileContents.set('src/auth.ts', 'export const auth = 2;');
+    const checked: StagedReview = { ...review, store: { ...review.store, criticChecked: [1, 2] } };
+
+    const result = await runCritic(checked, [], ONE_FILE_PER_BATCH, t.deps);
+
+    expect(t.calls).toHaveLength(2);
+    expect(t.calls[1].prompt).toContain('This is the final verification round');
+    expect(t.calls[1].prompt).toContain('src/auth.ts');
+    expect(t.calls[1].prompt).toContain('export const auth = 2;');
+    expect(result.review.store.findings.map((f) => f.id)).toEqual([1, 2, 3]);
+    expect(result.outcome.removed).toEqual([]);
+  });
+
+  it('a garbled second round keeps the first verdict', async () => {
+    const { t, review } = await reviewedTwoFiles((c) => (c.prompt.includes('This is the final verification round')
+      ? 'Sorry, I cannot decide.'
+      : '{"keep":[],"additionalFilesNeeded":["src/auth.ts"]}'));
+    t.client.fileContents.set('src/auth.ts', 'export const auth = 2;');
+    const checked: StagedReview = { ...review, store: { ...review.store, criticChecked: [1, 2] } };
+
+    const result = await runCritic(checked, [], ONE_FILE_PER_BATCH, t.deps);
+
+    expect(t.calls).toHaveLength(2);
+    expect(result.outcome.removed).toEqual([3]);
+    expect(result.review.store.findings.map((f) => f.id)).toEqual([1, 2]);
+  });
+
+  it('a Stop during the critic ends it stopped and leaves it unmarked as run', async () => {
+    const { t, review } = await reviewedTwoFiles((c) => {
+      if (c.prompt.includes('Swallowed error')) { t.controller.abort(); throw new ModelRequestCancelledError(); }
+      return '{"keep":[1,2]}';
+    });
+
+    const result = await runCritic(review, [], ONE_FILE_PER_BATCH, t.deps);
+
+    expect(result.outcome).toMatchObject({ status: 'stopped', batchesDone: 1, batchesTotal: 2 });
+    expect(result.review.store.stepsRun).toEqual(['regular']);
+    expect(result.review.store.criticChecked).toEqual([1, 2]);
   });
 
   it('reports the review as it stands after each finished batch: the verdicts of the batches done', async () => {

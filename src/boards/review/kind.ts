@@ -20,7 +20,7 @@ import {
   reviewNotes, stepBlocker, stepName, withNotice,
 } from './runs';
 import {
-  FINDING_ACTIONS, applyPost, beginFindingRun, draftOutdated, findingRun, isFindingRun, planPost, postableNumbers, reduceFindings, selectedNumbers,
+  FINDING_ACTIONS, applyPost, beginFindingRun, draftOutdated, findingRun, isFindingRun, planPost, postableNumbers, reduceFindings, selectedNumbers, shortCommit,
   type FindingAction, type FindingRunRequest, type PostAction,
 } from './findings';
 
@@ -296,10 +296,6 @@ function contextOf(session: ReviewSession): FirstStepContext {
   };
 }
 
-function shortCommit(hash: string): string {
-  return hash.slice(0, 12);
-}
-
 function requirementsLabel(choice: RequirementsChoice): string {
   if (choice.kind === 'ticket') return `Jira ticket ${choice.key}`;
   if (choice.kind === 'goal') return 'the stated goal';
@@ -317,7 +313,8 @@ function statusLine(pass: PassRecord): string | undefined {
     case 'interrupted':
       return `${name} was cut off by a restart: ${pass.batchesDone} of ${pass.batchesTotal} batches finished, and ${kept}.${offered}`;
     case 'failed':
-      return `${name} failed${pass.error ? `: ${pass.error}` : '.'}${pass.step === 'regular' ? ' No batch gave a readable reply, so there are no findings. Run again tries once more.' : ''}`;
+      if (!extra) return `${name} failed${pass.error ? `: ${pass.error}` : '.'} No batch gave a readable reply, so there are no findings. Run again tries once more.`;
+      return `${name} failed${pass.error ? `: ${pass.error}${/[.!?]$/.test(pass.error) ? '' : '.'}` : '.'} No batch could be reviewed, so it added no findings.${offered}`;
     case 'nothing-to-review':
       return 'The pull request has nothing to review after the exclude patterns.';
     case 'commit-unreadable':
@@ -668,6 +665,25 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
   sourceKey: recipe => recipe.url,
   sourceLabel: recipe => recipe.url,
   initialWorking: recipe => ({ stage: 'first-step', firstStep: emptyFirstStep(recipe.prefill), passes: [], explanations: {}, drafts: {} }),
+
+  // The board asked for again with a ticket key or a question: laid over the first step as a new
+  // board would take them, the model picked kept. A review that is shown stays as it is; New review
+  // goes back to the first step.
+  reopen(session, recipe) {
+    const { working } = session;
+    const prefill = recipe.prefill;
+    if (!prefill || working.stage !== 'first-step') return working;
+    const step = { ...working.firstStep };
+    if (prefill.question) step.question = prefill.question;
+    if (prefill.ticketKey) {
+      step.ticketKey = prefill.ticketKey;
+      if (session.derived.data.jiraConfigured) step.source = 'ticket';
+    }
+    const before = working.firstStep;
+    if (step.question === before.question && step.ticketKey === before.ticketKey && step.source === before.source) return working;
+    delete step.notice;
+    return { ...working, firstStep: step };
+  },
 
   async read(recipe, deps): Promise<DerivedPart<ReviewDerived>> {
     const bitbucket = await deps.bitbucket();

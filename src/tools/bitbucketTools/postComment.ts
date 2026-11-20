@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { ReviewFinding } from '../../review/reviewSessionState';
 import { PrReviewService } from '../../services/PrReviewService';
 import { writeOnce } from '../jiraTools/writeGuard';
+import { MAX_PREVIEW_CHARS } from '../jiraToolConfirmation';
 import { fingerprint } from '../recentCallGuard';
 import { defineTool, ToolFailure } from '../toolDefinition';
 import { pullRequestProblem, pullRequestShape, withBitbucket, type BitbucketToolDeps } from './bitbucketAccess';
@@ -18,6 +19,16 @@ const postCommentShape = {
  */
 const FEED_COMMENT: ReviewFinding = { id: 1, file: '', severity: 'suggestion', title: 'Comment', description: '', recommendation: '' };
 
+/**
+ * Why a comment is not posted because its confirmation could not show it in full; the user must
+ * be able to read every character they approve.
+ */
+function tooLongToConfirm(comment: string): string | undefined {
+  return comment.length > MAX_PREVIEW_CHARS
+    ? `The comment is ${comment.length} characters long; at most ${MAX_PREVIEW_CHARS} can be shown in full for confirmation, so it was not posted. Shorten it or split it into several comments.`
+    : undefined;
+}
+
 export const postCommentTool = defineTool<BitbucketToolDeps, typeof postCommentShape>({
   name: POST_COMMENT_TOOL,
   title: 'Post a comment on a Bitbucket pull request',
@@ -27,6 +38,14 @@ export const postCommentTool = defineTool<BitbucketToolDeps, typeof postCommentS
     + 'repeated call does not post it twice.',
   inputSchema: postCommentShape,
   annotations: { destructiveHint: true },
+  // The input line of the confirmation is cut after a short length; this shows the whole comment,
+  // exactly as it is posted.
+  preview: async args => {
+    const comment = args.comment.trim();
+    const refused = tooLongToConfirm(comment);
+    if (refused) throw new Error(refused);
+    return [{ name: 'Comment to post', value: comment }];
+  },
   handler: async (args, deps) => {
     const project = args.project.trim();
     const repo = args.repo.trim();
@@ -34,6 +53,8 @@ export const postCommentTool = defineTool<BitbucketToolDeps, typeof postCommentS
     const problem = pullRequestProblem(project, repo);
     if (problem) return problem;
     if (!comment) return 'Comment text is required.';
+    const refused = tooLongToConfirm(comment);
+    if (refused) return refused;
     const label = `PR #${args.prId} (${project}/${repo})`;
 
     return writeOnce(

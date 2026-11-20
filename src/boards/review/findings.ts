@@ -214,6 +214,26 @@ export function postableNumbers(working: ReviewWorking): number[] {
   return selectedNumbers(working).filter(n => working.drafts[String(n)] && !working.drafts[String(n)].posted);
 }
 
+/** A commit as the board shows it. */
+export function shortCommit(hash: string): string {
+  return hash.slice(0, 12);
+}
+
+/**
+ * Said first in the Post plan, and so in the native confirmation, when the pull request moved on
+ * since the review: each inline comment carries only its file and line, which Bitbucket places on
+ * the current diff.
+ */
+function outOfDateLine(session: ReviewSession): { target: string; change: string } | undefined {
+  const reviewed = session.working.review!.snapshot.reviewedCommit;
+  const head = session.derived.data.pr.headCommit;
+  if (reviewed === head) return undefined;
+  return {
+    target: 'Out of date',
+    change: `This review read commit ${shortCommit(reviewed)}; the pull request is now at ${shortCommit(head)}. Inline comments are anchored to the lines that were reviewed, which may have moved since.`,
+  };
+}
+
 /** Post previews the drafts as they are and never rebuilds them. */
 export function planPost(session: ReviewSession): Planned {
   const { working, recipe } = session;
@@ -224,7 +244,10 @@ export function planPost(session: ReviewSession): Planned {
   const items = numbers.map(n => ({ number: n, text: working.drafts[String(n)].text }));
   const plan: WritePlan<PostPayload> = {
     title: `Post ${items.length} comment(s) on ${recipe.project}/${recipe.repo}#${recipe.prId}`,
-    lines: items.map(({ number, text }) => ({ target: `#${number}`, change: `Post ${where(findingOf(working, number)!)}: "${oneLine(text)}"` })),
+    lines: [
+      ...[outOfDateLine(session)].filter(line => line !== undefined),
+      ...items.map(({ number, text }) => ({ target: `#${number}`, change: `Post ${where(findingOf(working, number)!)}: "${oneLine(text)}"` })),
+    ],
     risky: true,
     payload: { items },
   };

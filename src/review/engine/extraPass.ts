@@ -52,6 +52,8 @@ async function extraPass(
   const contextPaths = batches.map((b) => [...b.contextPaths]);
   const findings: NewFinding[] = [];
   let stopped = false;
+  let reviewedFiles = 0;
+  let firstFailure: string | undefined;
   const tally = { raw: 0, droppedOutsidePr: 0, retracted: 0 };
   const withFindings = (store: StagedReview['store']): StagedReview => ({
     ...review,
@@ -76,9 +78,11 @@ async function extraPass(
       tally.raw += result.rawCount;
       tally.droppedOutsidePr += result.droppedOutsidePr;
       tally.retracted += result.retracted;
+      reviewedFiles += result.reviewedFiles;
       if (result.failures.length > 0) {
         outcome.failedBatches++;
         outcome.notes.push(...result.failures);
+        firstFailure ??= result.failures[0];
       }
     } catch (err) {
       if (!isStop(err, deps.signal)) throw err;
@@ -90,6 +94,16 @@ async function extraPass(
   }
 
   keepInRunCache(deps.runCache, reviewedCommit, cache);
+  // No batch could be reviewed: the pass failed, as the regular pass does then. It is not marked as
+  // run, so it can be picked again, and a run of several passes stops here.
+  if (!stopped && batches.length > 0 && reviewedFiles === 0) {
+    ctx.log('error', `${persona.displayName} pass failed — no file could be reviewed`, { batchesTotal: batches.length, firstFailure });
+    writeRunRecord(ctx, '(no findings: no file could be reviewed)');
+    return {
+      review: withFindings(review.store),
+      outcome: { ...outcome, status: 'failed', tokens: ctx.meter.totals(), ...(firstFailure ? { error: firstFailure } : {}) },
+    };
+  }
   const added = addFindings(review.store, findings);
   const next = withFindings(stopped ? added.store : markStepRun(added.store, personaId));
   ctx.log('info', `${persona.displayName} pass ${stopped ? 'stopped' : 'finished'}`, {

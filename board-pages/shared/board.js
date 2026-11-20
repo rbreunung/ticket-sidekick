@@ -137,13 +137,18 @@ export function startBoard({ root, render, loading }) {
     get lastApply() { return lastApply; },
     /** Draws the page again from the current state, e.g. after a form field that is not sent yet changed the form's shape. */
     repaint() { paint(); },
-    /** A non-writing action. */
-    async act(action) {
-      await run(async () => { state = await api('action', { revision: state.revision, action }); });
+    /**
+     * A non-writing action; true when the session took it. With `quiet`, as for saving a typed field
+     * when the developer leaves it, the page is not locked or drawn while it goes: the press that
+     * moved the focus away must land on the button it was meant for. A refusal still shows.
+     */
+    async act(action, options) {
+      if (options?.quiet) return quietly(async () => { state = await api('action', { revision: state.revision, action }); });
+      return run(async () => { state = await api('action', { revision: state.revision, action }); });
     },
     /** Starts a model run the board kind names from `request`; its progress arrives with the state. */
     async run(request) {
-      await run(async () => { state = await api('run', { revision: state.revision, request }); });
+      return run(async () => { state = await api('run', { revision: state.revision, request }); });
     },
     /** Stops a run: the pass without `what`. Sent while the board is locked, since the pass locks it. */
     async stop(what) {
@@ -207,20 +212,37 @@ export function startBoard({ root, render, loading }) {
     return busy || Boolean(state?.applying) || Boolean(passRun());
   }
 
+  /** Runs `work` with the board locked; true when it went through, false when it was refused or not started. */
   async function run(work) {
-    if (locked()) return;
+    if (locked()) return false;
     busy = true;
     message = undefined;
     paint();
+    const done = await attempt(work);
+    busy = false;
+    paint();
+    return done;
+  }
+
+  /** Runs `work` without locking the board or drawing it first; nothing goes while an Apply or a pass holds the board. */
+  async function quietly(work) {
+    if (state?.applying || passRun()) return false;
+    const done = await attempt(work);
+    if (done && !busy) message = undefined;
+    if (!busy) paint();
+    return done;
+  }
+
+  async function attempt(work) {
     try {
       await work();
+      return true;
     } catch (err) {
       message = err.message;
       // 409: the board changed meanwhile, so show what it is now.
-      if (err.status === 409 || err.status === 404) await load();
+      if (err.status === 409 || err.status === 404) await load().catch(() => undefined);
+      return false;
     }
-    busy = false;
-    paint();
   }
 
   function showPlan(plan) {
@@ -274,7 +296,33 @@ export function startBoard({ root, render, loading }) {
     return items;
   }
 
+  // While a mouse button is held the page is not drawn again: a click needs its press and release on
+  // the same element, and drawing replaces every element. The drawing waits for the release (and
+  // the click it gives), or a second at most, in case the release happened outside the tab.
+  let pointerHeld = false;
+  let paintWaiting;
+  document.addEventListener('pointerdown', () => { pointerHeld = true; }, true);
+  const released = () => {
+    if (!pointerHeld) return;
+    pointerHeld = false;
+    if (paintWaiting) setTimeout(paintNow, 0);
+  };
+  document.addEventListener('pointerup', released, true);
+  document.addEventListener('pointercancel', released, true);
+  window.addEventListener('blur', released);
+
   function paint() {
+    if (!pointerHeld) {
+      paintNow();
+      return;
+    }
+    if (paintWaiting) return;
+    paintWaiting = setTimeout(() => { pointerHeld = false; paintNow(); }, 1000);
+  }
+
+  function paintNow() {
+    if (paintWaiting) clearTimeout(paintWaiting);
+    paintWaiting = undefined;
     const focusId = document.activeElement?.id;
     const applying = state?.applying;
     const pass = passRun();

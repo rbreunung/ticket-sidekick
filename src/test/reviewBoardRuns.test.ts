@@ -345,6 +345,29 @@ describe('Run selected', () => {
     expect(resultsOf(state).passesRun).toEqual(['Regular', 'Security']);
   });
 
+  it('a persona pass whose every batch failed stops the run, stays unmarked and picked, and the banner says it can be picked again', async () => {
+    const m = manager();
+    let state = await reviewed(m, 2);
+    state = await act(m, state, { type: 'pick-pass', step: 'reliability', picked: true });
+    respond = call => {
+      if (call.kind === 'security') throw new Error('The model is overloaded');
+      return defaultRespond(call);
+    };
+    calls = [];
+    state = await runAndWait(m, state, { type: 'passes' });
+
+    expect(calls.map(c => c.kind).filter(k => k === 'reliability')).toEqual([]);
+    const results = resultsOf(state);
+    expect(results.statuses).toEqual([expect.stringMatching(/^The security pass failed: .*overloaded\. No batch could be reviewed, so it added no findings\. It is not marked as run, so you can pick it again\.$/)]);
+    expect(results.passesRun).toEqual(['Regular']);
+    expect(results.picker!.choices.find(c => c.step === 'security')).toMatchObject({ available: true, run: false, picked: true });
+    expect(results.picker!.choices.find(c => c.step === 'reliability')).toMatchObject({ picked: true });
+
+    respond = defaultRespond;
+    state = await runAndWait(m, state, { type: 'passes' });
+    expect(resultsOf(state).passesRun).toEqual(['Regular', 'Security', 'Reliability']);
+  });
+
   it('an extra pass whose reviewed commit can no longer be read does not run, stays unmarked, and the banner offers Run again', async () => {
     respond = call => (call.kind === 'regular' && call.file === 1
       ? reviewReply([findingLine(1, 2, 'Unchecked input in f1')], { additionalFilesNeeded: ['src/ctx.ts'], recommendedPersonas: ['security'] })

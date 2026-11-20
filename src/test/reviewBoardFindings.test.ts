@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { answerBoardRequest, asBoardRequest, type BoardHost } from '../boards/boardMessages';
 import { ModelRequestCancelledError, type BoardModelHandle } from '../boards/boardModels';
 import type { ReviewBoardDeps } from '../boards/review/deps';
-import { reviewKind, type FindingView, type ReviewView, type ReviewWorking } from '../boards/review/kind';
+import { reviewKind, type FindingView, type ReviewSession, type ReviewView, type ReviewWorking } from '../boards/review/kind';
 import { REVIEW_KIND } from '../boards/review/recipe';
 import { registerKind } from '../sessions/boardKind';
 import { SessionManager, type BoardState } from '../sessions/sessionManager';
@@ -76,6 +76,8 @@ let confirmAnswer: boolean;
 let confirmed: Array<{ title: string; lines: Array<{ target: string; change: string }> }>;
 let recorded: Array<{ modelId: string; figures: TokenFigures }>;
 let explainCount: number;
+/** The Bitbucket setup hint the board gets, when set; Bitbucket counts as configured otherwise. */
+let bitbucketHint: string | undefined;
 
 const defaultRespond = (call: Call): string => {
   if (call.kind === 'explain') return `Answer ${++explainCount} about f${call.file}`;
@@ -95,6 +97,8 @@ function handle(id: string): BoardModelHandle {
       const call = { kind: kindOf(prompt), file: fileOf(prompt), prompt };
       calls.push(call);
       const text = await respond(call);
+      // A call stopped while it waited for its answer ends as the host ends it: cancelled.
+      if (signal.aborted) throw new ModelRequestCancelledError();
       return { text: (async function* () { yield text; })() };
     },
   };
@@ -102,7 +106,7 @@ function handle(id: string): BoardModelHandle {
 
 function deps(): ReviewBoardDeps {
   return {
-    bitbucket: async () => ({ configured: true, client }),
+    bitbucket: async () => (bitbucketHint ? { configured: false, hint: bitbucketHint } : { configured: true, client }),
     jira: async () => undefined,
     models: { list: async () => [MODEL], handle: async id => (id === MODEL.id ? handle(id) : undefined) },
     modelSettings: { reviewModel: () => MODEL.id, writeReviewModel: async () => {} },
@@ -153,6 +157,17 @@ async function reviewed(m: SessionManager, files: number): Promise<BoardState> {
 }
 
 const resultsOf = (state: BoardState) => (state.view as ReviewView).results!;
+
+/** The session as stored, for a scenario that hands it to the board kind itself. */
+async function storedSession(id: string): Promise<ReviewSession> {
+  return (await new SessionStore(dir).load(id))!.session as ReviewSession;
+}
+
+/** The same session after Run again or New review replaced its review: another reviewed commit and no explanations or drafts. */
+function replacedReview(working: ReviewWorking): ReviewWorking {
+  const review = working.review!;
+  return { ...working, explanations: {}, drafts: {}, selected: [], review: { ...review, snapshot: { ...review.snapshot, reviewedCommit: 'fff000fff000fff000fff000fff000fff000fff0' } } };
+}
 const finding = (state: BoardState, n: number): FindingView => resultsOf(state).findings.find(f => f.number === n)!;
 const draftOf = (state: BoardState, n: number) => finding(state, n).draft!;
 
@@ -166,6 +181,7 @@ beforeEach(() => {
   confirmAnswer = true;
   confirmed = [];
   explainCount = 0;
+  bitbucketHint = undefined;
 });
 
 afterEach(() => {
@@ -202,6 +218,40 @@ describe('Explain', () => {
     respond = defaultRespond;
     state = await runAndWait(m, state, { type: 'explain', number: 1 });
     expect(finding(state, 1).explainError).toBeUndefined();
+  });
+
+  it('an answer that arrives after the review was replaced leaves the new review untouched, but its tokens are still counted', async () => {
+    const m = manager();
+    const state = await reviewed(m, 2);
+    const session = await storedSession(state.id);
+    for (const request of [{ type: 'explain' as const, number: 1 }, { type: 'rewrite' as const, number: 1, instruction: 'Shorter' }]) {
+      const asked = request.type === 'rewrite'
+        ? { ...session, working: { ...session.working, selected: [1], drafts: { 1: { text: 'Old comment.' } } } }
+        : session;
+      const finished = await reviewKind.run!(asked, request, deps(), async () => {}, new AbortController().signal);
+      const replaced = replacedReview(session.working);
+      const after = finished.update!(replaced);
+      expect(after.explanations, request.type).toEqual({});
+      expect(after.drafts, request.type).toEqual({});
+      expect(after.review, request.type).toEqual(replaced.review);
+      expect(after.callTokens?.calls, request.type).toBe((replaced.callTokens?.calls ?? 0) + 1);
+    }
+    expect(recorded.map(r => r.modelId)).toEqual([MODEL.id, MODEL.id]);
+  });
+
+  it('Stop during an explanation shows no failure line and no answer', async () => {
+    const m = manager();
+    let state = await reviewed(m, 1);
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    respond = async call => { await gate; return defaultRespond(call); };
+    state = await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'explain', number: 1 });
+    await m.stopRun(REVIEW_KIND, state.id, 'explain:1');
+    release();
+    state = await idle(m, state.id);
+    expect(finding(state, 1).explainError).toBeUndefined();
+    expect(finding(state, 1).explanation).toBeUndefined();
+    expect(state.notice).toBeUndefined();
   });
 
   it('is refused for a finding that is not in the review', async () => {
@@ -337,6 +387,17 @@ describe('Rewrite', () => {
     await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'rewrite', number: 1, instruction: '  ' })).rejects.toThrow('Type how the comment should change');
     expect(calls).toEqual([]);
   });
+
+  it('is refused with an instruction longer than 2000 characters, and no model call is made', async () => {
+    const m = manager();
+    let state = await reviewed(m, 1);
+    state = await act(m, state, { type: 'select', numbers: [1], selected: true });
+    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'rewrite', number: 1, instruction: 'x'.repeat(2001) }))
+      .rejects.toThrow('The instruction is longer than 2000 characters.');
+    expect(calls).toEqual([]);
+    state = await runAndWait(m, state, { type: 'rewrite', number: 1, instruction: 'x'.repeat(2000) });
+    expect(calls).toHaveLength(1);
+  });
 });
 
 describe('Post', () => {
@@ -404,6 +465,67 @@ describe('Post', () => {
     expect(draftOf(second.state, 5).posted).toBeDefined();
     expect(resultsOf(second.state).post.blocker).toBe('The selected comments are posted already.');
     await expect(act(m, second.state, { type: 'draft', number: 2, text: 'too late' })).rejects.toThrow('posted already');
+  });
+});
+
+describe('Post on a review that is out of date, unconfigured or changed', () => {
+  it('a review of an older commit says so in the plan, and so in the native confirmation; what is posted stays the same', async () => {
+    const m = manager();
+    let state = await reviewed(m, 2);
+    state = await act(m, state, { type: 'select', numbers: [1], selected: true });
+    const current = await m.preview(REVIEW_KIND, state.id, state.revision, { type: 'post' });
+    expect(current.lines.map(l => l.target)).toEqual(['#1']);
+
+    client.prOverride.fromCommitHash = 'fff000fff000fff000fff000fff000fff000fff0';
+    state = await idle(m, (await m.refresh(REVIEW_KIND, state.id)).id);
+    expect(resultsOf(state).outOfDate).toBeDefined();
+    const plan = await m.preview(REVIEW_KIND, state.id, state.revision, { type: 'post' });
+    expect(plan.lines[0]).toEqual({
+      target: 'Out of date',
+      change: `This review read commit ${HEAD.slice(0, 12)}; the pull request is now at fff000fff000. Inline comments are anchored to the lines that were reviewed, which may have moved since.`,
+    });
+    expect(plan.lines.slice(1)).toEqual(current.lines);
+    await m.apply(REVIEW_KIND, state.id, plan.planId);
+    expect(confirmed[0].lines[0].target).toBe('Out of date');
+    expect(client.addPrCommentCalls).toHaveLength(1);
+    expect(client.addPrCommentCalls[0].inline).toMatchObject({ filePath: 'src/f1.ts', line: 2 });
+  });
+
+  it('with Bitbucket no longer configured, marks each draft failed with the setup hint and posts nothing', async () => {
+    const m = manager();
+    let state = await reviewed(m, 2);
+    state = await act(m, state, { type: 'select', numbers: [1, 2], selected: true });
+    const plan = await m.preview(REVIEW_KIND, state.id, state.revision, { type: 'post' });
+    bitbucketHint = 'Bitbucket is not configured. Set the token first.';
+    const applied = await m.apply(REVIEW_KIND, state.id, plan.planId);
+    expect(applied.results).toEqual([
+      { target: '#1', outcome: 'failed', reason: 'Bitbucket is not configured. Set the token first.' },
+      { target: '#2', outcome: 'failed', reason: 'Bitbucket is not configured. Set the token first.' },
+    ]);
+    expect(draftOf(applied.state, 1).postError).toBe('Not posted: Bitbucket is not configured. Set the token first.');
+    expect(resultsOf(applied.state).post.count).toBe(2);
+    expect(client.addPrCommentCalls).toEqual([]);
+  });
+
+  it('refuses a previewed finding that is no longer in the review and posts the others', async () => {
+    const m = manager();
+    let state = await reviewed(m, 2);
+    state = await act(m, state, { type: 'select', numbers: [1, 2], selected: true });
+    const session = await storedSession(state.id);
+    const planned = reviewKind.plan!(session, { type: 'post' });
+    if (!planned.ok) throw new Error(planned.reason);
+    // The critic removed #1 after the preview.
+    const review = session.working.review!;
+    const changed: ReviewSession = {
+      ...session,
+      working: { ...session.working, review: { ...review, store: { ...review.store, findings: review.store.findings.filter(f => f.id !== 1) } } },
+    };
+    const applied = await reviewKind.apply!(changed, planned.plan, deps());
+    expect(applied.results).toEqual([
+      { target: '#1', outcome: 'refused', reason: 'no longer in the review' },
+      { target: '#2', outcome: 'done' },
+    ]);
+    expect(client.addPrCommentCalls.map(c => c.inline?.filePath)).toEqual(['src/f2.ts']);
   });
 });
 

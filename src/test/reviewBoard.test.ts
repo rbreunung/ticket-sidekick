@@ -259,6 +259,40 @@ describe('the requirements source', () => {
     expect(step).toMatchObject({ source: 'ticket', ticketKey: 'PROJ-99' });
   });
 
+  it('asked for again with a ticket key and a question while on the first step, shows them and keeps the model picked', async () => {
+    client.prOverride.title = 'Add export';
+    setting = '';
+    const m = manager();
+    let state = await open(m);
+    expect(viewOf(state).firstStep).toMatchObject({ source: 'none', question: '' });
+    state = await act(m, state, { type: 'pick-model', id: MODEL.id });
+    state = await act(m, state, { type: 'question', text: 'An older question' });
+
+    state = await open(m, { url: PR_URL, ticketKey: 'proj-99', question: 'Is the export safe?' });
+
+    const view = viewOf(state);
+    expect(view.firstStep).toMatchObject({ source: 'ticket', ticketKey: 'PROJ-99', question: 'Is the export safe?' });
+    expect(view.model.inUse).toMatchObject({ id: MODEL.id, picked: true });
+    // Asked for again with nothing new, the first step stays as it is.
+    const revision = state.revision;
+    state = await open(m, { url: PR_URL });
+    expect(state.revision).toBe(revision);
+    expect(viewOf(state).firstStep).toMatchObject({ ticketKey: 'PROJ-99', question: 'Is the export safe?' });
+  });
+
+  it('asked for again with a ticket key and a question once a review is shown, leaves the stored review as it is', async () => {
+    const m = manager();
+    let state = await runAndWait(m, await open(m, { url: PR_URL, question: 'First question' }), { type: 'start' });
+    const before = viewOf(state).results!;
+    const revision = state.revision;
+
+    state = await open(m, { url: PR_URL, ticketKey: 'PROJ-99', question: 'Another question' });
+
+    expect(state.revision).toBe(revision);
+    expect(viewOf(state).stage).toBe('review');
+    expect(viewOf(state).results).toEqual(before);
+  });
+
   it('preselects none when no key is named, and with Jira not configured the ticket is unavailable with its reason', async () => {
     client.prOverride.title = 'PROJ-12 Add export';
     jiraConfigured = false;

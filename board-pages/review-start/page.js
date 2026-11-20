@@ -54,6 +54,23 @@ function paint() {
   if (focusId) document.getElementById(focusId)?.focus();
 }
 
-// A token set in another window shows when this tab is looked at again.
-window.addEventListener('focus', () => { if (!busy) void run('view'); });
+/**
+ * A token set in another window shows when this tab is looked at again. The refresh goes in the
+ * background: the link field stays enabled with its focus and what was typed, and the page is drawn
+ * again only when the setup hint or the link changed.
+ */
+async function refreshQuietly() {
+  if (busy) return;
+  try {
+    const fresh = await api('view');
+    if (busy || !view) return;
+    if (fresh.bitbucketHint === view.bitbucketHint && fresh.url === view.url) return;
+    view = { ...view, url: fresh.url, bitbucketHint: fresh.bitbucketHint };
+    paint();
+  } catch {
+    // The extension may be restarting; the next look at the tab tries again.
+  }
+}
+
+window.addEventListener('focus', () => { void refreshQuietly(); });
 void run('view');

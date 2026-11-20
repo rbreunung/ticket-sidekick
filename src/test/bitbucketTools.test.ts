@@ -266,6 +266,55 @@ describe('bitbucket_read_findings', () => {
     expect(summary.text).toContain('1 labelled probably a false alarm');
   });
 
+  it('marks in the list which findings have a draft, which were posted (with the comment id) and whose post failed', async () => {
+    const id = await reviewOnBoard();
+    const working = await storedWorking(id);
+    const critical = numberOf(working, 'SQL built from input');
+    const warning = numberOf(working, 'Unchecked input');
+    const suggestion = numberOf(working, 'Name could be clearer');
+    await storeWork(id, w => ({
+      ...w,
+      drafts: {
+        [critical]: { text: 'Please use a bound parameter.', posted: { commentId: 100 } },
+        [warning]: { text: 'Validate the input.', postError: 'Bitbucket said 500' },
+        [suggestion]: { text: 'Maybe rename it.' },
+      },
+    }));
+
+    const list = await callTool(tool('bitbucket_read_findings'), { url: PR_URL, list: true }, toolDeps(manager()));
+
+    const lines = list.text.split('\n').filter(l => l.startsWith('#'));
+    expect(lines).toEqual([
+      `#${critical} critical src/f1.ts:4: SQL built from input (posted as comment 100)`,
+      `#${warning} warning src/f1.ts:2: Unchecked input (drafted, post failed)`,
+      `#${suggestion} suggestion src/f1.ts:6: Name could be clearer (drafted)`,
+    ]);
+  });
+
+  it('with one finding, gives its draft as plain text next to the explanation, and whether it was posted or its post failed', async () => {
+    const id = await reviewOnBoard();
+    const working = await storedWorking(id);
+    const critical = numberOf(working, 'SQL built from input');
+    const warning = numberOf(working, 'Unchecked input');
+    const suggestion = numberOf(working, 'Name could be clearer');
+    await storeWork(id, w => ({
+      ...w,
+      explanations: { [critical]: { text: 'The id reaches the query.' } },
+      drafts: {
+        [critical]: { text: 'Please use a **bound** parameter.', posted: { commentId: 100 } },
+        [warning]: { text: 'Validate the input.', postError: 'Bitbucket said 500' },
+      },
+    }));
+    const deps = toolDeps(manager());
+
+    const posted = await callTool(tool('bitbucket_read_findings'), { url: PR_URL, finding: critical }, deps);
+    expect(posted.text).toContain('Explanation:\nThe id reaches the query.\n\nDraft comment, posted as comment 100:\nPlease use a bound parameter.');
+    const failed = await callTool(tool('bitbucket_read_findings'), { url: PR_URL, finding: warning }, deps);
+    expect(failed.text).toContain('Draft comment, not posted: the last post failed (Bitbucket said 500):\nValidate the input.');
+    const none = await callTool(tool('bitbucket_read_findings'), { url: PR_URL, finding: suggestion }, deps);
+    expect(none.text).toContain('No draft comment: selecting the finding on the board drafts one.');
+  });
+
   it('names the verdict from the highest severity found', () => {
     expect(reviewVerdict([])).toBe('no findings');
     expect(reviewVerdict([{ severity: 'suggestion' }])).toBe('suggestions only');
@@ -339,6 +388,23 @@ describe('bitbucket_postComment', () => {
     const asked = await confirmationWithPreview(tool('bitbucket_postComment'), input, toolDeps());
     expect(asked.title).toBe('Post a comment on a Bitbucket pull request?');
     expect(asked.lines).toContainEqual({ name: 'comment', value: 'The export looks good to me.' });
+  });
+
+  it('shows a long comment in full in its confirmation, as it will be posted', async () => {
+    const long = `${'The export streams every row. '.repeat(66)}End of comment.`;
+    expect(long.length).toBeGreaterThan(1900);
+    const asked = await confirmationWithPreview(tool('bitbucket_postComment'), { ...input, comment: `  ${long}\n` }, toolDeps());
+    expect(asked.lines).toContainEqual({ name: 'Comment to post', value: long });
+    expect(asked.lines.some(line => line.value.endsWith('…'))).toBe(true);
+  });
+
+  it('refuses a comment too long to be shown in full in its confirmation, and posts nothing', async () => {
+    const tooLong = 'x'.repeat(60_001);
+    const asked = await confirmationWithPreview(tool('bitbucket_postComment'), { ...input, comment: tooLong }, toolDeps());
+    expect(asked.lines.some(line => line.value === tooLong)).toBe(false);
+    const result = await callTool(tool('bitbucket_postComment'), { ...input, comment: tooLong }, toolDeps());
+    expect(result.text).toBe('The comment is 60001 characters long; at most 60000 can be shown in full for confirmation, so it was not posted. Shorten it or split it into several comments.');
+    expect(client.addPrCommentCalls).toEqual([]);
   });
 
   it('posts the comment to the activity feed, and skips an identical call within a minute', async () => {

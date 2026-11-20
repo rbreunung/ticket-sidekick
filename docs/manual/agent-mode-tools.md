@@ -18,7 +18,7 @@ These run without asking. The review board tool only opens the board.
 | `bitbucket_getPullRequest` | `#bitbucketGetPullRequest` | Shows a pull request's title, description, author and target branch |
 | `bitbucket_getPullRequestDiff` | `#bitbucketGetPullRequestDiff` | Shows a pull request's diff |
 | `bitbucket_open_review` | `#bitbucketOpenReview` | Opens the review board of a pull request in an editor tab; the review runs there when you start it |
-| `bitbucket_read_findings` | `#bitbucketReadFindings` | Reads a stored review: the summary (findings by severity, passes run, verdict, requirements coverage), the findings list, or one finding with its code and explanation |
+| `bitbucket_read_findings` | `#bitbucketReadFindings` | Reads a stored review: the summary (findings by severity, passes run, verdict, requirements coverage), the findings list (each marked when its comment is drafted, posted or failed to post), or one finding with its code, explanation and draft comment |
 | `bitbucket_token_usage` | `#bitbucketTokenUsage` | Shows the tokens the reviews used, per month and model |
 
 ## Tools that change something
@@ -27,7 +27,7 @@ This shows a confirmation with the exact comment text before it runs. Nothing ha
 
 | Tool | Reference | What it does |
 | --- | --- | --- |
-| `bitbucket_postComment` | `#bitbucketPostComment` | Posts a comment on a pull request (a general comment, not tied to a line) |
+| `bitbucket_postComment` | `#bitbucketPostComment` | Posts a comment on a pull request (a general comment, not tied to a line). The confirmation shows the whole comment; a comment longer than 60,000 characters is refused |
 
 ## Good to know
 

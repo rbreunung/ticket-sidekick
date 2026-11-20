@@ -38,23 +38,39 @@ function fieldAction(id, text) {
   return draft ? { type: 'draft', number: Number(draft[1]), text } : FIELD_ACTIONS[id](text);
 }
 
-/** Sends a typed field to the session when the developer leaves it; no model call is made. */
+/**
+ * Sends a typed field to the session when the developer leaves it; no model call is made. The save
+ * is quiet, so the press that left the field still reaches its button. A refused save keeps the
+ * typed text in the field, and the board shows why.
+ */
 function fieldSaver(board, id) {
   return e => {
     const text = e.target.value;
-    saving = saving.then(() => board.act(fieldAction(id, text))).finally(() => { delete typed[id]; });
+    saving = saving.then(async () => {
+      const saved = await board.act(fieldAction(id, text), { quiet: true });
+      if (saved && typed[id] === text) delete typed[id];
+    });
   };
 }
 
-/** Sends every field still typed and not sent (`fields` maps a field id to its value in the session), then runs `then`. */
+/**
+ * Waits for a field save on its way, sends every field still typed and not sent (`fields` maps a
+ * field id to its value in the session), then runs `then`. Every button that sends an action or a
+ * run goes through here, so a press right after typing is neither lost nor sent before the text.
+ * When a typed field cannot be saved, `then` does not run and the board shows why.
+ */
 async function afterSaving(board, fields, then) {
   await saving;
   for (const [id, current] of Object.entries(fields)) {
-    if (typed[id] !== undefined && typed[id] !== current) await board.act(fieldAction(id, typed[id]));
+    if (typed[id] === undefined) continue;
+    if (typed[id] !== current && !(await board.act(fieldAction(id, typed[id])))) return;
     delete typed[id];
   }
   await then();
 }
+
+/** Waits for a field save on its way, then runs `then`. */
+const whenSaved = (board, then) => afterSaving(board, {}, then);
 
 function fieldInput(tag, id, value, board, off, extra = {}) {
   return h(tag, {
@@ -85,7 +101,7 @@ function modelRow(view, board, off) {
       : ' (from ticketSidekick.bitbucket.reviewModel)')) : h('p', {}, model.askReason ?? ''),
     model.options.length > 0 ? h('select', {
       id: 'model-pick', 'aria-label': 'Review model', disabled: off,
-      onChange: e => { if (e.target.value) void board.act({ type: 'pick-model', id: e.target.value }); },
+      onChange: e => { const id = e.target.value; if (id) void whenSaved(board, () => board.act({ type: 'pick-model', id })); },
     }, h('option', { value: '', selected: true }, model.inUse ? 'Pick another model…' : 'Choose a model…'),
     model.options.map(m => h('option', { value: m.id }, m.label))) : null,
     model.problem ? h('p', { class: 'banner' }, model.problem) : null);
@@ -97,7 +113,7 @@ function sourceRow(step, board, off) {
     step.sources.map(s => h('label', { class: 'source' },
       h('input', {
         type: 'radio', name: 'source', id: `source-${s.id}`, value: s.id, checked: s.id === step.source, disabled: off || !s.available,
-        onChange: () => board.act({ type: 'source', source: s.id }),
+        onChange: () => whenSaved(board, () => board.act({ type: 'source', source: s.id })),
       }), ` ${s.label}`,
       s.reason ? h('span', { class: 'muted', id: `source-${s.id}-reason` }, ` ${s.reason}`) : null)));
 }
@@ -110,7 +126,7 @@ function ticketRow(step, board, off) {
     step.titleKey ? h('p', { id: 'title-key', class: 'muted' }, `${step.ticketKey} was not found. The pull request title names ${step.titleKey}. `,
       h('vscode-button', {
         id: 'use-title-key', secondary: true, disabled: off,
-        onClick: async () => { delete typed['ticket-key']; await saving; await board.act({ type: 'ticket-key', key: step.titleKey }); },
+        onClick: () => { delete typed['ticket-key']; return whenSaved(board, () => board.act({ type: 'ticket-key', key: step.titleKey })); },
       }, `Use ${step.titleKey}`)) : null,
   ];
 }
@@ -151,7 +167,7 @@ function firstStep(view, board, off) {
         id: 'start', disabled: off || rewording || !step.canStart,
         onClick: () => afterSaving(board, fields, () => board.run({ type: 'start' })),
       }, 'Start'),
-      step.storedReview ? h('vscode-button', { id: 'back-to-review', secondary: true, disabled: off, onClick: () => board.act({ type: 'back-to-review' }) }, 'Back to the review') : null,
+      step.storedReview ? h('vscode-button', { id: 'back-to-review', secondary: true, disabled: off, onClick: () => whenSaved(board, () => board.act({ type: 'back-to-review' })) }, 'Back to the review') : null,
       rewording ? h('span', { class: 'muted', role: 'status' }, 'Start waits until the rewording ends.')
         : step.startBlocker ? h('span', { class: 'muted' }, step.startBlocker) : null));
 }
@@ -167,14 +183,14 @@ function passPicker(picker, board, off) {
       picker.choices.map(c => h('label', { class: 'pass' },
         h('input', {
           type: 'checkbox', id: `pass-${c.step}`, checked: c.picked, disabled: off || !c.available,
-          onChange: e => board.act({ type: 'pick-pass', step: c.step, picked: Boolean(e.target.checked) }),
+          onChange: e => { const picked = Boolean(e.target.checked); return whenSaved(board, () => board.act({ type: 'pick-pass', step: c.step, picked })); },
         }), ` ${c.label}`,
         c.suggested ? h('span', { class: 'muted' }, ' (suggested)') : null,
         c.run ? h('span', { class: 'muted', id: `pass-${c.step}-run` }, ' (run)') : null,
         c.reason && !c.run ? h('span', { class: 'muted' }, ` ${c.reason}`) : null))),
     h('div', { class: 'bar' },
-      h('vscode-button', { id: 'run-selected', disabled: off || !picker.canRun, onClick: () => board.run({ type: 'passes' }) }, 'Run selected'),
-      h('vscode-button', { id: 'keep-as-is', secondary: true, disabled: off, onClick: () => board.act({ type: 'keep-as-is' }) }, 'Keep as is'),
+      h('vscode-button', { id: 'run-selected', disabled: off || !picker.canRun, onClick: () => whenSaved(board, () => board.run({ type: 'passes' })) }, 'Run selected'),
+      h('vscode-button', { id: 'keep-as-is', secondary: true, disabled: off, onClick: () => whenSaved(board, () => board.act({ type: 'keep-as-is' })) }, 'Keep as is'),
       picker.runBlocker ? h('span', { class: 'muted' }, picker.runBlocker) : null));
 }
 
@@ -223,7 +239,7 @@ function draftBlock(f, r, board, off) {
     h('label', { class: 'field' }, `Comment for #${n}`, fieldInput('textarea', `draft-${n}`, d.text, board, locked, { rows: 8, 'aria-label': `Comment for #${n}` })),
     d.outdated && !d.posted ? h('p', { class: 'muted', id: `outdated-${n}` },
       'The explanation changed since this draft was made. Regenerate rebuilds it from the finding and its explanation; your edits are lost. ',
-      h('vscode-button', { id: `regenerate-${n}`, secondary: true, disabled: locked, onClick: () => board.act({ type: 'regenerate', number: n }) }, 'Regenerate')) : null,
+      h('vscode-button', { id: `regenerate-${n}`, secondary: true, disabled: locked, onClick: () => whenSaved(board, () => board.act({ type: 'regenerate', number: n })) }, 'Regenerate')) : null,
     d.posted ? h('p', { id: `posted-${n}`, role: 'status' }, d.posted) : h('div', { class: 'bar' },
       h('input', {
         type: 'text', id: instructionId, size: 40, placeholder: 'How should the comment change?', 'aria-label': `Rewrite instruction for #${n}`,
@@ -233,7 +249,7 @@ function draftBlock(f, r, board, off) {
         id: `rewrite-${n}`, secondary: true, disabled: locked,
         onClick: () => afterSaving(board, draftFields(r), () => board.run({ type: 'rewrite', number: n, instruction: typed[instructionId] ?? '' })),
       }, rewriting ? 'Rewriting…' : 'Rewrite'),
-      d.canUndo ? h('vscode-button', { id: `undo-${n}`, secondary: true, disabled: locked, onClick: () => board.act({ type: 'undo-rewrite', number: n }) }, 'Undo') : null),
+      d.canUndo ? h('vscode-button', { id: `undo-${n}`, secondary: true, disabled: locked, onClick: () => whenSaved(board, () => board.act({ type: 'undo-rewrite', number: n })) }, 'Undo') : null),
     d.rewriteError ? h('p', { id: `rewrite-error-${n}`, class: 'banner error', role: 'alert' }, d.rewriteError) : null,
     d.postError ? h('p', { id: `post-error-${n}`, class: 'banner error', role: 'alert' }, d.postError) : null);
 }
@@ -294,8 +310,8 @@ function findingsBlock(r, board, off) {
           onClick: () => afterSaving(board, draftFields(r), () => board.preview({ type: 'post' })),
         }, `Post ${post.count} comment(s)`),
         post.blocker ? h('span', { class: 'muted' }, post.blocker) : null,
-        h('vscode-button', { id: 'copy-teams', secondary: true, onClick: () => copy(board, r, 'teams') }, `Copy ${copyScope} for Teams`),
-        h('vscode-button', { id: 'copy-markdown', secondary: true, onClick: () => copy(board, r, 'markdown') }, `Copy ${copyScope} as Markdown`)),
+        h('vscode-button', { id: 'copy-teams', secondary: true, onClick: () => afterSaving(board, draftFields(r), () => copy(board, r, 'teams')) }, `Copy ${copyScope} for Teams`),
+        h('vscode-button', { id: 'copy-markdown', secondary: true, onClick: () => afterSaving(board, draftFields(r), () => copy(board, r, 'markdown')) }, `Copy ${copyScope} as Markdown`)),
       copyLine ? h('p', { id: 'copy-result', class: copyLine.error ? 'banner error' : 'muted', role: copyLine.error ? 'alert' : null }, copyLine.text) : null,
     ],
   ];
@@ -322,8 +338,8 @@ function results(view, board, off) {
       findingsBlock(r, board, off),
     ] : null,
     h('div', { class: 'bar' },
-      r.canRunAgain ? h('vscode-button', { id: 'run-again', disabled: off, onClick: () => board.run({ type: 'again' }) }, 'Run again') : null,
-      h('vscode-button', { id: 'new-review', secondary: true, disabled: off, onClick: () => board.act({ type: 'new-review' }) }, 'New review')));
+      r.canRunAgain ? h('vscode-button', { id: 'run-again', disabled: off, onClick: () => whenSaved(board, () => board.run({ type: 'again' })) }, 'Run again') : null,
+      h('vscode-button', { id: 'new-review', secondary: true, disabled: off, onClick: () => whenSaved(board, () => board.act({ type: 'new-review' })) }, 'New review')));
 }
 
 startBoard({

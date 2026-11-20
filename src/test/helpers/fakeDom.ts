@@ -103,8 +103,16 @@ export class FakeElement extends FakeNode {
 export class FakeDocument {
   activeElement: FakeElement | null = null;
   readonly body: FakeElement;
+  private listeners = new Map<string, Array<(event: { type: string }) => void>>();
   constructor() {
     this.body = new FakeElement('body', this);
+  }
+  addEventListener(type: string, listener: (event: { type: string }) => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+  /** Sends a document-level event, such as the `pointerdown` and `pointerup` around a mouse press. */
+  dispatch(type: string): void {
+    for (const listener of this.listeners.get(type) ?? []) listener({ type });
   }
   createElement(tag: string): FakeElement {
     return new FakeElement(tag.toLowerCase(), this);
@@ -118,12 +126,16 @@ export class FakeDocument {
 }
 
 export class FakeWindow {
-  private listeners: Array<(event: { data: unknown }) => void> = [];
-  addEventListener(type: string, listener: (event: { data: unknown }) => void): void {
-    if (type === 'message') this.listeners.push(listener);
+  private listeners = new Map<string, Array<(event: { type: string; data?: unknown }) => void>>();
+  addEventListener(type: string, listener: (event: { type: string; data?: unknown }) => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
   post(data: unknown): void {
-    for (const listener of this.listeners) listener({ data });
+    for (const listener of this.listeners.get('message') ?? []) listener({ type: 'message', data });
+  }
+  /** Sends a window event other than a message, such as `focus` when the tab is looked at again. */
+  dispatch(type: string): void {
+    for (const listener of this.listeners.get(type) ?? []) listener({ type });
   }
 }
 

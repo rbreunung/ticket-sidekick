@@ -691,6 +691,10 @@ interface RunDeps {
   /** A read that waits for the test, to hold a check in the queue. */
   readGate?: Promise<void>;
   afterProgress?: () => Promise<void>;
+  /** Thrown by the pass after its first step. */
+  runFails?: Error;
+  /** Thrown by the pass's final update. */
+  updateFails?: Error;
 }
 
 const runKind: BoardKind<Recipe, Derived, RunWorking, Action, RunWorking, RunDeps> = {
@@ -737,8 +741,14 @@ const runKind: BoardKind<Recipe, Derived, RunWorking, Action, RunWorking, RunDep
       if (signal.aborted) return { update: w => ({ ...w, pass: 'stopped' }) };
       await progress({ update: w => ({ ...w, steps: [...w.steps, step] }), done: step, total: request.steps });
       await deps.afterProgress?.();
+      if (deps.runFails) throw deps.runFails;
     }
-    return { update: w => ({ ...w, pass: 'done' }) };
+    return {
+      update: w => {
+        if (deps.updateFails) throw deps.updateFails;
+        return { ...w, pass: 'done' };
+      },
+    };
   },
   interrupted: w => (w.pass === 'running' ? { ...w, pass: 'interrupted' } : w),
   view: session => session.working,
@@ -819,6 +829,58 @@ describe('a model run on a board', () => {
     const after = await idle(m, before.id);
     expect(working(after)).toMatchObject({ pass: 'stopped', steps: [1] });
     expect(after.revision).toBeGreaterThan(started.revision);
+  });
+
+  it('a pass that throws ends with no run going, its finished steps kept as interrupted, and a notice that it stopped with an error', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    deps.runFails = new Error('The model exploded');
+    await m.startRun('runs', before.id, before.revision, { type: 'pass', steps: 3 });
+    deps.gates.open(3);
+    const after = await idle(m, before.id);
+    expect(after.running).toBeUndefined();
+    expect(working(after)).toMatchObject({ pass: 'interrupted', steps: [1] });
+    expect(after.notice).toBe('The review pass stopped with an error: The model exploded');
+    const stored = await new SessionStore(dir).load(before.id);
+    expect((stored!.session.working as RunWorking).pass).toBe('interrupted');
+    // The board takes a new run afterwards.
+    deps.runFails = undefined;
+    await m.startRun('runs', before.id, after.revision, { type: 'pass', steps: 1 });
+    deps.gates.open(1);
+    expect(working(await idle(m, before.id)).pass).toBe('done');
+  });
+
+  it('a pass whose final update throws ends the same way: no run going, interrupted, and the error in the notice', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    deps.updateFails = new Error('Unreadable result');
+    await m.startRun('runs', before.id, before.revision, { type: 'pass', steps: 2 });
+    deps.gates.open(2);
+    const after = await idle(m, before.id);
+    expect(after.running).toBeUndefined();
+    expect(working(after)).toMatchObject({ pass: 'interrupted', steps: [1, 2] });
+    expect(after.notice).toBe('The review pass stopped with an error: Unreadable result');
+  });
+
+  it('Stop with nothing running is refused with 409', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    await expect(m.stopRun('runs', before.id)).rejects.toMatchObject({ status: 409, message: 'Nothing is running on this board.' });
+    await expect(m.stopRun('runs', before.id, 'explain:PROJ-1')).rejects.toMatchObject({ status: 409, message: 'Nothing is running on this board.' });
+  });
+
+  it('refuses a second call of the same name while the first runs, and lets one of another name through', async () => {
+    const m = runManager();
+    const before = await openRuns(m);
+    const started = await m.startRun('runs', before.id, before.revision, { type: 'explain', key: 'PROJ-1' });
+    await expect(m.startRun('runs', before.id, started.revision, { type: 'explain', key: 'PROJ-1' }))
+      .rejects.toMatchObject({ status: 409, message: 'Not now: the explanation of PROJ-1 is already running.' });
+    const both = await m.startRun('runs', before.id, started.revision, { type: 'explain', key: 'PROJ-2' });
+    expect(both.running?.map(r => r.what)).toEqual(['explain:PROJ-1', 'explain:PROJ-2']);
+    deps.gates.open(2);
+    const after = await idle(m, before.id);
+    expect(working(after).explained).toEqual({ 'PROJ-1': 'About PROJ-1', 'PROJ-2': 'About PROJ-2' });
+    expect(deps.runs).toBe(2);
   });
 
   it('refuses an action, a preview, an Apply and another run while a pass runs, saying why', async () => {

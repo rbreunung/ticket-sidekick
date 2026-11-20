@@ -19,9 +19,12 @@ let waiting: Array<() => void> = [];
 /** What the extension answers the page's Copy and Post preview. */
 let copyAnswer: unknown = { outcome: 'copied', count: 2 };
 let previewAnswer: unknown = { planId: 'p'.repeat(48), title: 'Post 1 comment(s)', lines: [{ target: '#2', change: 'Post inline' }], risky: true };
+/** A refusal the extension gives an action, when set; `undefined` lets the action through. */
+let refuseAction: ((action: Record<string, unknown>) => { status: number; message: string } | undefined) | undefined;
 
 afterEach(() => {
   stopped = true;
+  refuseAction = undefined;
   removeFakePage();
 });
 
@@ -118,7 +121,12 @@ async function loadBoard(initial: BoardState): Promise<void> {
       }
       return state;
     }
-    if (op === 'action' || op === 'run') return state;
+    if (op === 'action') {
+      const refusal = refuseAction?.(body.action as Record<string, unknown>);
+      if (refusal) throw refusal;
+      return state;
+    }
+    if (op === 'run') return state;
     if (op === 'copy') return copyAnswer;
     if (op === 'preview') return previewAnswer;
     throw { status: 404, message: 'Unknown request.' };
@@ -493,6 +501,75 @@ describe('the review board page: findings, drafts, Post and Copy', () => {
   });
 });
 
+describe('the review board page: a field left by pressing a button', () => {
+  const stage = 'review' as const;
+  type F = ReviewResultsView['findings'][number];
+  const withDraft = (d: Partial<NonNullable<F['draft']>> = {}) => results({
+    findings: [{ number: 2, severity: 'critical', location: 'src/a.ts:4', title: 'SQL built from input', markers: [], selected: true, draft: { text: 'Draft of #2', outdated: true, canUndo: true, ...d } }],
+    selectedCount: 1, post: { count: 1 }, copy: { scope: 'selected', count: 1 },
+  });
+
+  it('a mouse press on Start after typing the question saves the question first and starts once; the button is not replaced under the pointer', async () => {
+    await loadBoard(boardState(view()));
+    const start = must('start');
+    const question = must('question');
+    question.value = 'does this handle retries?';
+    question.dispatch('input');
+    // The press: the pointer goes down on Start, which takes the focus from the question.
+    page.document.dispatch('pointerdown');
+    question.dispatch('change');
+    await settle();
+    expect(byId('start')).toBe(start);
+    expect(start.disabled).toBeFalsy();
+    page.document.dispatch('pointerup');
+    start.dispatch('click');
+    await settle();
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'question', text: 'does this handle retries?' } }]);
+    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'start' } }]);
+  });
+
+  it('a key press on Undo, Regenerate, Keep as is or New review right after leaving a draft box waits for the draft to be saved, then runs once', async () => {
+    for (const id of ['undo-2', 'regenerate-2', 'keep-as-is', 'new-review']) {
+      await loadBoard(boardState(view({ stage, results: withDraft() })));
+      const box = must('draft-2');
+      box.value = 'My comment';
+      box.dispatch('input');
+      box.dispatch('change');
+      must(id).dispatch('click');
+      await settle();
+      const expected = { 'undo-2': { type: 'undo-rewrite', number: 2 }, 'regenerate-2': { type: 'regenerate', number: 2 }, 'keep-as-is': { type: 'keep-as-is' }, 'new-review': { type: 'new-review' } }[id];
+      expect(posted('action'), id).toEqual([
+        { revision: 1, action: { type: 'draft', number: 2, text: 'My comment' } },
+        { revision: 1, action: expected },
+      ]);
+      stopped = true;
+      removeFakePage();
+    }
+  });
+
+  it('Run again right after leaving a draft box saves the draft first, then starts once', async () => {
+    await loadBoard(boardState(view({ stage, results: withDraft() })));
+    const box = must('draft-2');
+    box.value = 'My comment';
+    box.dispatch('input');
+    box.dispatch('change');
+    must('run-again').dispatch('click');
+    await settle();
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'draft', number: 2, text: 'My comment' } }]);
+    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'again' } }]);
+  });
+
+  it('a refused draft save keeps the typed text in the box and says why', async () => {
+    refuseAction = action => action.type === 'draft' ? { status: 400, message: 'The comment is longer than Bitbucket accepts.' } : undefined;
+    await loadBoard(boardState(view({ stage, results: withDraft({ outdated: false, canUndo: false }) })));
+    await type(must('draft-2'), 'A very long comment');
+    // Drawn again from the session, the box still holds what was typed.
+    await push({});
+    expect(must('draft-2').value).toBe('A very long comment');
+    expect(page.root.textContent).toContain('The comment is longer than Bitbucket accepts.');
+  });
+});
+
 describe('the review start screen page', () => {
   it('sends the typed link on Open and shows why a link was refused', async () => {
     let answer: Record<string, unknown> = { url: '' };
@@ -506,6 +583,50 @@ describe('the review start screen page', () => {
     await click(must('open'));
     expect(page.posted.map(m => [m.op, m.body])).toEqual([['view', {}], ['open', { url: 'https://example.com/x' }]]);
     expect(must('problem').textContent).toBe('That is not the link of a Bitbucket pull request.');
+  });
+
+  it('looking at the tab again refreshes in the background: the link field stays enabled and focused, with what was typed', async () => {
+    let answer: Promise<Record<string, unknown>> = Promise.resolve({ url: '' });
+    page = installFakePage({ kind: 'review-start', session: '', title: 'Review a pull request' }, async () => answer);
+    vi.resetModules();
+    await import('../../board-pages/review-start/page.js' as string);
+    await settle();
+    const input = must('pr-url');
+    input.focus();
+    input.value = 'https://bitbucket.example.com/projects/PROJ/repos/app/pull-';
+    input.dispatch('input');
+
+    let answerView: (v: Record<string, unknown>) => void = () => undefined;
+    answer = new Promise(resolve => { answerView = resolve; });
+    page.window.dispatch('focus');
+    await settle();
+    expect(page.posted.map(m => m.op)).toEqual(['view', 'view']);
+    expect(byId('pr-url')).toBe(input);
+    expect(input.disabled).toBeFalsy();
+
+    answerView({ url: '' });
+    await settle();
+    expect(byId('pr-url')).toBe(input);
+    expect(input.disabled).toBeFalsy();
+    expect(page.document.activeElement?.id).toBe('pr-url');
+    expect(input.value).toBe('https://bitbucket.example.com/projects/PROJ/repos/app/pull-');
+  });
+
+  it('a refresh that finds Bitbucket set up now drops the hint and offers Open, keeping the typed link', async () => {
+    let answer: Record<string, unknown> = { url: '', bitbucketHint: 'Bitbucket is not configured.' };
+    page = installFakePage({ kind: 'review-start', session: '', title: 'Review a pull request' }, async () => answer);
+    vi.resetModules();
+    await import('../../board-pages/review-start/page.js' as string);
+    await settle();
+    await type(must('pr-url'), 'https://bitbucket.example.com/x', false);
+    must('pr-url').focus();
+    answer = { url: '' };
+    page.window.dispatch('focus');
+    await settle();
+    expect(page.root.textContent).not.toContain('Bitbucket is not configured.');
+    expect(must('open').disabled).toBeFalsy();
+    expect(must('pr-url').value).toBe('https://bitbucket.example.com/x');
+    expect(page.document.activeElement?.id).toBe('pr-url');
   });
 
   it('shows the Bitbucket setup hint and does not offer Open', async () => {
