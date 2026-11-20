@@ -642,3 +642,183 @@ describe('regular pass: the rules every review pass keeps', () => {
     expect(t.calls.find((c) => c.kind === 'requirements')!.prompt).toContain('Ship the CSV export by Friday.');
   });
 });
+
+describe('diagnostic timeline in the output channel', () => {
+  type Line = { level: string; message: string; details?: Record<string, unknown> };
+  function capture(t: ReturnType<typeof setup>): Line[] {
+    const lines: Line[] = [];
+    t.deps.onDiag = (level, message, details) => { lines.push({ level, message, ...(details ? { details } : {}) }); };
+    t.deps.model = { ...t.deps.model, vendor: 'copilot', family: 'gpt-test', version: '1' };
+    return lines;
+  }
+  const callLines = (lines: Line[]) => lines.filter((l) => / attempt \d+ — /.test(l.message));
+
+  it('opens with the configuration and the model in use, then logs one call line per model call naming its pass and batch', async () => {
+    const t = setup({
+      files: 2,
+      respond: (c) => {
+        if (c.kind === 'critic') return '{"keep":[1]}';
+        if (c.kind === 'regular' && c.file === 1) return reviewReply([{ file: 1, line: 3, title: 'Missing null check' }], { additionalFilesNeeded: ['src/ctx.ts'] });
+        if (c.kind === 'regular-whole-files') return reviewReply([], { additionalFilesNeeded: [] });
+        return reviewReply([]);
+      },
+    });
+    t.client.fileContents.set('src/ctx.ts', 'export const ctx = 1;');
+    const lines = capture(t);
+    const settings: EngineSettings = { ...ONE_FILE_PER_BATCH, contextLines: 5 };
+
+    const first = await runRegularPass({ target: TARGET, requirements: none, settings }, t.deps);
+    const withSecurity = await runExtraPass(first.review!, 'security', settings, t.deps);
+    await runCritic(withSecurity.review, [], settings, t.deps);
+
+    expect(lines[0].message).toBe('pr=PROJ/app#42 model=copilot/gpt-test tokenBudget=2000 (resolved=2000 ratio=1) passes=regular critic=false contextLines=5');
+    expect(lines.find((l) => l.message === 'pr=PROJ/app#42 model=copilot/gpt-test tokenBudget=2000 (resolved=2000 ratio=1) passes=critic critic=true contextLines=5')).toBeDefined();
+    const model = lines.find((l) => l.message === 'model in use')!;
+    expect(model.details).toMatchObject({ vendor: 'copilot', family: 'gpt-test', id: 'test-model', maxInputTokens: 100_000, metering: 'on', frozen: false });
+    const calls = callLines(lines).map((l) => l.message.replace(/ — .*/, ''));
+    expect(calls).toEqual([
+      '[pr=PROJ/app#42] pass1 batch 1/2 attempt 1',
+      '[pr=PROJ/app#42] pass2 batch 1/2 attempt 1',
+      '[pr=PROJ/app#42] pass1 batch 2/2 attempt 1',
+      '[pr=PROJ/app#42] security batch 1/2 attempt 1',
+      '[pr=PROJ/app#42] security batch 2/2 attempt 1',
+      '[pr=PROJ/app#42] critic batch 1/2 attempt 1',
+    ]);
+    expect(calls).toHaveLength(t.calls.length);
+    expect(callLines(lines)[0].message).toMatch(/1 item\(s\), prompt \d+c \(~\d+ tok\), response \d+c, \d+ms, ok$/);
+  });
+
+  it('after a transient failure logs the failed call and the identical retry, and after one that is not transient says it does not retry', async () => {
+    const t = setup({
+      files: 1,
+      respond: (_c, index) => {
+        if (index === 0) throw Object.assign(new Error('provider hiccup'), { code: 'Unknown' });
+        return reviewReply([]);
+      },
+    });
+    const lines = capture(t);
+    await regular(t);
+    expect(lines.map((l) => l.message)).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^\[pr=PROJ\/app#42\] pass1 attempt 1 — .*, error \(Unknown\)$/),
+      '[pr=PROJ/app#42] pass1 batch 1/1 — identical retry in flight (attempt 2)',
+      expect.stringMatching(/^\[pr=PROJ\/app#42\] pass1 attempt 2 — .*, ok$/),
+    ]));
+
+    const refused = setup({ files: 1, respond: () => { throw Object.assign(new Error('not allowed'), { code: 'NoPermissions' }); } });
+    const refusedLines = capture(refused);
+    await regular(refused);
+    expect(refusedLines.map((l) => l.message)).toContain('[pr=PROJ/app#42] pass1 batch 1/1 — not retrying: Error is not a transient provider error');
+    expect(refusedLines.map((l) => l.message)).not.toContain('[pr=PROJ/app#42] pass1 batch 1/1 — identical retry in flight (attempt 2)');
+  });
+
+  it('says when it splits a batch of two files after two transient failures', async () => {
+    const t = setup({
+      files: 2,
+      respond: (_c, index) => {
+        if (index < 2) throw Object.assign(new Error('provider hiccup'), { code: 'Unknown' });
+        return reviewReply([]);
+      },
+    });
+    const lines = capture(t);
+    await regular(t, TWO_FILES_PER_BATCH);
+    expect(lines.map((l) => l.message)).toContain('[pr=PROJ/app#42] pass1 batch 1/1 — splitting into halves of 1 and 1 after repeated failure');
+  });
+
+  it('logs a cut-off reply as a truncation event and the continuation it starts', async () => {
+    const t = setup({
+      files: 1,
+      respond: (c) => c.prompt.includes('Already reported for these files')
+        ? reviewReply([])
+        : `${findingLine({ file: 1, line: 2, title: 'First issue' })}\n{"file":"src/f1.ts","line":6,"anchorCo`,
+    });
+    const lines = capture(t);
+    await regular(t);
+    const truncation = lines.find((l) => l.message === 'Truncated response — [pr=PROJ/app#42] batch 1/1')!;
+    expect(truncation.level).toBe('warn');
+    expect(truncation.details).toMatchObject({ completeLines: 1, hasMetaLine: false, coveredFiles: ['src/f1.ts'] });
+    expect(lines.map((l) => l.message)).toContain('[pr=PROJ/app#42] batch 1/1 — continuation starting with 1 file(s)');
+    expect(callLines(lines).map((l) => l.message.replace(/ attempt.*/, ''))).toEqual(['[pr=PROJ/app#42] pass1', '[pr=PROJ/app#42] continuation']);
+  });
+
+  it('logs the findings funnel: 5 raw, 1 outside the pull request, 1 retracted by the whole-file call, 1 duplicate, 2 final', async () => {
+    const outside = JSON.stringify({
+      file: 'src/elsewhere.ts', line: 2, anchorCode: codeLine(1, 4), severity: 'warning', confidence: 0.8, title: 'Outside', description: 'd', recommendation: 'r',
+    });
+    const t = setup({
+      files: 1,
+      respond: (c) => c.kind === 'regular-whole-files'
+        ? [findingLine({ file: 1, line: 8, title: 'Seen in the whole file' }), findingLine({ file: 1, line: 4, title: 'Kept' }), JSON.stringify({ additionalFilesNeeded: [], retract: [1] })].join('\n')
+        : [findingLine({ file: 1, line: 2, title: 'Retracted later' }), findingLine({ file: 1, line: 4, title: 'Kept' }), outside, JSON.stringify({ additionalFilesNeeded: ['src/ctx.ts'] })].join('\n'),
+    });
+    t.client.fileContents.set('src/ctx.ts', 'export const ctx = 1;');
+    const lines = capture(t);
+
+    const result = await regular(t);
+
+    expect(result.review!.store.findings).toHaveLength(2);
+    expect(result.outcome.droppedOutsidePr).toBe(1);
+    expect(lines.map((l) => l.message)).toContain([
+      'Findings funnel — raw 5',
+      '-> deduped as duplicate: 1',
+      '-> dropped as outside the PR: 1',
+      '-> retracted by Pass 2: 1',
+      '-> final: 2',
+    ].join('\n'));
+  });
+
+  it('writes the structured run record to the output channel only when detailed diagnostics is on', async () => {
+    const respond = (c: Call) => reviewReply([{ file: c.file, line: 2, title: 'Unchecked input' }]);
+    const on = setup({ files: 1, respond });
+    const onLines = capture(on);
+    await regular(on, { ...ONE_FILE_PER_BATCH, detailedDiagnostics: true });
+    const messages = onLines.map((l) => l.message);
+    const start = messages.indexOf('```');
+    expect(start).toBeGreaterThan(-1);
+    const record = messages.slice(start, messages.lastIndexOf('```') + 1);
+    expect(record).toContain('Run: pr=PROJ/app#42');
+    expect(record).toContain('Configuration:');
+    expect(record).toContain(messages[0]);
+    expect(record.some((line) => /pass1 attempt 1 — .*, ok$/.test(line))).toBe(true);
+    expect(record).toContain('Findings funnel:');
+    expect(record).toContain('-> final: 1');
+
+    const off = setup({ files: 1, respond });
+    const offLines = capture(off);
+    await regular(off);
+    expect(offLines.map((l) => l.message)).not.toContain('Configuration:');
+    expect(offLines.map((l) => l.message)).not.toContain('```');
+  });
+
+  it('says no file could be reviewed when every batch failed, and names the last stage when the review aborts', async () => {
+    const failed = setup({ files: 2, respond: () => { throw Object.assign(new Error('not allowed'), { code: 'NoPermissions' }); } });
+    const failedLines = capture(failed);
+    await regular(failed);
+    const noFile = failedLines.find((l) => l.message === 'Review failed — no file could be reviewed — pr=PROJ/app#42')!;
+    expect(noFile.level).toBe('error');
+    expect(noFile.details).toMatchObject({ fileCount: 2, batchCount: 2, reviewedFileCount: 0, failedFileCount: 2 });
+
+    const aborted = setup({ files: 1, respond: () => reviewReply([]) });
+    vi.spyOn(aborted.client, 'getPullRequest').mockRejectedValue(new Error('503 Service Unavailable'));
+    const abortedLines = capture(aborted);
+    const result = await regular(aborted);
+    expect(result.outcome.status).toBe('failed');
+    expect(abortedLines.find((l) => l.message === 'Review aborted — [pr=PROJ/app#42] last stage: fetching PR')?.level).toBe('error');
+  });
+});
+
+describe('what a pass did not review', () => {
+  it('names files that failed after retrying only for a transient error', async () => {
+    const t = setup({
+      files: 2,
+      respond: (c) => {
+        if (c.file === 1) throw Object.assign(new Error('provider hiccup'), { code: 'Unknown' });
+        throw Object.assign(new Error('not allowed'), { code: 'NoPermissions' });
+      },
+    });
+    const result = await regular(t);
+    expect(result.outcome.notes).toEqual([
+      'regular batch 1/2 — could not review src/f1.ts after retrying: provider hiccup',
+      'regular batch 2/2 — could not review src/f2.ts: not allowed',
+    ]);
+  });
+});

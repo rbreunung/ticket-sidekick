@@ -93,6 +93,7 @@ async function engineDeps(
   deps: ReviewBoardDeps, model: BoardModelHandle, client: EngineDeps['client'], signal: AbortSignal, onProgress?: (p: EngineProgress) => void,
 ): Promise<EngineDeps> {
   const jira = await deps.jira();
+  const onDiag = deps.reviewDiag ?? deps.onDiag;
   return {
     model,
     recordTokens: (id, figures) => deps.recordTokens(id, figures),
@@ -100,7 +101,7 @@ async function engineDeps(
     ...(jira ? { readTicket: key => jira.readRequirements(key) } : {}),
     signal,
     ...(onProgress ? { onProgress } : {}),
-    ...(deps.onDiag ? { onDiag: deps.onDiag } : {}),
+    ...(onDiag ? { onDiag } : {}),
     ...(deps.sleep ? { sleep: deps.sleep } : {}),
   };
 }
@@ -281,6 +282,26 @@ export async function recheckRun(
 function addTokens(a: TokenTotals | undefined, b: TokenTotals): TokenTotals {
   if (!a) return b;
   return { input: a.input + b.input, output: a.output + b.output, calls: a.calls + b.calls, estimated: a.estimated || b.estimated };
+}
+
+/**
+ * What the passes did not review and the findings they dropped, as plain lines: files cut short,
+ * not fetched, excluded or with no text change, the parts of batches that failed, the findings that
+ * named a file outside the pull request and the findings the critic removed.
+ */
+export function reviewNotes(passes: ReadonlyArray<Pick<PassRecord, 'step' | 'notes' | 'droppedOutsidePr' | 'removed'>>): string[] {
+  const lines = passes.flatMap(p => p.notes);
+  const outside = passes.reduce((n, p) => n + (p.droppedOutsidePr ?? 0), 0);
+  if (outside > 0) {
+    lines.push(outside === 1
+      ? '1 finding was dropped because it named a file outside this pull request.'
+      : `${outside} findings were dropped because they named files outside this pull request.`);
+  }
+  const removed = passes.flatMap(p => (p.step === 'critic' ? p.removed : []));
+  if (removed.length > 0) {
+    lines.push(`${removed.length === 1 ? '1 finding was' : `${removed.length} findings were`} removed by the critic as unverifiable: ${removed.map(n => `#${n}`).join(', ')}.`);
+  }
+  return lines;
 }
 
 function emptyRecord(step: ReviewStep, active: ActivePass, run: number): PassRecord {

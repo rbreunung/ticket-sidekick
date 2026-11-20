@@ -1,5 +1,7 @@
-import { PERSONAS, type PersonaId } from '../../services/PrReviewService';
+import { PERSONAS, type Persona, type PersonaId } from '../../services/PrReviewService';
+import { buildRunTag } from '../reviewSessionState';
 import { reviewBatch } from './batchReview';
+import { logAborted, logFindingsFunnel, logPassOpening, writeRunRecord } from './diagnostics';
 import { addFindings, markStepRun, type NewFinding } from './findingStore';
 import {
   budgetStoredContext,
@@ -11,6 +13,7 @@ import {
   serviceFor,
   throwIfStopped,
   tokenBudgetOf,
+  type PassContext,
 } from './plumbing';
 import type { EngineDeps, EngineSettings, PassOutcome, StagedReview } from './types';
 
@@ -23,7 +26,22 @@ export async function runExtraPass(
 ): Promise<{ review: StagedReview; outcome: PassOutcome }> {
   const persona = PERSONAS.find((p) => p.id === personaId);
   if (!persona) throw new Error(`Unknown review pass: ${personaId}`);
-  const ctx = passContext(deps);
+  const { target } = review.snapshot;
+  const ctx = passContext(deps, { runTag: buildRunTag(target.project, target.repo, target.prId), detailedDiagnostics: settings.detailedDiagnostics });
+  const tokenBudget = tokenBudgetOf(settings, deps.model);
+  logPassOpening(ctx, { step: personaId, model: deps.model, meter: ctx.meter, settings, tokenBudget });
+  try {
+    return await extraPass(review, persona, settings, deps, ctx, tokenBudget);
+  } catch (err) {
+    if (!isStop(err, deps.signal)) logAborted(ctx, err);
+    throw err;
+  }
+}
+
+async function extraPass(
+  review: StagedReview, persona: Persona, settings: EngineSettings, deps: EngineDeps, ctx: PassContext, tokenBudget: number,
+): Promise<{ review: StagedReview; outcome: PassOutcome }> {
+  const personaId = persona.id;
   const { snapshot } = review;
   const { batches, target, reviewedCommit } = snapshot;
   const pr = { ...snapshot.pr, fromCommitHash: reviewedCommit };
@@ -33,16 +51,17 @@ export async function runExtraPass(
   const read = await readContextAtCommit(deps.client, target.project, target.repo, reviewedCommit, [...new Set(batches.flatMap((b) => b.contextPaths))]);
   if (!read.ok) {
     ctx.log('warn', `The reviewed commit can no longer be read — ${persona.id} pass not run`, { path: read.path, error: read.error });
+    writeRunRecord(ctx, '(no findings: the reviewed commit can no longer be read)');
     return { review, outcome: { ...outcome, status: 'commit-unreadable', unreadablePath: read.path } };
   }
 
   const service = serviceFor(deps);
-  const tokenBudget = tokenBudgetOf(settings, deps.model);
   const extra = extraInstructionsOf(settings);
   const cache = new Map(read.files);
   const contextPaths = batches.map((b) => [...b.contextPaths]);
   const findings: NewFinding[] = [];
   let stopped = false;
+  const tally = { raw: 0, droppedOutsidePr: 0, retracted: 0 };
   const withFindings = (store: StagedReview['store']): StagedReview => ({
     ...review,
     snapshot: { ...snapshot, batches: batches.map((b, i) => ({ ...b, contextPaths: [...contextPaths[i]] })) },
@@ -52,16 +71,20 @@ export async function runExtraPass(
   deps.onProgress?.({ step: personaId, batchesDone: 0, batchesTotal: batches.length });
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
+    ctx.stage = `batch ${i + 1}/${batches.length} ${persona.id}`;
     try {
       throwIfStopped(deps.signal);
       const result = await reviewBatch({
         ctx, service, pr, target, commit: reviewedCommit, files: batch.files, label: `${persona.id} batch ${i + 1}/${batches.length}`,
-        source: persona.id, cache, tokenBudget,
+        pass: persona.id, batch: i + 1, totalBatches: batches.length, source: persona.id, cache, tokenBudget,
         initialContext: budgetStoredContext(batch.contextPaths, cache, tokenBudget, batch.files),
         buildPrompt: (items, contents, options) => service.buildPersonaPrompt(persona, pr, items, contents, extra, options),
       });
       for (const path of result.contextPaths) if (!contextPaths[i].includes(path)) contextPaths[i].push(path);
       findings.push(...result.findings.map((f) => ({ ...f, batch: i })));
+      tally.raw += result.rawCount;
+      tally.droppedOutsidePr += result.droppedOutsidePr;
+      tally.retracted += result.retracted;
       if (result.failures.length > 0) {
         outcome.failedBatches++;
         outcome.notes.push(...result.failures);
@@ -80,8 +103,18 @@ export async function runExtraPass(
   ctx.log('info', `${persona.displayName} pass ${stopped ? 'stopped' : 'finished'}`, {
     batchesDone: outcome.batchesDone, batchesTotal: batches.length, added: added.added.length, merged: added.merged.length,
   });
+  // The pass's own findings: `final` counts those it added as new numbers; the rest merged into numbered ones.
+  const funnel = logFindingsFunnel(ctx, {
+    raw: tally.raw, dedupedCrossBatch: findings.length - added.added.length, droppedOutsidePr: tally.droppedOutsidePr,
+    retractedByPass2: tally.retracted, final: added.added.length,
+    unverified: next.store.findings.filter((f) => added.added.includes(f.id) && f.locationUnverified).length,
+  });
+  writeRunRecord(ctx, funnel);
   return {
     review: next,
-    outcome: { ...outcome, status: stopped ? 'stopped' : 'finished', added: added.added, merged: added.merged, tokens: ctx.meter.totals() },
+    outcome: {
+      ...outcome, status: stopped ? 'stopped' : 'finished', added: added.added, merged: added.merged, droppedOutsidePr: tally.droppedOutsidePr,
+      tokens: ctx.meter.totals(),
+    },
   };
 }

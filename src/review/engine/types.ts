@@ -112,6 +112,8 @@ export interface PassOutcome {
   added: number[];
   /** Numbers of existing findings a duplicate was merged into. */
   merged: number[];
+  /** Findings left out because they named a file outside the pull request. */
+  droppedOutsidePr?: number;
   /** Numbers the critic removed. */
   removed: number[];
   /** Numbers the critic labelled as probably a false alarm. */
@@ -142,6 +144,8 @@ export interface EngineSettings {
   modelContextTokens?: number;
   /** Share of the context a call may fill; default 0.7. */
   contextBudgetRatio?: number;
+  /** Also write each pass's structured run record (configuration, every call and event line, the findings funnel). */
+  detailedDiagnostics?: boolean;
 }
 
 export interface EngineProgress {

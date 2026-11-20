@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { STEP_LABELS } from '../../boards/review/runs';
+import { STEP_LABELS, reviewNotes } from '../../boards/review/runs';
 import { parseReviewUrl, reviewSessionId } from '../../boards/review/recipe';
 import type { StoredFinding } from '../../review/engine';
 import type { RequirementsCoverage } from '../../review/requirementsCoverage';
@@ -10,8 +10,8 @@ import { defineTool } from '../toolDefinition';
 import { withBitbucket, type BitbucketToolDeps, type StoredReview } from './bitbucketAccess';
 import { OPEN_REVIEW_TOOL, READ_FINDINGS_TOOL } from './toolNames';
 
-// Reads the stored review of a pull request for the agent: the summary, the findings list, or one
-// finding with its code and explanation. It reads the session as it is stored, so no check starts
+// Reads the stored review of a pull request for the agent: the summary (with what the passes did not
+// review and the findings they dropped), the findings list, or one finding with its code and explanation. It reads the session as it is stored, so no check starts
 // and nothing is asked of Bitbucket or a model. Finding, explanation and coverage text is model
 // output and goes out as plain text: Markdown is taken out of it, and code is indented.
 
@@ -105,6 +105,9 @@ function summary(session: StoredReview): string {
   lines.push(`Findings: ${findings.length} (${counts})${labelled > 0 ? `; ${labelled} labelled probably a false alarm` : ''}`);
   lines.push(`Verdict: ${reviewVerdict(findings)}`);
   lines.push(review.coverage ? coverageSummary(review.coverage) : 'Requirements coverage: not checked');
+  // File paths come from the pull request: only control characters are taken out.
+  const notes = reviewNotes(session.working.passes).map(note => `- ${note.replace(/[\u0000-\u001F\u007F]/g, ' ')}`);
+  if (notes.length > 0) lines.push('Not reviewed or dropped:', ...notes);
   if (findings.length > 0) lines.push('', `For the findings call ${READ_FINDINGS_TOOL} with list: true; for one finding with its code and explanation, with finding: <number>.`);
   return lines.join('\n');
 }

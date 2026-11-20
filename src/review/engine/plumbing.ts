@@ -1,16 +1,20 @@
 import { ModelRequestCancelledError, type BoardModelHandle } from '../../boards/boardModels';
 import { PrReviewService } from '../../services/PrReviewService';
 import type { DiagLogger } from '../../utils/diagTypes';
-import { PartialLmResponseError, UnparseableReplyError, withLmRetry } from '../../utils/lmRetry';
+import { isTransientLmError, PartialLmResponseError, UnparseableReplyError, withLmRetry } from '../../utils/lmRetry';
+import { sanitizeDetails } from '../../utils/logRedaction';
 import { createTokenMeter, type TokenMeter } from '../tokenMeter';
 import {
   estimateChunkTokens,
+  formatCallLine,
+  formatRecoveryDecision,
   MAX_CONTEXT_FILES_PER_BATCH,
   parseReviewReply,
   selectFilesWithinBudget,
   type FileDiff,
+  type ReviewPass,
 } from '../reviewSessionState';
-import { describeErrorForLog, errorCodeOf } from '../reviewDiagnostics';
+import { describeErrorForLog, errorCodeOf, errorNameOf, type CallDiagHooks } from '../reviewDiagnostics';
 import type { EngineDeps, EngineSettings, PassOutcome, ReviewStep } from './types';
 
 // The pieces every pass shares: the metered model call, stop handling, the token budget and the
@@ -34,14 +38,41 @@ export function rethrowStop(errors: unknown[], signal: AbortSignal): void {
 export interface PassContext {
   meter: TokenMeter<BoardModelHandle>;
   signal: AbortSignal;
+  /** Writes one diagnostic line, and keeps it for the structured run record when that is on. */
   log: DiagLogger;
   sleep?: (ms: number) => Promise<void>;
+  /** Names the pull request on every diagnostic line, e.g. `pr=PROJ/app#42`. */
+  runTag: string;
+  /** The stage the pass has reached, named by the line logged when it aborts. */
+  stage: string;
+  /** Every line logged so far, while the structured run record is on. */
+  recorded?: string[];
+  /** The pass's configuration line, for the structured run record. */
+  configLine?: string;
 }
 
-export function passContext(deps: Pick<EngineDeps, 'model' | 'recordTokens' | 'signal' | 'onDiag' | 'sleep'>): PassContext {
-  const log: DiagLogger = (level, message, details) => deps.onDiag?.(level, message, details);
-  const meter = createTokenMeter(deps.model, deps.recordTokens, log);
-  return { meter, signal: deps.signal, log, ...(deps.sleep ? { sleep: deps.sleep } : {}) };
+export function passContext(
+  deps: Pick<EngineDeps, 'model' | 'recordTokens' | 'signal' | 'onDiag' | 'sleep'>,
+  options: { runTag?: string; detailedDiagnostics?: boolean } = {},
+): PassContext {
+  const log: DiagLogger = (level, message, details) => {
+    deps.onDiag?.(level, message, details);
+    // The record carries only what the channel line would show: the details go through the same redaction.
+    ctx.recorded?.push(details ? `${message} ${JSON.stringify(sanitizeDetails(details))}` : message);
+  };
+  const ctx: PassContext = {
+    meter: createTokenMeter(deps.model, deps.recordTokens, log), signal: deps.signal, log, runTag: options.runTag ?? '', stage: 'setup',
+    ...(options.detailedDiagnostics ? { recorded: [] } : {}), ...(deps.sleep ? { sleep: deps.sleep } : {}),
+  };
+  return ctx;
+}
+
+/** What one call is, for its diagnostic line. */
+export interface CallSite {
+  pass: ReviewPass;
+  batch: number;
+  totalBatches: number;
+  itemCount: number;
 }
 
 /** One model call with no retry. A reply cut off by a broken stream keeps its text in a `PartialLmResponseError`. */
@@ -59,19 +90,46 @@ export async function callOnce(ctx: PassContext, prompt: string): Promise<string
   return text.trim();
 }
 
-/** One model call with today's three identical tries; `validate` throws on a reply that is no use. */
-export async function callWithRetry(ctx: PassContext, prompt: string, label: string, validate?: (raw: string) => void): Promise<string> {
+/**
+ * One model call with today's three identical tries; `validate` throws on a reply that is no use.
+ * With a `site`, each attempt gets its call line and each failure its retry or give-up line; `hooks`
+ * hands the attempt and its duration to a caller that logs its own call line.
+ */
+export async function callWithRetry(
+  ctx: PassContext, prompt: string, label: string, validate?: (raw: string) => void,
+  diag: { site?: CallSite; hooks?: CallDiagHooks } = {},
+): Promise<string> {
+  const { site, hooks } = diag;
+  let attempt = 0;
+  let startedAt = 0;
+  const line = (status: 'ok' | 'truncated' | 'error', durationMs: number, extra: { responseChars?: number; errorCode?: string } = {}) => formatCallLine({
+    runTag: ctx.runTag, pass: site!.pass, batch: site!.batch, totalBatches: site!.totalBatches, attempt,
+    itemCount: site!.itemCount, promptChars: prompt.length, durationMs, status, ...extra,
+  });
   return withLmRetry(async () => {
+    attempt++;
+    startedAt = Date.now();
     const raw = await callOnce(ctx, prompt);
     validate?.(raw);
+    const durationMs = Date.now() - startedAt;
+    if (hooks?.attemptOut) { hooks.attemptOut.attempt = attempt; hooks.attemptOut.durationMs = durationMs; }
+    if (site) ctx.log('info', line(parseReviewReply(raw).truncated ? 'truncated' : 'ok', durationMs, { responseChars: raw.length }));
     return raw;
   }, {
     ...(ctx.sleep ? { sleep: ctx.sleep } : {}),
-    onAttemptFailed: (attempt, err) => {
+    onAttemptFailed: (failed, err) => {
       if (isStop(err, ctx.signal)) return;
-      ctx.log('warn', `Model call failed — ${label} (attempt ${attempt})`, {
+      const durationMs = Date.now() - startedAt;
+      ctx.log('warn', `Model call failed — ${label} (attempt ${failed})`, {
         error: err instanceof Error ? err.message : String(err), code: errorCodeOf(err), ...describeErrorForLog(err),
       });
+      hooks?.onAttemptError?.(attempt, durationMs, errorCodeOf(err));
+      if (!site) return;
+      const errorCode = errorCodeOf(err);
+      ctx.log('error', line('error', durationMs, errorCode ? { errorCode } : {}));
+      const where = { pass: site.pass, batch: site.batch, totalBatches: site.totalBatches };
+      if (!isTransientLmError(err)) ctx.log('warn', formatRecoveryDecision(ctx.runTag, { kind: 'give-up', ...where, errorName: errorNameOf(err) }));
+      else if (attempt < 3) ctx.log('info', formatRecoveryDecision(ctx.runTag, { kind: 'retry', ...where, attempt: attempt + 1 }));
     },
   });
 }
@@ -155,7 +213,7 @@ export async function readContextAtCommit(
 export function emptyOutcome(step: ReviewStep, batchesTotal: number): PassOutcome {
   return {
     step, status: 'finished', batchesDone: 0, batchesTotal, failedBatches: 0, notes: [],
-    added: [], merged: [], removed: [], labelled: [], tokens: { input: 0, output: 0, calls: 0, estimated: false },
+    added: [], merged: [], droppedOutsidePr: 0, removed: [], labelled: [], tokens: { input: 0, output: 0, calls: 0, estimated: false },
   };
 }
 

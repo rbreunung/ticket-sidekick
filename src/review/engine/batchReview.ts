@@ -1,12 +1,18 @@
 import type { BitbucketPR } from '../../bitbucket/IBitbucketClient';
 import type { PrReviewService } from '../../services/PrReviewService';
 import { withEasierRetry } from '../../utils/lmRetry';
+import { formatBatchFailureText, handleAttemptFailure } from '../reviewDiagnostics';
 import {
+  buildTruncationEvent,
+  createAttemptTracker,
+  formatCallLine,
+  formatRecoveryDecision,
   mergePass2Findings,
   parseReviewReply,
   resolveFindingAnchors,
   type FileDiff,
   type ReviewFinding,
+  type ReviewPass,
   type SourceTag,
 } from '../reviewSessionState';
 import {
@@ -35,6 +41,10 @@ export interface BatchReviewParams {
   commit: string;
   files: FileDiff[];
   label: string;
+  /** The pass and batch the diagnostic lines name; the first call of a regular batch is `pass1`. */
+  pass: ReviewPass;
+  batch: number;
+  totalBatches: number;
   source: SourceTag;
   /** Builds the prompt; `contents` are the whole files to show, `options` the earlier findings. */
   buildPrompt: (files: FileDiff[], contents: Map<string, string> | undefined, options?: { priorFindings?: Finding[]; alreadyReported?: Finding[] }) => string;
@@ -54,17 +64,32 @@ export interface BatchReviewResult {
   reviewedFiles: number;
   failedFiles: number;
   failures: string[];
+  /** Findings the replies gave, before anything was dropped, retracted or merged. */
+  rawCount: number;
+  /** Findings dropped because they named a file outside the pull request. */
+  droppedOutsidePr: number;
+  /** First findings the call with whole files retracted. */
+  retracted: number;
 }
 
 /** Reviews one batch. A stop throws; every other failure is reported in the result. */
 export async function reviewBatch(p: BatchReviewParams): Promise<BatchReviewResult> {
-  const { ctx, files, label } = p;
+  const { ctx, files, label, batch, totalBatches } = p;
   const initial = p.initialContext && p.initialContext.size > 0 ? p.initialContext : undefined;
+  const tracker = createAttemptTracker<FileDiff>();
+  let promptChars = 0;
   const parts = await withEasierRetry(
     files,
     async (items) => {
-      const raw = await callOnce(ctx, p.buildPrompt(items, initial));
+      const attempt = tracker.start(items);
+      const prompt = p.buildPrompt(items, initial);
+      promptChars = prompt.length;
+      const raw = await callOnce(ctx, prompt);
       assertReadableReply(raw);
+      ctx.log('info', formatCallLine({
+        runTag: ctx.runTag, pass: p.pass, batch, totalBatches, attempt, itemCount: items.length, promptChars: prompt.length,
+        responseChars: raw.length, durationMs: tracker.elapsedMs(), status: parseReviewReply(raw).truncated ? 'truncated' : 'ok',
+      }));
       return raw;
     },
     splitInHalf,
@@ -72,38 +97,65 @@ export async function reviewBatch(p: BatchReviewParams): Promise<BatchReviewResu
       ...(ctx.sleep ? { sleep: ctx.sleep } : {}),
       onAttemptFailed: (attempt, err, items) => {
         if (isStop(err, ctx.signal)) return;
-        ctx.log('warn', `Model call failed — ${label} (attempt ${attempt})`, {
-          files: items.map((f) => f.path), error: err instanceof Error ? err.message : String(err),
+        handleAttemptFailure({
+          runTag: ctx.runTag, pass: p.pass, batch, totalBatches, libraryAttempt: attempt, err, items, originalItems: files,
+          tracker, promptChars, split: splitInHalf,
+          logFailure: (a, e) => ctx.log('warn', `Model call failed — ${label} (attempt ${a})`, {
+            files: items.map((f) => f.path), error: e instanceof Error ? e.message : String(e),
+          }),
+          logReview: ctx.log,
         });
       },
     },
   );
   rethrowStop(parts.map((part) => part.error), ctx.signal);
 
-  const result: BatchReviewResult = { findings: [], contextPaths: initial ? [...initial.keys()] : [], reviewedFiles: 0, failedFiles: 0, failures: [] };
+  const result: BatchReviewResult = {
+    findings: [], contextPaths: initial ? [...initial.keys()] : [], reviewedFiles: 0, failedFiles: 0, failures: [],
+    rawCount: 0, droppedOutsidePr: 0, retracted: 0,
+  };
   let anyMeta = false;
   const recommended = new Set<string>();
 
   for (const part of parts) {
     if (part.error !== undefined) {
       result.failedFiles += part.items.length;
-      result.failures.push(`${label}: could not review ${part.items.map((f) => f.path).join(', ')} (${describeError(part.error)})`);
+      result.failures.push(formatBatchFailureText({
+        label, filePaths: part.items.map((f) => f.path).join(', '), cause: describeError(part.error), err: part.error,
+      }));
       continue;
     }
     result.reviewedFiles += part.items.length;
     const reply = parseReviewReply(part.result!);
     if (reply.hasMetaLine) { anyMeta = true; reply.recommendedPersonas.forEach((id) => recommended.add(id)); }
-    let partFindings = resolveFindingAnchors(reply.findings as Finding[], part.items).findings;
+    const first = resolveFindingAnchors(reply.findings as Finding[], part.items);
+    let partFindings = first.findings;
+    let rawCount = reply.findings.length;
+    let droppedOutsidePr = first.droppedOutsidePr;
+    let retracted = 0;
     let filesNeeded = reply.additionalFilesNeeded;
 
     if (reply.truncated) {
+      const covered = new Set(reply.findings.map((f) => f.file));
+      const event = buildTruncationEvent({
+        runTag: ctx.runTag, batch, totalBatches, raw: part.result!, parsedFindingsCount: reply.findings.length, hasMetaLine: reply.hasMetaLine,
+        ...(reply.danglingTail !== undefined ? { danglingTail: reply.danglingTail } : {}),
+        coveredFiles: [...covered].filter((f): f is string => typeof f === 'string'),
+        uncoveredFiles: part.items.filter((d) => !covered.has(d.path)).map((d) => d.path),
+      });
+      ctx.log('warn', event.message, event.details);
+      ctx.log('info', formatRecoveryDecision(ctx.runTag, { kind: 'continuation', batch, totalBatches, fileCount: part.items.length }));
       try {
         const cont = parseReviewReply(await callWithRetry(
           ctx, p.buildPrompt(part.items, initial, { alreadyReported: partFindings }), `${label} continuation`, assertReadableReply,
+          { site: { pass: 'continuation', batch, totalBatches, itemCount: part.items.length } },
         ));
         if (cont.hasMetaLine) { anyMeta = true; cont.recommendedPersonas.forEach((id) => recommended.add(id)); }
         filesNeeded = [...new Set([...filesNeeded, ...cont.additionalFilesNeeded])];
-        partFindings = [...partFindings, ...resolveFindingAnchors(cont.findings as Finding[], part.items).findings];
+        const resolved = resolveFindingAnchors(cont.findings as Finding[], part.items);
+        rawCount += cont.findings.length;
+        droppedOutsidePr += resolved.droppedOutsidePr;
+        partFindings = [...partFindings, ...resolved.findings];
       } catch (err) {
         if (isStop(err, ctx.signal)) throw err;
         result.failures.push(`${label}: the reply was cut off and the rest could not be recovered (${describeError(err)})`);
@@ -123,18 +175,26 @@ export async function reviewBatch(p: BatchReviewParams): Promise<BatchReviewResu
           // The second call sees the first one's findings and refines them rather than replacing them.
           const second = parseReviewReply(await callWithRetry(
             ctx, p.buildPrompt(part.items, contents, { priorFindings: partFindings }), `${label} with whole files`, assertReadableReply,
+            { site: { pass: 'pass2', batch, totalBatches, itemCount: part.items.length } },
           ));
-          const resolved = resolveFindingAnchors(second.findings as Finding[], part.items).findings;
-          partFindings = mergePass2Findings(partFindings, resolved, second.retract).findings;
+          const resolved = resolveFindingAnchors(second.findings as Finding[], part.items);
+          const merged = mergePass2Findings(partFindings, resolved.findings, second.retract);
+          rawCount += second.findings.length;
+          droppedOutsidePr += resolved.droppedOutsidePr;
+          retracted += merged.retracted;
+          partFindings = merged.findings;
         }
       } catch (err) {
         if (isStop(err, ctx.signal)) throw err;
         result.failures.push(`${label}: the call with whole files failed, so the first findings are kept (${describeError(err)})`);
       }
     }
+    // Counted once per part, after the continuation and the call with whole files have settled.
+    result.rawCount += rawCount;
+    result.droppedOutsidePr += droppedOutsidePr;
+    result.retracted += retracted;
     result.findings.push(...partFindings.map((f) => ({ ...f, sources: [p.source] })));
   }
   if (anyMeta) result.recommendedPersonas = [...recommended];
   return result;
 }
-

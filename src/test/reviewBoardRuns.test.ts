@@ -5,7 +5,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelRequestCancelledError, type BoardModelHandle } from '../boards/boardModels';
-import type { ReviewBoardDeps } from '../boards/review/deps';
+import type { ReviewBoardDeps, ReviewSettings } from '../boards/review/deps';
 import { reviewKind, type ReviewView, type ReviewWorking } from '../boards/review/kind';
 import { REVIEW_KIND } from '../boards/review/recipe';
 import { registerKind } from '../sessions/boardKind';
@@ -75,6 +75,12 @@ let confirmAnswer: boolean;
 let ticketResult: RequirementsSourceResult;
 let clock: number;
 let jiraConfigured: boolean;
+/** The ticket read by key, when a test needs one key to fail and another to read. */
+let ticketFor: ((key: string) => RequirementsSourceResult) | undefined;
+/** Settings a test adds to the board's. */
+let extraSettings: Partial<ReviewSettings>;
+/** The review passes' diagnostic lines. */
+let reviewLines: string[];
 
 function requirementsReply(): string {
   return readFileSync(resolve(process.cwd(), 'src/test/fixtures/requirements-reply-clean-spec.json'), 'utf-8');
@@ -110,14 +116,15 @@ function handle(id: string): BoardModelHandle {
 function deps(): ReviewBoardDeps {
   return {
     bitbucket: async () => ({ configured: true, client }),
-    jira: async () => (jiraConfigured ? { readRequirements: async () => ticketResult } : undefined),
+    jira: async () => (jiraConfigured ? { readRequirements: async (key: string) => (ticketFor ? ticketFor(key) : ticketResult) } : undefined),
     models: { list: async () => [MODEL], handle: async id => (id === MODEL.id ? handle(id) : undefined) },
     modelSettings: { reviewModel: () => MODEL.id, writeReviewModel: async () => {} },
     // One file per batch.
-    settings: async () => ({ confidenceThreshold: 0.7, modelContextTokens: 2000, contextBudgetRatio: 1 }),
+    settings: async () => ({ confidenceThreshold: 0.7, modelContextTokens: 2000, contextBudgetRatio: 1, ...extraSettings }),
     recordTokens: async () => {},
     confirm: async question => { confirms.push(question.title); return confirmAnswer; },
     now: () => clock,
+    reviewDiag: (_level, message) => { reviewLines.push(message); },
     sleep: async () => {},
   };
 }
@@ -128,8 +135,8 @@ function manager(): SessionManager {
   });
 }
 
-async function open(m: SessionManager): Promise<BoardState> {
-  const opened = await m.open(REVIEW_KIND, { url: PR_URL });
+async function open(m: SessionManager, input: Record<string, unknown> = { url: PR_URL }): Promise<BoardState> {
+  const opened = await m.open(REVIEW_KIND, input);
   if (!opened.ok) throw new Error(opened.reason);
   let state = await m.state(REVIEW_KIND, opened.id);
   while (state.status === 'building' || state.status === 'checking') state = await m.state(REVIEW_KIND, opened.id, state.tick, 1000);
@@ -205,6 +212,9 @@ beforeEach(() => {
   };
   clock = 1_000;
   jiraConfigured = true;
+  ticketFor = undefined;
+  extraSettings = {};
+  reviewLines = [];
 });
 
 afterEach(() => {
@@ -616,5 +626,116 @@ describe('a restart during a pass', () => {
     expect(results.statuses).toEqual([expect.stringMatching(/^The regular pass was cut off by a restart: 0 of 4 batches finished/)]);
     expect(results.hasReview).toBe(false);
     expect(results.canRunAgain).toBe(true);
+  });
+});
+
+describe('what the review did not review, and what it dropped', () => {
+  it('lists the batch that failed with its file, the finding outside the pull request and the findings the critic removed', async () => {
+    respond = call => {
+      if (call.kind === 'regular' && call.file === 2) throw new Error('The model is overloaded');
+      if (call.kind === 'regular' && call.file === 1) {
+        const outside = JSON.stringify({
+          file: 'src/elsewhere.ts', line: 3, anchorCode: codeLine(1, 3), severity: 'warning', confidence: 0.9, title: 'Elsewhere', description: 'd', recommendation: 'r',
+        });
+        return reviewReply([findingLine(1, 2, 'Unchecked input in f1'), outside]);
+      }
+      return defaultRespond(call);
+    };
+    const m = manager();
+    let state = await reviewed(m, 3);
+    expect(resultsOf(state).notes).toEqual([
+      'regular batch 2/3 — could not review src/f2.ts: The model is overloaded',
+      '1 finding was dropped because it named a file outside this pull request.',
+    ]);
+
+    state = await act(m, state, { type: 'keep-as-is' });
+    state = await act(m, state, { type: 'pick-pass', step: 'critic', picked: true });
+    state = await runAndWait(m, state, { type: 'passes' });
+
+    expect(resultsOf(state).findings).toEqual([]);
+    expect(resultsOf(state).notes).toEqual([
+      'regular batch 2/3 — could not review src/f2.ts: The model is overloaded',
+      '1 finding was dropped because it named a file outside this pull request.',
+      '2 findings were removed by the critic as unverifiable: #1, #2.',
+    ]);
+  });
+
+  it('names the files left out by the exclude patterns', async () => {
+    extraSettings = { excludePatterns: ['f2.ts'] };
+    const results = resultsOf(await reviewed(manager(), 2));
+    expect(results.notes).toEqual(['1 file excluded by pattern.']);
+  });
+});
+
+describe('a finding in full', () => {
+  it('shows its description, recommendation, line with the related lines, provenance, confidence and source', async () => {
+    respond = call => {
+      if (call.kind !== 'regular') return defaultRespond(call);
+      const finding = JSON.stringify({
+        file: `src/f${call.file}.ts`, line: 2, anchorCode: codeLine(call.file, 2), relatedCode: [codeLine(call.file, 5), codeLine(call.file, 7)],
+        severity: 'warning', confidence: 0.6, title: 'Unchecked input', description: 'The id reaches the query unchecked.', recommendation: 'Validate the id first.',
+      });
+      return reviewReply([finding]);
+    };
+    const [finding] = resultsOf(await reviewed(manager(), 1)).findings;
+    expect(finding).toMatchObject({
+      title: 'Unchecked input',
+      description: 'The id reaches the query unchecked.',
+      recommendation: 'Validate the id first.',
+      facts: ['L2 (also L5, L7)', 'new code', 'confidence 0.6', 'source: general'],
+      markers: ['low confidence'],
+    });
+  });
+});
+
+describe('a requested ticket that does not exist while the title names another', () => {
+  it('names the title\'s key on the failure line, offers it on the first step and the results, and Re-check reads it after the switch', async () => {
+    client.prOverride.title = 'PROJ-12 Add export';
+    client.rawDiff = prDiff(2);
+    ticketFor = key => key === 'PROJ-12' ? ticketResult : { ok: false, reason: 'not-found', message: 'Issue does not exist' };
+    const m = manager();
+    let state = await runAndWait(m, await open(m, { url: PR_URL, ticketKey: 'PROJ-99' }), { type: 'start' });
+    let results = resultsOf(state);
+    expect(results.requirementsLine).toBe(
+      'The requirements check did not run: the ticket PROJ-99 could not be read (Issue does not exist). The findings stand. The pull request title names PROJ-12 instead.',
+    );
+    expect(results.requirementsForm).toMatchObject({ ticketKey: 'PROJ-99', titleKey: 'PROJ-12' });
+
+    state = await act(m, state, { type: 'new-review' });
+    expect(viewOf(state).firstStep).toMatchObject({ ticketKey: 'PROJ-99', titleKey: 'PROJ-12' });
+    state = await act(m, state, { type: 'back-to-review' });
+
+    state = await act(m, state, { type: 'ticket-key', key: 'PROJ-12' });
+    expect(resultsOf(state).requirementsForm!.titleKey).toBeUndefined();
+    calls = [];
+    state = await runAndWait(m, state, { type: 'recheck' });
+    results = resultsOf(state);
+    expect(calls.map(c => c.kind)).toEqual(['requirements']);
+    expect(results.coverage).toMatch(/Requirements coverage \(PROJ-12\)/);
+    expect(results.requirementsLine).toBeUndefined();
+  });
+
+  it('offers nothing when the title names the same key, or no key', async () => {
+    client.prOverride.title = 'PROJ-12 Add export';
+    ticketResult = { ok: false, reason: 'not-found', message: 'Issue does not exist' };
+    const results = resultsOf(await reviewed(manager(), 2));
+    expect(results.requirementsLine).not.toMatch(/title names/);
+    expect(results.requirementsForm!.titleKey).toBeUndefined();
+  });
+});
+
+describe('the diagnostic timeline of a board review', () => {
+  it('goes to the review\'s own logger, with the structured run record only when detailed diagnostics is on', async () => {
+    await reviewed(manager(), 2);
+    expect(reviewLines.some(line => /^\[pr=PROJ\/app#482\] pass1 batch 1\/2 attempt 1 — /.test(line))).toBe(true);
+    expect(reviewLines.some(line => line.startsWith('Findings funnel — raw 2'))).toBe(true);
+    expect(reviewLines).not.toContain('Configuration:');
+
+    reviewLines = [];
+    extraSettings = { detailedDiagnostics: true };
+    const m = manager();
+    await runAndWait(m, await open(m), { type: 'again' });
+    expect(reviewLines).toContain('Configuration:');
+    expect(reviewLines).toContain('Run: pr=PROJ/app#482');
   });
 });

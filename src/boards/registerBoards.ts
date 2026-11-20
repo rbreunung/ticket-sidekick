@@ -94,6 +94,10 @@ export function vscodeBoardModels(justification: string): BoardModels {
       return modelHandle({
         id: model.id,
         maxInputTokens: model.maxInputTokens,
+        vendor: model.vendor,
+        family: model.family,
+        version: model.version,
+        frozen: Object.isFrozen(model),
         countTokens: text => model.countTokens(typeof text === 'string' ? text : chatMessage(text)),
         sendRequest: (messages, token) => model.sendRequest(messages.map(chatMessage), { justification }, token),
       }, () => new vscode.CancellationTokenSource());
@@ -222,6 +226,7 @@ export function registerBoards(
         ...(config.reviewExcludePatterns ? { excludePatterns: config.reviewExcludePatterns } : {}),
         ...(config.modelContextTokens ? { modelContextTokens: config.modelContextTokens } : {}),
         ...(config.contextBudgetRatio !== undefined ? { contextBudgetRatio: config.contextBudgetRatio } : {}),
+        ...(config.detailedDiagnostics ? { detailedDiagnostics: true } : {}),
         confidenceThreshold: config.confidenceThreshold ?? 0.7,
       };
     },
@@ -233,6 +238,8 @@ export function registerBoards(
     onReviewCompleted: async () => { await vscode.commands.executeCommand('setContext', 'ticketSidekick.firstReviewCompleted', true); },
     now: () => Date.now(),
     onDiag: (level, message, details) => logDiag('boards.review', level, message, details),
+    // The review passes' diagnostic timeline, under the scope `@bitbucket` reviews log to.
+    reviewDiag: (level, message, details) => logDiag('bitbucket.review', level, message, details),
   };
   const kinds = [
     registerKind(securityReportKind, () => securityReportDeps),

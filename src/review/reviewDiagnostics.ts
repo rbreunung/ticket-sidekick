@@ -82,10 +82,15 @@ export function describeErrorForLog(err: unknown): ErrorLogInfo {
   return info;
 }
 
-/** The per-batch notice; "after retrying" only when the error is of a class the retry layer retries. */
-export function formatBatchFailureNotice(params: { label: string; filePaths: string; cause: string; err: unknown }): string {
+/** The per-batch failure as plain text; "after retrying" only when the error is of a class the retry layer retries. */
+export function formatBatchFailureText(params: { label: string; filePaths: string; cause: string; err: unknown }): string {
   const retried = isTransientLmError(params.err) ? ' after retrying' : '';
-  return `_⚠ ${params.label} — could not review ${params.filePaths}${retried}: ${params.cause}_\n\n`;
+  return `${params.label} — could not review ${params.filePaths}${retried}: ${params.cause}`;
+}
+
+/** The per-batch notice in chat. */
+export function formatBatchFailureNotice(params: { label: string; filePaths: string; cause: string; err: unknown }): string {
+  return `_⚠ ${formatBatchFailureText(params)}_\n\n`;
 }
 
 export const PARTIAL_REVIEW_WARNING =

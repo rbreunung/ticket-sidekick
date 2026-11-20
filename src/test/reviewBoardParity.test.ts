@@ -9,6 +9,7 @@ import { BITBUCKET_TOOLS } from '../tools/bitbucketTools/catalog';
 // tools carry it over or drop it, and every row that carries over must name, in BOARD_PARITY below, the review board
 // action, page request or Bitbucket tool that keeps it and the scenario test that proves the result.
 // This guard outlives `@bitbucket`: the participant's behaviours are kept below as they were, and this map holds them.
+// The settings are read from package.json, plus the ones that are removed with the participant.
 // See docs/solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md.
 
 const root = process.cwd();
@@ -42,11 +43,26 @@ function ledgerRows(section: string): Map<string, LedgerRow> {
 
 const DECISIONS = ['Carry over', 'Dropped'];
 
-/** Everything `@bitbucket` did, as the participant named it before its removal. */
-const CHAT_BEHAVIOURS = [
-  // Follow-up intents (`parseFollowUpIntent`) and the other reply words
+/**
+ * The `ticketSidekick.bitbucket.*` settings package.json declares, read from it, so a new setting needs
+ * a row; the settings that go with `@bitbucket` are kept in the frozen list below.
+ */
+function bitbucketSettings(): string[] {
+  const manifest = JSON.parse(read('package.json')) as { contributes: { configuration: Array<{ properties?: Record<string, unknown> }> | { properties?: Record<string, unknown> } } };
+  const sections = Array.isArray(manifest.contributes.configuration) ? manifest.contributes.configuration : [manifest.contributes.configuration];
+  return sections.flatMap(section => Object.keys(section.properties ?? {})).filter(key => key.startsWith('ticketSidekick.bitbucket.'));
+}
+
+/** The settings that are removed with `@bitbucket`, kept here once package.json no longer declares them. */
+const PARTICIPANT_SETTINGS = [
+  'ticketSidekick.bitbucket.reviewMode', 'ticketSidekick.bitbucket.showTokenUsage', 'ticketSidekick.bitbucket.showConnectionInfo',
+];
+
+/** Everything `@bitbucket` did, as the participant named it before its removal; its settings come from package.json. */
+const CHAT_BEHAVIOURS = [...new Set([
+  // Follow-up intents (`parseFollowUpIntent`) and the other reply words, the greeting and the empty-prompt guidance
   'explain', 'copy', 'add', 'post it', 'refinement', 'goal', 'finding-not-found', 'diff-question', 'follow-up-failure',
-  'finding-match', 'done', 'cancel', 'smart-fallback-reply',
+  'finding-match', 'done', 'cancel', 'smart-fallback-reply', 'greeting', 'empty-prompt',
   // Follow-up chips (`computeBitbucketFollowups`) and the clickable finding headings
   'chip-check', 'chip-copy', 'chip-add', 'chip-explain', 'chip-check-against-ticket', 'chip-post-it', 'chip-cancel', 'chip-done',
   'finding-heading-links',
@@ -57,16 +73,14 @@ const CHAT_BEHAVIOURS = [
   // Review modes
   'standard', 'smart', 'deep', 'quick', 'mode words',
   // Settings
-  'ticketSidekick.bitbucket.baseUrl', 'ticketSidekick.bitbucket.authType', 'ticketSidekick.bitbucket.reviewModel',
-  'ticketSidekick.bitbucket.reviewInstructions', 'ticketSidekick.bitbucket.modelContextTokens', 'ticketSidekick.bitbucket.contextBudgetRatio',
-  'ticketSidekick.bitbucket.reviewContextLines', 'ticketSidekick.bitbucket.reviewExcludePatterns', 'ticketSidekick.bitbucket.confidenceThreshold',
-  'ticketSidekick.bitbucket.reviewMode', 'ticketSidekick.bitbucket.showTokenUsage',
-  // Pipeline rules of docs/review-process.md
+  ...PARTICIPANT_SETTINGS, ...bitbucketSettings(),
+  // Pipeline rules of docs/review-process.md, and what the review showed beside them
   'batches', 'dc-truncated-diffs', 'dc-response-shape', 'skipped-files', 'anchor-verification', 'reply-parsing', 'retry-and-split',
   'continuation', 'whole-file-call', 'context-files', 'persona-passes', 'dedupe', 'finding-numbers', 'critic', 'partial-results',
   'failed-review', 'upfront-question', 'ticket-choice', 'ticket-read', 'requirements-call', 'coverage-block', 'token-meter',
-  'monthly-counters', 'token-footer', 'review-completed',
-];
+  'monthly-counters', 'token-footer', 'review-completed', 'diagnostic-timeline', 'not-reviewed-notes', 'finding-detail',
+  'title-key-alternative',
+])];
 
 interface BoardEquivalent {
   /** Review board actions, preview types and run requests that keep the behaviour (their `type`). */
@@ -395,6 +409,52 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
   'review-completed': {
     actions: ['start'],
     tests: [[BOARD, 'runs the regular pass with the upfront question and shows the findings by severity, with the passes run and the model']],
+  },
+  'diagnostic-timeline': {
+    actions: ['start', 'passes', 'recheck'],
+    tests: [
+      [ENGINE, 'opens with the configuration and the model in use, then logs one call line per model call naming its pass and batch'],
+      [ENGINE, 'after a transient failure logs the failed call and the identical retry, and after one that is not transient says it does not retry'],
+      [ENGINE, 'says when it splits a batch of two files after two transient failures'],
+      [ENGINE, 'logs a cut-off reply as a truncation event and the continuation it starts'],
+      [ENGINE, 'logs the findings funnel: 5 raw, 1 outside the pull request, 1 retracted by the whole-file call, 1 duplicate, 2 final'],
+      [ENGINE, 'says no file could be reviewed when every batch failed, and names the last stage when the review aborts'],
+      [RUNS, 'goes to the review\'s own logger, with the structured run record only when detailed diagnostics is on'],
+    ],
+  },
+  'ticketSidekick.bitbucket.detailedDiagnostics': {
+    actions: ['start'],
+    tests: [
+      [ENGINE, 'writes the structured run record to the output channel only when detailed diagnostics is on'],
+      [RUNS, 'goes to the review\'s own logger, with the structured run record only when detailed diagnostics is on'],
+    ],
+  },
+  'not-reviewed-notes': {
+    actions: ['start', 'passes'],
+    tools: ['bitbucket_read_findings'],
+    tests: [
+      [RUNS, 'lists the batch that failed with its file, the finding outside the pull request and the findings the critic removed'],
+      [RUNS, 'names the files left out by the exclude patterns'],
+      [ENGINE, 'names files that failed after retrying only for a transient error'],
+      [PAGE, 'lists what the passes did not review and the findings they dropped under the banners, as text'],
+      [TOOLS, 'names in the summary what the review did not review and the findings it dropped'],
+    ],
+  },
+  'finding-detail': {
+    actions: ['start'],
+    tests: [
+      [RUNS, 'shows its description, recommendation, line with the related lines, provenance, confidence and source'],
+      [PAGE, 'shows each finding\'s line, provenance, confidence and source, its description and its recommendation, as text'],
+    ],
+  },
+  'title-key-alternative': {
+    actions: ['ticket-key', 'recheck'],
+    tests: [
+      [RUNS, 'names the title\'s key on the failure line, offers it on the first step and the results, and Re-check reads it after the switch'],
+      [RUNS, 'offers nothing when the title names the same key, or no key'],
+      [PAGE, 'on the results, offers the key the pull request title names when the ticket in use was not found, and Use sends it as the ticket key'],
+      [PAGE, 'on the first step, offers the title\'s key the same way, and offers nothing without one'],
+    ],
   },
 };
 

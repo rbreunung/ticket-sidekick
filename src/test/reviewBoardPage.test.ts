@@ -517,3 +517,78 @@ describe('the review start screen page', () => {
     expect(must('open').disabled).toBe(true);
   });
 });
+
+describe('the review board page: what was not reviewed, the finding detail and the title\'s ticket key', () => {
+  const SOURCES = [
+    { id: 'ticket' as const, label: 'Jira ticket', available: true },
+    { id: 'goal' as const, label: 'A goal', available: true },
+    { id: 'none' as const, label: 'None', available: true },
+  ];
+
+  it('lists what the passes did not review and the findings they dropped under the banners, as text', async () => {
+    const crafted = '<b>src/evil.ts</b>';
+    await loadBoard(boardState(view({
+      stage: 'review',
+      results: results({
+        statuses: ['1 of 3 batches of the regular pass had a part that failed; the findings of the others are shown.'],
+        notes: [
+          `regular batch 2/3 — could not review ${crafted} after retrying: overloaded`,
+          '1 finding was dropped because it named a file outside this pull request.',
+          '2 findings were removed by the critic as unverifiable: #3, #4.',
+        ],
+      }),
+    })));
+    expect(must('review-note-0').textContent).toBe(`regular batch 2/3 — could not review ${crafted} after retrying: overloaded`);
+    expect(must('review-note-1').textContent).toBe('1 finding was dropped because it named a file outside this pull request.');
+    expect(must('review-note-2').textContent).toBe('2 findings were removed by the critic as unverifiable: #3, #4.');
+    const order = page.root.elements().map(el => el.id).filter(id => ['pass-status-0', 'review-notes', 'findings'].includes(id));
+    expect(order).toEqual(['pass-status-0', 'review-notes', 'findings']);
+    expect(page.document.body.elements().some(el => el.tagName === 'b')).toBe(false);
+  });
+
+  it('shows no notes section when nothing was left out', async () => {
+    await loadBoard(boardState(view({ stage: 'review', results: results({ notes: [] }) })));
+    expect(byId('review-notes')).toBeNull();
+  });
+
+  it('shows each finding\'s line, provenance, confidence and source, its description and its recommendation, as text', async () => {
+    const crafted = '<img src=x onerror=alert(1)> [click](https://evil.example)';
+    await loadBoard(boardState(view({
+      stage: 'review',
+      results: results({
+        findings: [{
+          number: 2, severity: 'critical', location: 'src/a.ts:19', title: 'SQL built from input', markers: [], selected: false,
+          facts: ['L19 (also L12, L15)', 'new code', 'confidence 0.9', 'source: security, general'],
+          description: `The id reaches the query unchecked. ${crafted}`, recommendation: 'Use a bound parameter.',
+        }],
+      }),
+    })));
+    expect(must('facts-2').textContent).toBe('L19 (also L12, L15) · new code · confidence 0.9 · source: security, general');
+    expect(must('description-2').textContent).toBe(`The id reaches the query unchecked. ${crafted}`);
+    expect(must('recommendation-2').textContent).toBe('Recommendation: Use a bound parameter.');
+    expect(page.document.body.elements().some(el => el.tagName === 'img' || el.tagName === 'a')).toBe(false);
+  });
+
+  it('on the results, offers the key the pull request title names when the ticket in use was not found, and Use sends it as the ticket key', async () => {
+    await loadBoard(boardState(view({
+      stage: 'review',
+      results: results({
+        requirementsLine: 'The requirements check did not run: the ticket PROJ-99 could not be read (Issue does not exist). The findings stand. The pull request title names PROJ-12 instead.',
+        requirementsForm: { sources: SOURCES, source: 'ticket', ticketKey: 'PROJ-99', goal: '', points: '', pointsFromOtherGoal: false, canReword: false, titleKey: 'PROJ-12' },
+        canRecheck: true,
+      }),
+    })));
+    expect(must('title-key').textContent).toBe('PROJ-99 was not found. The pull request title names PROJ-12. Use PROJ-12');
+    await click(must('use-title-key'));
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'ticket-key', key: 'PROJ-12' } }]);
+  });
+
+  it('on the first step, offers the title\'s key the same way, and offers nothing without one', async () => {
+    await loadBoard(boardState(view({ firstStep: firstStep({ sources: SOURCES, source: 'ticket', ticketKey: 'PROJ-99', titleKey: 'PROJ-12' }) })));
+    await click(must('use-title-key'));
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'ticket-key', key: 'PROJ-12' } }]);
+
+    await push({ view: view({ firstStep: firstStep({ sources: SOURCES, source: 'ticket', ticketKey: 'PROJ-12' }) }) });
+    expect(byId('title-key')).toBeNull();
+  });
+});

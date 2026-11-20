@@ -182,6 +182,33 @@ afterEach(() => {
 });
 
 describe('bitbucket_read_findings', () => {
+  it('names in the summary what the review did not review and the findings it dropped', async () => {
+    const id = await reviewOnBoard();
+    await storeWork(id, working => ({
+      ...working,
+      passes: [
+        { ...working.passes[0], notes: ['regular batch 2/3 — could not review src/report.ts after retrying: overloaded', '1 file excluded by pattern.'], droppedOutsidePr: 2 },
+        { ...working.passes[0], step: 'critic', notes: [], droppedOutsidePr: 0, removed: [4], run: 2 },
+      ],
+    }));
+
+    const result = await callTool(tool('bitbucket_read_findings'), { url: PR_URL }, toolDeps());
+
+    expect(result.text).toContain([
+      'Not reviewed or dropped:',
+      '- regular batch 2/3 — could not review src/report.ts after retrying: overloaded',
+      '- 1 file excluded by pattern.',
+      '- 2 findings were dropped because they named files outside this pull request.',
+      '- 1 finding was removed by the critic as unverifiable: #4.',
+    ].join('\n'));
+  });
+
+  it('says nothing about dropped findings when the review left nothing out', async () => {
+    await reviewOnBoard();
+    const result = await callTool(tool('bitbucket_read_findings'), { url: PR_URL }, toolDeps());
+    expect(result.text).not.toContain('Not reviewed or dropped');
+  });
+
   it('for a stored review answers the counts by severity, the passes run, the verdict and the coverage summary, and starts no check', async () => {
     await reviewOnBoard();
     const restarted = manager();

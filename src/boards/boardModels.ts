@@ -44,6 +44,12 @@ export interface BoardModelRequestOptions {
 export interface BoardModelHandle {
   readonly id: string;
   readonly maxInputTokens: number;
+  /** Who the model is, for the review's diagnostic lines. */
+  readonly vendor?: string;
+  readonly family?: string;
+  readonly version?: string;
+  /** Whether the host handed the model over as a frozen object (logged; the token meter copes with it). */
+  readonly frozen?: boolean;
   countTokens(text: string | BoardChatMessage): Promise<number>;
   sendRequest(messages: BoardChatMessage[], options: BoardModelRequestOptions): Promise<{ text: AsyncIterable<string> }>;
 }
@@ -72,6 +78,10 @@ export interface CancellationSourceLike<Token> {
 export interface CancellableChatModel<Token> {
   readonly id: string;
   readonly maxInputTokens: number;
+  readonly vendor?: string;
+  readonly family?: string;
+  readonly version?: string;
+  readonly frozen?: boolean;
   countTokens(text: string | BoardChatMessage): PromiseLike<number>;
   sendRequest(messages: BoardChatMessage[], token: Token): PromiseLike<{ text: AsyncIterable<string> }>;
 }
@@ -86,6 +96,10 @@ export function modelHandle<Token>(model: CancellableChatModel<Token>, newCancel
   return {
     id: model.id,
     maxInputTokens: model.maxInputTokens,
+    ...(model.vendor !== undefined ? { vendor: model.vendor } : {}),
+    ...(model.family !== undefined ? { family: model.family } : {}),
+    ...(model.version !== undefined ? { version: model.version } : {}),
+    ...(model.frozen !== undefined ? { frozen: model.frozen } : {}),
     countTokens: async text => model.countTokens(text),
     sendRequest: async (messages, { signal }) => {
       if (signal.aborted) throw new ModelRequestCancelledError();

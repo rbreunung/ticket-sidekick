@@ -2,11 +2,14 @@ import { announce, api, h, startBoard } from '../shared/board.js';
 
 // The pull request review board, one column. The first step: the model, the requirements source
 // (a Jira ticket, a goal or none), the goal and its rewording, and an optional question; nothing runs
-// before Start, and only Reword calls the model before it. After the regular pass: a header line
+// before Start, and only Reword calls the model before it. When the ticket key in use was not found
+// and the pull request title names another, Use <key> switches to it. After the regular pass: a header line
 // (pull request, model, requirements source, passes run) with the token usage per pass, the banners
 // of the last run, the pass suggestion and picker, the requirements source (changeable, with the goal
 // and its rewording) and Re-check, the coverage block (or why the requirements check gave none), the
-// findings, and Run again. Each finding has Explain, a checkbox that selects it for Post and Copy
+// findings, and Run again. Under the banners, what the passes did not review and the findings they
+// dropped. Each finding shows its line, provenance, confidence and source, its description and
+// recommendation, and has Explain, a checkbox that selects it for Post and Copy
 // (and drafts its comment under it), the draft with Rewrite, Undo and Regenerate; after the list,
 // Post and Copy for Teams or as Markdown. Copy names only the format and the selected numbers: the
 // extension builds the text. While a pass runs, the live region reads its progress, e.g.
@@ -100,8 +103,16 @@ function sourceRow(step, board, off) {
 }
 
 function ticketRow(step, board, off) {
-  return h('div', { class: 'bar' },
-    h('label', {}, 'Ticket key', fieldInput('input', 'ticket-key', step.ticketKey, board, off, { type: 'text', size: 16, placeholder: 'PROJ-123', 'aria-label': 'Ticket key' })));
+  return [
+    h('div', { class: 'bar' },
+      h('label', {}, 'Ticket key', fieldInput('input', 'ticket-key', step.ticketKey, board, off, { type: 'text', size: 16, placeholder: 'PROJ-123', 'aria-label': 'Ticket key' }))),
+    // The key in use could not be found, and the pull request title names another: one press switches to it.
+    step.titleKey ? h('p', { id: 'title-key', class: 'muted' }, `${step.ticketKey} was not found. The pull request title names ${step.titleKey}. `,
+      h('vscode-button', {
+        id: 'use-title-key', secondary: true, disabled: off,
+        onClick: async () => { delete typed['ticket-key']; await saving; await board.act({ type: 'ticket-key', key: step.titleKey }); },
+      }, `Use ${step.titleKey}`)) : null,
+  ];
 }
 
 /** The goal, Reword and the reworded points; `before` names the button the points are corrected for. */
@@ -239,6 +250,9 @@ function findingItem(f, r, board, off) {
     h('span', { class: 'location' }, f.location), ' ',
     h('span', { class: 'title' }, f.title),
     f.markers.length ? h('span', { class: 'muted markers' }, ` (${f.markers.join(', ')})`) : null,
+    f.facts?.length ? h('p', { id: `facts-${n}`, class: 'muted facts' }, f.facts.join(' · ')) : null,
+    f.description ? h('p', { id: `description-${n}`, class: 'description' }, f.description) : null,
+    f.recommendation ? h('p', { id: `recommendation-${n}`, class: 'recommendation' }, `Recommendation: ${f.recommendation}`) : null,
     ' ', h('vscode-button', {
       id: `explain-${n}`, secondary: true, disabled: off || explaining,
       onClick: () => afterSaving(board, draftFields(r), () => board.run({ type: 'explain', number: n })),
@@ -298,6 +312,9 @@ function results(view, board, off) {
     r.outOfDate ? h('p', { id: 'out-of-date', class: 'banner', role: 'status' },
       `Out of date: the pull request has a new commit (${r.outOfDate.head}) since this review read ${r.outOfDate.reviewed}. Nothing runs by itself; Run again reviews it at the new commit.`) : null,
     r.statuses.map((line, i) => h('p', { id: `pass-status-${i}`, class: 'banner' }, line)),
+    r.notes?.length ? h('section', { id: 'review-notes', 'aria-label': 'Not reviewed and dropped' },
+      h('h2', {}, 'Not reviewed and dropped'),
+      h('ul', {}, r.notes.map((line, i) => h('li', { id: `review-note-${i}` }, line)))) : null,
     r.notice ? h('p', { id: 'review-notice', class: 'banner', role: 'status' }, r.notice) : null,
     r.hasReview ? [
       r.picker ? passPicker(r.picker, board, off) : null,

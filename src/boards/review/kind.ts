@@ -15,7 +15,7 @@ import {
 import { REVIEW_KIND, reviewRecipeOf, type ReviewRecipe } from './recipe';
 import {
   EXTRA_STEPS, STEP_LABELS, extraPassesRun, interruptedWorking, joinNames, modelFor, modelIdOf, pickedSteps, recheckRun, regularRun,
-  stepBlocker, stepName,
+  reviewNotes, stepBlocker, stepName,
 } from './runs';
 import {
   FINDING_ACTIONS, applyPost, beginFindingRun, draftOutdated, findingRun, isFindingRun, planPost, postableNumbers, reduceFindings, selectedNumbers,
@@ -155,6 +155,10 @@ export interface FindingView {
   severity: StoredFinding['severity'];
   location: string;
   title: string;
+  description: string;
+  recommendation: string;
+  /** The line with its related lines ("L19 (also L12, L15)"), the provenance, the confidence and the source. */
+  facts: string[];
   /** Low confidence, location unverified, probably a false alarm. */
   markers: string[];
   selected: boolean;
@@ -176,6 +180,8 @@ export interface FirstStepView {
   notice?: string;
   canReword: boolean;
   rewordBlocker?: string;
+  /** The key the pull request title names, offered when the ticket key in use could not be found. */
+  titleKey?: string;
   canStart: boolean;
   startBlocker?: string;
   /** A review is stored: Start replaces it, Back to the review shows it again. */
@@ -193,6 +199,8 @@ export interface RequirementsFormView {
   rewordError?: string;
   canReword: boolean;
   rewordBlocker?: string;
+  /** The key the pull request title names, offered when the ticket key in use could not be found. */
+  titleKey?: string;
   /** Why Re-check cannot run now. */
   recheckBlocker?: string;
 }
@@ -224,6 +232,8 @@ export interface ReviewResultsView {
   outOfDate?: { reviewed: string; head: string };
   /** How the passes of the last run ended, for each that did not go over every batch cleanly. */
   statuses: string[];
+  /** What the passes did not review and the findings they dropped. */
+  notes: string[];
   notice?: string;
   /** There is a review to show; false after a regular pass that found nothing it could read. */
   hasReview: boolean;
@@ -313,10 +323,11 @@ function statusLine(pass: PassRecord): string | undefined {
   }
 }
 
-function requirementsLine(outcome: RequirementsOutcome | undefined): string | undefined {
+function requirementsLine(outcome: RequirementsOutcome | undefined, titleKey: string | undefined): string | undefined {
   switch (outcome?.status) {
     case 'ticket-unreadable':
-      return `The requirements check did not run: the ticket ${outcome.key} could not be read (${outcome.message}). The findings stand.`;
+      return `The requirements check did not run: the ticket ${outcome.key} could not be read (${outcome.message}). The findings stand.`
+        + (titleKey ? ` The pull request title names ${titleKey} instead.` : '');
     case 'failed':
       return 'The requirements check failed: the model call failed or its reply could not be read. The findings stand.';
     case 'stopped':
@@ -340,6 +351,20 @@ function draftView(working: ReviewWorking, number: number): DraftView | undefine
   };
 }
 
+const PROVENANCE_TEXT: Record<NonNullable<StoredFinding['provenance']>, string> = { new: 'new code', existing: 'existing code', removed: 'removed code' };
+const SOURCE_ORDER = [...EXTRA_STEPS.filter(step => step !== 'critic'), 'general'];
+
+/** The line with its related lines, the provenance, the confidence and the passes that found it. */
+function findingFacts(f: StoredFinding): string[] {
+  const facts: string[] = [];
+  if (f.line && !f.locationUnverified) facts.push(`L${f.line}${f.relatedLines?.length ? ` (also ${f.relatedLines.map(l => `L${l}`).join(', ')})` : ''}`);
+  if (f.provenance) facts.push(PROVENANCE_TEXT[f.provenance]);
+  if (typeof f.confidence === 'number') facts.push(`confidence ${f.confidence}`);
+  const sources = SOURCE_ORDER.filter(tag => (f.sources ?? ['general']).includes(tag as never));
+  if (sources.length > 0) facts.push(`source: ${sources.join(', ')}`);
+  return facts;
+}
+
 function findingView(f: StoredFinding, threshold: number, working: ReviewWorking, selected: number[]): FindingView {
   const markers: string[] = [];
   if (f.locationUnverified) markers.push('location unverified');
@@ -350,6 +375,9 @@ function findingView(f: StoredFinding, threshold: number, working: ReviewWorking
     severity: f.severity,
     location: f.locationUnverified ? f.file : f.line ? `${f.file}:${f.line}` : f.file,
     title: f.title,
+    description: f.description ?? '',
+    recommendation: f.recommendation ?? '',
+    facts: findingFacts(f),
     markers,
     selected: selected.includes(f.id),
     ...(working.explanations[String(f.id)] ? { explanation: working.explanations[String(f.id)].text } : {}),
@@ -388,7 +416,7 @@ function resultsView(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking
   const lastRun = working.passes[working.passes.length - 1]?.run;
   const threshold = startedWith?.confidenceThreshold ?? 0.7;
   const statuses = working.passes.filter(p => p.run === lastRun).map(statusLine).filter((line): line is string => line !== undefined);
-  const line = review ? requirementsLine(working.requirements) : undefined;
+  const line = review ? requirementsLine(working.requirements, titleKeyOffer(session, false)) : undefined;
   const recheck = recheckBlocker(session);
   const tokens = working.passes.filter(p => p.tokens.calls > 0).map(p => ({ pass: p.step === 'critic' ? 'Critic' : `${STEP_LABELS[p.step]} pass`, text: tokenText(p.tokens) }));
   if (working.recheckTokens && working.recheckTokens.calls > 0) tokens.push({ pass: 'Requirements re-check', text: tokenText(working.recheckTokens) });
@@ -403,6 +431,7 @@ function resultsView(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking
     ...(review && review.snapshot.reviewedCommit !== derived.data.pr.headCommit
       ? { outOfDate: { reviewed: shortCommit(review.snapshot.reviewedCommit), head: shortCommit(derived.data.pr.headCommit) } } : {}),
     statuses,
+    notes: reviewNotes(working.passes),
     ...(working.notice ? { notice: working.notice } : {}),
     hasReview: review !== undefined,
     ...(review ? { picker: pickerView(working, review) } : {}),
@@ -433,11 +462,29 @@ function progressText(working: ReviewWorking): string | undefined {
   return active.total > 0 ? `${name}: ${active.done} of ${active.total} batches` : `${name}: starting`;
 }
 
+/**
+ * The key the pull request title names, when the ticket the last check tried could not be found and
+ * the title names another. With `current`, only while that ticket's key is still the one in use.
+ */
+function titleKeyOffer(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>, current: boolean): string | undefined {
+  const outcome = session.working.requirements;
+  if (outcome?.status !== 'ticket-unreadable' || outcome.reason !== 'not-found') return undefined;
+  const titleKey = findJiraKeyInText(session.derived.data.pr.title);
+  if (!titleKey || titleKey === outcome.key) return undefined;
+  if (current) {
+    const ctx = contextOf(session);
+    const step = session.working.firstStep;
+    if (sourceOf(step, ctx) !== 'ticket' || ticketKeyOf(step, ctx) !== outcome.key) return undefined;
+  }
+  return titleKey;
+}
+
 /** The requirements source as the first step and the results show it. */
 function sourceFields(session: Session<ReviewRecipe, ReviewDerived, ReviewWorking>): RequirementsFormView {
   const step = session.working.firstStep;
   const ctx = contextOf(session);
   const reword = rewordBlocker(step, ctx);
+  const titleKey = titleKeyOffer(session, true);
   return {
     sources: [
       { id: 'ticket', label: 'Jira ticket', available: ctx.jiraConfigured, ...(ctx.jiraConfigured ? {} : { reason: JIRA_NOT_CONFIGURED_REASON }) },
@@ -452,6 +499,7 @@ function sourceFields(session: Session<ReviewRecipe, ReviewDerived, ReviewWorkin
     ...(step.rewordError ? { rewordError: step.rewordError } : {}),
     canReword: !reword,
     ...(reword ? { rewordBlocker: reword } : {}),
+    ...(titleKey ? { titleKey } : {}),
   };
 }
 

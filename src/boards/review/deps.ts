@@ -29,6 +29,8 @@ export interface ReviewBoardDeps {
   onReviewCompleted?(): void | PromiseLike<void>;
   now(): number;
   onDiag?: DiagLogger;
+  /** The review passes' diagnostic timeline: the configuration, every model call, retries, the findings funnel. */
+  reviewDiag?: DiagLogger;
   /** Waits between retries; tests pass one that does not wait. */
   sleep?(ms: number): Promise<void>;
 }

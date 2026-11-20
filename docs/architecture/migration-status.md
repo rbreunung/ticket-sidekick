@@ -141,6 +141,8 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 | `finding-match` | Dropped | Scope: the extension's call that matches a free-text question to a finding; the agent does it from the findings list |
 | `done`, `cancel` | Dropped | Scope: the reply words; a board is left by closing its tab |
 | `smart-fallback-reply` | Dropped | Scope: the smart-mode fallback question and its replies `all` and `standard`; a review with no usable recommendation says so and the developer picks passes |
+| `greeting` | Dropped | Dropped by the maintainer on 2026-11-20: the chat greeting is chat-only; `/ts-bitbucket help` covers what it said |
+| `empty-prompt` | Dropped | Dropped by the maintainer on 2026-11-20: the guidance for an empty prompt is chat-only; `/ts-bitbucket help` covers it |
 
 **Follow-up chips**
 
@@ -189,6 +191,8 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 | `ticketSidekick.bitbucket.confidenceThreshold` | Carry over | Below it a finding is marked low confidence |
 | `ticketSidekick.bitbucket.reviewMode` | Dropped | The staged review replaces the modes (a settled decision); the setting is removed with `@bitbucket` |
 | `ticketSidekick.bitbucket.showTokenUsage` | Dropped | The board always shows the token usage per pass (the plan's decision on this setting); see `token-footer` |
+| `ticketSidekick.bitbucket.detailedDiagnostics` | Carry over | Each pass of a board review also writes its structured run record (configuration, every call and event line, the findings funnel) to the output channel |
+| `ticketSidekick.bitbucket.showConnectionInfo` | Dropped | Dropped by the maintainer on 2026-11-20: the base URL and auth line under each answer; `bitbucket_check_connection` reports the settings |
 
 **Pipeline rules** (from `docs/review-process.md`)
 
@@ -219,6 +223,10 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 | `monthly-counters` | Carry over | Per month and model, the current month and the two before |
 | `token-footer` | Carry over | The board shows the token usage per pass |
 | `review-completed` | Carry over | The first finished review sets the context key the Bitbucket walkthrough waits for |
+| `diagnostic-timeline` | Carry over | Every pass logs to the output channel under `bitbucket.review`: its configuration (model, token budget and ratio, the pass, critic, context lines), the model in use with metering and frozen state, one line per model call (pass, batch, attempt, sizes, duration, status), the retry, split and give-up decisions, a cut-off reply, the findings funnel, "no file could be reviewed" and the last stage of an aborted pass |
+| `not-reviewed-notes` | Carry over | The board, under the banners, and the read-findings summary list what was not reviewed (cut short, not fetched, excluded, no text change, a failed batch part with its files, "after retrying" only for a transient error), the findings dropped for naming a file outside the PR and the findings the critic removed |
+| `finding-detail` | Carry over | Under each finding: its description, recommendation, line with the related lines ("L19 (also L12, L15)"), provenance (new, existing or removed code), confidence and source, as text |
+| `title-key-alternative` | Carry over | When the ticket key in use is not found and the PR title names another, the failure line says so, and the first step and the results offer Use with that key, which sets the ticket key for Start or Re-check |
 
 ### Across all steps
 

@@ -4,7 +4,8 @@ import type { RequirementsSource, RequirementsTicket } from '../../utils/require
 import type { RequirementsCoverage } from '../requirementsCoverage';
 import { runRequirementsPass } from '../requirementsPass';
 import { readTicketGuarded } from '../ticketRead';
-import type { FileDiff } from '../reviewSessionState';
+import { buildRunTag, type FileDiff } from '../reviewSessionState';
+import { logAborted, logPassOpening, writeRunRecord } from './diagnostics';
 import { callWithRetry, fetchAndBudgetContextFiles, isStop, passContext, serviceFor, tokenBudgetOf, type PassContext } from './plumbing';
 import { snapshotFiles } from './snapshot';
 import type { EngineDeps, EngineSettings, RequirementsChoice, RequirementsOutcome, StagedReview, TokenTotals } from './types';
@@ -66,12 +67,12 @@ export async function checkRequirements(p: RequirementsCheckParams): Promise<{ o
   const notes: string[] = [];
   try {
     const coverage = await runRequirementsPass({
-      pr: p.pr, ticket, fileDiffs: p.files, service: p.service, runTag: `pr=${p.target.project}/${p.target.repo}#${p.pr.id}`,
-      tokenBudget: p.tokenBudget, ...(userGoal ? { userGoal } : {}),
+      pr: p.pr, ticket, fileDiffs: p.files, service: p.service,
+      runTag: ctx.runTag, tokenBudget: p.tokenBudget, ...(userGoal ? { userGoal } : {}),
       logReview: (level, message, details) => ctx.log(level, message, details),
       stream: { markdown: (text) => { notes.push(text); } },
     }, {
-      callModel: (prompt, round, _diag, validate) => callWithRetry(ctx, prompt, `requirements round ${round}`, validate),
+      callModel: (prompt, round, hooks, validate) => callWithRetry(ctx, prompt, `requirements round ${round}`, validate, { hooks }),
       fetchContextFiles: (requested, shown) => fetchAndBudgetContextFiles({
         requested, cache: p.cache, service: p.service, project: p.target.project, repo: p.target.repo,
         commit: p.pr.fromCommitHash, tokenBudget: p.tokenBudget, budgetAgainst: shown,
@@ -94,16 +95,27 @@ export async function checkRequirements(p: RequirementsCheckParams): Promise<{ o
 export async function recheckRequirements(
   review: StagedReview, choice: RequirementsChoice, settings: EngineSettings, deps: EngineDeps,
 ): Promise<{ review: StagedReview; outcome: RequirementsOutcome; tokens: TokenTotals }> {
-  const ctx = passContext(deps);
   const { snapshot } = review;
+  const { target } = snapshot;
+  const ctx = passContext(deps, { runTag: buildRunTag(target.project, target.repo, target.prId), detailedDiagnostics: settings.detailedDiagnostics });
   if (choice.kind === 'none') {
     const { coverage: _dropped, ...rest } = review;
     return { review: { ...rest, requirements: choice }, outcome: { status: 'not-run' }, tokens: ctx.meter.totals() };
   }
-  const result = await checkRequirements({
-    ctx, deps, service: serviceFor(deps), pr: { ...snapshot.pr, fromCommitHash: snapshot.reviewedCommit },
-    target: snapshot.target, files: snapshotFiles(snapshot), choice, tokenBudget: tokenBudgetOf(settings, deps.model), cache: new Map(),
-  });
+  const tokenBudget = tokenBudgetOf(settings, deps.model);
+  logPassOpening(ctx, { step: 'requirements', model: deps.model, meter: ctx.meter, settings, tokenBudget });
+  ctx.stage = 'requirements check';
+  let result: Awaited<ReturnType<typeof checkRequirements>>;
+  try {
+    result = await checkRequirements({
+      ctx, deps, service: serviceFor(deps), pr: { ...snapshot.pr, fromCommitHash: snapshot.reviewedCommit },
+      target, files: snapshotFiles(snapshot), choice, tokenBudget, cache: new Map(),
+    });
+  } catch (err) {
+    if (!isStop(err, deps.signal)) logAborted(ctx, err);
+    throw err;
+  }
+  writeRunRecord(ctx, `(requirements check only: ${result.outcome.status})`);
   const next: StagedReview = result.coverage ? { ...review, requirements: choice, coverage: result.coverage } : review;
   return { review: next, outcome: result.outcome, tokens: ctx.meter.totals() };
 }
