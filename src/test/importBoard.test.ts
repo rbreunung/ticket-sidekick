@@ -131,7 +131,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await fs.promises.rm(dir, { recursive: true, force: true });
+  await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 function writeVeracode(flaws: Flaw[], name = 'report.xml'): string {
@@ -424,7 +424,7 @@ describe('a report file that is gone', () => {
     manager = makeManager();
   });
   afterEach(async () => {
-    await fs.promises.rm(storeDir, { recursive: true, force: true });
+    await fs.promises.rm(storeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
 
   it('blocks writes and keeps the stored rows; picking the file at its new place keeps the choices and the new path finds the same session', async () => {
