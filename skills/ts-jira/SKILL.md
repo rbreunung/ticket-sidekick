@@ -2,7 +2,7 @@
 name: ts-jira
 description: Runs one Jira command you type, e.g. /ts-jira load PROJ-123. /ts-jira help lists the commands.
 disable-model-invocation: true
-argument-hint: help|load|view|search|cleanup|filters|comment|field|fields|check-fields|move|workflow|templates|upload|check|security-report|sessions|import <arguments>
+argument-hint: help|load|view|search|cleanup|filters|comment|field|fields|check-fields|move|workflow|templates|upload|check|security-report|sessions|create|import <arguments>
 ---
 
 The user typed after /ts-jira: `$ARGUMENTS`
@@ -36,7 +36,8 @@ Usage: /ts-jira <command> [arguments]
   check                       check the Jira connection
   security-report [PROJECT]   open the security report in its own tab
   sessions                    open the stored sessions in their own tab
-  import <kind> [PATH ...]    import a veracode or waltz report, or emails, in its own tab
+  create [from <kind>] [PATH ...]  create tickets from emails or a veracode or waltz report on the Jira Import Board
+  import <kind> [PATH ...]    same as create from <kind>
 ------------------------------------------------------------------
 Without KEY, load and view use the ticket of the git branch.
 A brief, a guided create, a spell check or a template: help brief, help create, help spell-check, help template
@@ -61,6 +62,7 @@ A brief, a guided create, a spell check or a template: help brief, help create, 
 | check | `jira_check_connection` |
 | security-report [PROJECT] | `jira_open_board` with board `security-report`, and the project as `project` when one is typed |
 | sessions | `jira_open_board` with board `sessions` |
+| create [from <kind>] [PATH ...] | With a kind (`veracode`, `waltz` or `email`, after an optional `from`): the same call as the `import` row (`jira_open_board` with board `import`), with that kind and the paths. Without a kind: call no tool and reply with the text of `help-create.md` exactly, as for `help create` |
 | import <kind> [PATH ...] | `jira_open_board` with board `import` and the kind (`veracode`, `waltz` or `email`) as `kind`. For `veracode` or `waltz`, the path as `path` when one is typed. For `email`, every typed or attached `.eml` path as `paths`, and `dragged` true when the user attached the emails to the message |
 
 For a `jira_open_board` row, reply with only the status the tool returns; never build the report or the list yourself from other tools.

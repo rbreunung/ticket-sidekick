@@ -425,6 +425,35 @@ describe('the /ts-bitbucket command skill, specifically', () => {
   });
 });
 
+describe('/ts-jira create, the natural name for an import', () => {
+  const router = readFileSync(resolve(root, 'skills/ts-jira/SKILL.md'), 'utf-8');
+  const rows = tableRows(router);
+  const row = (command: string) => rows.find(r => r.command === command);
+
+  it('opens the import board with a kind, like import does', () => {
+    expect(row('create')?.action).toContain(OPEN_BOARD_TOOL);
+    expect(row('create')?.action).toMatch(/same call as the `import` row/);
+    expect(row('import')?.action).toContain(OPEN_BOARD_TOOL);
+  });
+
+  it('answers a bare create with the page that lists every way to create, calling no tool', () => {
+    expect(row('create')?.action).toMatch(/Without a kind: call no tool and reply with the text of `help-create\.md` exactly/);
+  });
+
+  it('lists the create line before the import line in the help, naming them as one command', () => {
+    const help = router.slice(router.indexOf('Usage: /ts-jira'), router.indexOf('```', router.indexOf('Usage: /ts-jira')));
+    expect(help).toMatch(/^ {2}create \[from <kind>\] \[PATH \.\.\.\] +.*Jira Import Board/m);
+    expect(help).toMatch(/^ {2}import <kind> \[PATH \.\.\.\] +same as create from <kind>$/m);
+  });
+
+  it('names the guided create and every create from <kind> on the help create page', () => {
+    const page = readFileSync(resolve(root, 'skills/ts-jira/help-create.md'), 'utf-8');
+    expect(page).toContain('/ts-jira-create');
+    for (const kind of ['email', 'veracode', 'waltz']) expect(page).toContain(`/ts-jira create from ${kind}`);
+    expect(page).toContain('Jira Import Board');
+  });
+});
+
 describe('the help pages /ts-jira prints for its skills', () => {
   const pages = [
     { file: 'help-brief.md', skill: 'ts-jira-brief', plain: '/ts-jira view', started: 'Copilot runs /ts-jira-brief only when you type it.' },
