@@ -8,7 +8,7 @@ Copilot also starts it by itself when you ask for a new ticket in your own words
 
 Without it: Copilot can call the create ticket tool directly with a template or issue type you name. The tool never guesses the issue type, and Copilot asks you before it creates anything.
 
-From emails or a security report: these open the Jira Import Board, where you preview the tickets before anything is created. Copilot also opens it when you ask for tickets with an .eml, Veracode or Waltz file attached.
+From emails or a Veracode or Waltz report: these open the Jira Import Board, where you preview the tickets before anything is created. Copilot also opens it when you ask for tickets with an .eml, Veracode or Waltz file attached.
 
 /ts-jira create from email [PATH ...]      tickets or comments from .eml files (typed paths or attached emails)
 /ts-jira create from veracode [PATH]       tickets from a Veracode Detailed Report (.xml)

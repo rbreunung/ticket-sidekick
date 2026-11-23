@@ -285,6 +285,7 @@ describe('the /ts-jira-create skill', () => {
     expect(create).toMatch(/board `import`/);
     expect(create).toMatch(/`dragged` true/);
     expect(create).toMatch(/Email text pasted into the chat, with no file, is not such a request/);
+    expect(create).toMatch(/neither is a file that is only the subject of the ticket/);
   });
 
   it('asks only for what is missing, never picks the issue type, and shows the draft before creating', () => {
