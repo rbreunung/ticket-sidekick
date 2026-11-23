@@ -232,8 +232,7 @@ const skillNames = contributedSkills.map(s => basename(dirname(s.path)));
 
 describe('basic @jira commands without @jira', () => {
   it('maps every former @jira command to tools and skills that exist, and @jira is gone', () => {
-    const jira = pkg.contributes.chatParticipants.find((p: { id: string }) => p.id === 'ticket-sidekick.jira');
-    expect(jira).toBeUndefined();
+    expect(pkg.contributes.chatParticipants).toBeUndefined();
     expect(coverageGaps(BASIC_COMMANDS, catalogNames, skillNames)).toEqual([]);
   });
 

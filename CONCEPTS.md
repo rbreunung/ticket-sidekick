@@ -37,8 +37,8 @@ An open Jira ticket carrying an importer's marker label whose findings are all g
 
 ## Copilot Chat Surfaces
 
-### Chat participant (deprecated)
-`@jira` and `@bitbucket`: the chat entry points the extension started with, replaced by extension tools, `/ts-jira` commands and boards. `@jira` was removed on 2026-11-16, once the email import moved to the import board. `@bitbucket` is deprecated and removed once the pull request review has a board. Nothing new is built on it.
+### Chat participant (removed)
+`@jira` and `@bitbucket`: the chat entry points the extension started with, replaced by extension tools, the `/ts-jira` and `/ts-bitbucket` commands and boards. `@jira` was removed on 2026-11-16, once the email import moved to the import board, and `@bitbucket` on 2026-11-23, once the pull request review had its board. The extension declares no chat participant.
 
 ### Security report
 A project's unresolved Veracode and Waltz tickets grouped by Fix Version, with Due Date flags (overdue, due before release), shown by the security report board and saved as CSV or Excel; the import board saves the same overview for one report. Code and developer docs call the same thing the "security overview".

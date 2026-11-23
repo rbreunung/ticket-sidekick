@@ -22,7 +22,6 @@ import {
   buildPrContextPrompt,
   buildDiffAwarePrompt,
   buildFindingFollowUpPrompt,
-  parseFindingMatchReply,
   buildStoredReviewDiff,
   formatCallLine,
   formatFindingsFunnel,
@@ -40,11 +39,6 @@ import {
   formatDroppedFindingsNotice,
   mergePass2Findings,
 } from '../review/reviewSessionState';
-import {
-  hasPrUrl,
-  parseFollowUpIntent,
-  extractPromptDirectives,
-} from '../participant/reviewSessionState';
 import type { ReviewFinding, SourceTag } from '../review/reviewSessionState';
 import { PrReviewService, PERSONAS } from '../services/PrReviewService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
@@ -76,24 +70,6 @@ describe('parsePrUrl', () => {
 
   it('returns null for an unrecognised URL', () => {
     expect(parsePrUrl('https://github.com/user/repo/pull/1')).toBeNull();
-  });
-});
-
-describe('hasPrUrl', () => {
-  it('returns true for a Data Center PR URL in a plain prompt', () => {
-    expect(hasPrUrl('https://bitbucket.company.com/projects/PROJ/repos/myrepo/pull-requests/42')).toBe(true);
-  });
-  it('returns true for a Cloud PR URL embedded in surrounding text', () => {
-    expect(hasPrUrl('please review https://bitbucket.org/workspace/repo/pull-requests/7 thanks')).toBe(true);
-  });
-  it('returns false for a follow-up question with no URL', () => {
-    expect(hasPrUrl('can you explain finding #2?')).toBe(false);
-  });
-  it('returns false for a non-PR URL', () => {
-    expect(hasPrUrl('https://bitbucket.company.com/projects/PROJ/repos/myrepo/browse')).toBe(false);
-  });
-  it('returns false for an empty string', () => {
-    expect(hasPrUrl('')).toBe(false);
   });
 });
 
@@ -1020,140 +996,6 @@ describe('dcDiffToUnified', () => {
   });
 });
 
-
-describe('parseFollowUpIntent', () => {
-  describe('copy intent', () => {
-    it.each(['copy', 'Copy for Teams', 'copy all', 'share', 'copy to teams', 'copy the review', 'copy all findings for Teams'])(
-      'reads "%s" as a request to copy the whole review',
-      (message) => {
-        expect(parseFollowUpIntent(message)).toEqual({ kind: 'copy', targets: 'all' });
-      },
-    );
-
-    it('copies only the referenced findings, in the order given', () => {
-      expect(parseFollowUpIntent('copy #1 #3')).toEqual({ kind: 'copy', targets: [1, 3] });
-      expect(parseFollowUpIntent('copy #3, #1')).toEqual({ kind: 'copy', targets: [3, 1] });
-      expect(parseFollowUpIntent('copy #2 #2')).toEqual({ kind: 'copy', targets: [2] });
-      expect(parseFollowUpIntent('copy #2 and #3')).toEqual({ kind: 'copy', targets: [2, 3] });
-      expect(parseFollowUpIntent('share #2 with Teams chat')).toEqual({ kind: 'copy', targets: [2] });
-    });
-
-    it('copies everything when "all" is given alongside numbers, like add', () => {
-      expect(parseFollowUpIntent('copy all #2')).toEqual({ kind: 'copy', targets: 'all' });
-    });
-
-    it('answers a question that merely mentions copying', () => {
-      expect(parseFollowUpIntent('can you copy the logic from #2?')).toMatchObject({ kind: 'explain', findingRef: 2 });
-      expect(parseFollowUpIntent('copy this to the review')).toMatchObject({ kind: 'explain' });
-    });
-
-    it('leaves add and #N questions unchanged', () => {
-      expect(parseFollowUpIntent('add #1 to review')).toMatchObject({ kind: 'add', targets: [1] });
-      expect(parseFollowUpIntent('#2 is this real?')).toMatchObject({ kind: 'explain', findingRef: 2 });
-    });
-  });
-
-  describe('add intent', () => {
-    it('detects numbers placed before "to review"', () => {
-      expect(parseFollowUpIntent('add #1 #2 #3 #4 to review')).toMatchObject({ kind: 'add', targets: [1, 2, 3, 4], note: '' });
-    });
-
-    it('detects numbers placed after "add to review"', () => {
-      expect(parseFollowUpIntent('add to review #1 #2 #3 #4')).toMatchObject({ kind: 'add', targets: [1, 2, 3, 4], note: '' });
-    });
-
-    it('detects numbers before "add" keyword', () => {
-      expect(parseFollowUpIntent('#1 #2 add to review')).toMatchObject({ kind: 'add', targets: [1, 2], note: '' });
-    });
-
-    it('handles comma-separated number refs', () => {
-      expect(parseFollowUpIntent('#2 #3, #5 add to review')).toMatchObject({ kind: 'add', targets: [2, 3, 5], note: '' });
-    });
-
-    it('deduplicates repeated finding references', () => {
-      expect(parseFollowUpIntent('add #2 #2 to review')).toMatchObject({ kind: 'add', targets: [2], note: '' });
-    });
-
-    // R20 / AE10: a question that mentions "review" and "add" is answered, not turned into a comment preview.
-  it('answers a question that mentions review before add', () => {
-    expect(parseFollowUpIntent('Can you review whether #2 would add latency?')).toMatchObject({ kind: 'explain', findingRef: 2 });
-  });
-
-  it('treats a polite request to add a finding to the review as add', () => {
-    expect(parseFollowUpIntent('Can you add #2 to the review?')).toMatchObject({ kind: 'add', targets: [2] });
-  });
-
-  it('treats "post #1 to the review" as add', () => {
-    expect(parseFollowUpIntent('post #1 to the review')).toMatchObject({ kind: 'add', targets: [1] });
-  });
-
-  it('treats "add all to review" as targets: all', () => {
-      expect(parseFollowUpIntent('add all to review')).toMatchObject({ kind: 'add', targets: 'all', note: '' });
-    });
-
-    it('treats "add all findings to review" as targets: all', () => {
-      expect(parseFollowUpIntent('add all findings to review')).toMatchObject({ kind: 'add', targets: 'all', note: '' });
-    });
-
-    it('defaults to all when no numbers and no "all" keyword', () => {
-      expect(parseFollowUpIntent('add to review')).toMatchObject({ kind: 'add', targets: 'all', note: '' });
-    });
-
-    it('strips polite preamble from note', () => {
-      expect(parseFollowUpIntent('please add #1 and #4 to review')).toMatchObject({ kind: 'add', targets: [1, 4], note: '' });
-    });
-
-    it('extracts trailing user note after command keywords', () => {
-      expect(parseFollowUpIntent('add #2 to review blocking CI')).toMatchObject({ kind: 'add', targets: [2], note: 'blocking CI' });
-    });
-
-    it('extracts note following an em dash', () => {
-      const result = parseFollowUpIntent('#2, #3 add to review — urgent');
-      expect(result).toMatchObject({ kind: 'add', targets: [2, 3] });
-      expect((result as { note: string }).note).toContain('urgent');
-    });
-
-    it('treats "add #2 to PR review" as add, with no "PR" left in the note', () => {
-      const result = parseFollowUpIntent('add #2 to PR review');
-      expect(result).toMatchObject({ kind: 'add', targets: [2] });
-      expect((result as { note: string }).note).not.toMatch(/\bPR\b/i);
-    });
-  });
-
-  describe('explain intent', () => {
-    it('resolves "explain #3" and removes the number from the question', () => {
-      expect(parseFollowUpIntent('explain #3')).toMatchObject({ kind: 'explain', findingRef: 3, question: 'explain this finding' });
-    });
-
-    it('resolves "#4 explain" with number at start', () => {
-      expect(parseFollowUpIntent('#4 explain')).toMatchObject({ kind: 'explain', findingRef: 4 });
-    });
-
-    it('replaces #N in a longer question', () => {
-      expect(parseFollowUpIntent('what does #3 have to do with auth?')).toMatchObject({
-        kind: 'explain',
-        findingRef: 3,
-        question: 'what does this finding have to do with auth?',
-      });
-    });
-
-    it('returns findingRef: null when no #N in message', () => {
-      expect(parseFollowUpIntent('how to fix the SQL issue')).toMatchObject({ kind: 'explain', findingRef: null, question: 'how to fix the SQL issue' });
-    });
-
-    it('returns findingRef: null for a bare follow-up', () => {
-      expect(parseFollowUpIntent('tell me more')).toMatchObject({ kind: 'explain', findingRef: null, question: 'tell me more' });
-    });
-
-    it('does not match add intent when "add" is absent', () => {
-      expect(parseFollowUpIntent('#2 review')).toMatchObject({ kind: 'explain', findingRef: 2 });
-    });
-
-    it('does not match add intent when "review" is absent', () => {
-      expect(parseFollowUpIntent('#2 can this be fixed?')).toMatchObject({ kind: 'explain', findingRef: 2, question: 'this finding can this be fixed?' });
-    });
-  });
-});
 
 describe('langFromPath', () => {
   it.each([
@@ -2963,25 +2805,6 @@ describe('follow-up context (U10)', () => {
     expect(buildPrContextPrompt({ ...session, findings: [] }, 'q')).toContain('Does this break concurrent writes?');
   });
 
-  // R19 / AE10
-  it.each([['2', 2], ['#2', 2], ['Finding 2', 2], ['2.', 2], ['Finding #2 — the SQL issue', 2], ['The matching finding is #2.', 2]])(
-    'reads the matched finding number from %j',
-    (reply, expected) => { expect(parseFindingMatchReply(reply)).toBe(expected); },
-  );
-
-  it('reads "none" as no match', () => {
-    expect(parseFindingMatchReply('none')).toBeUndefined();
-    expect(parseFindingMatchReply('No matching finding.')).toBeUndefined();
-  });
-
-  it('reads "None of the 3 findings match" as no match, not finding 3', () => {
-    expect(parseFindingMatchReply('None of the 3 findings match')).toBeUndefined();
-  });
-
-  it('does not guess a finding from a bare number in free prose', () => {
-    expect(parseFindingMatchReply('I think 3 or 4')).toBeUndefined();
-  });
-
   // R22
   it('stores only reviewed files, files with findings first, dropping whole files to fit', () => {
     const diffs = [
@@ -3064,113 +2887,6 @@ describe('buildDiffAwarePrompt', () => {
     const out = buildDiffAwarePrompt(session as any, 'Did I regress?', 10000);
     expect(out).not.toContain('showing'); // no read-time truncation happened
     expect(out).toMatch(/already truncated|truncated when the review was stored/i);
-  });
-});
-
-describe('extractPromptDirectives — the upfront question', () => {
-  it('parses -- suffix', () => {
-    expect(extractPromptDirectives('https://.../pull-requests/42 -- Did I introduce any regression?').question).toBe('Did I introduce any regression?');
-  });
-
-  it('parses question: prefix', () => {
-    expect(extractPromptDirectives('https://.../pull-requests/42 question: Is this backwards compatible?').question).toBe('Is this backwards compatible?');
-  });
-
-  it('returns undefined when no question', () => {
-    expect(extractPromptDirectives('https://.../pull-requests/42').question).toBeUndefined();
-  });
-
-  it('extracts a question containing the words quick/deep without losing them', () => {
-    expect(extractPromptDirectives('https://.../pull-requests/42 -- Did we go deep enough on error handling?').question)
-      .toBe('Did we go deep enough on error handling?');
-  });
-
-  it('does not treat a -- embedded in a URL/repo slug as the question delimiter', () => {
-    const prompt = 'https://bitbucket.org/myteam/api--service/pull-requests/42 review deep -- actual question here';
-    expect(extractPromptDirectives(prompt).question).toBe('actual question here');
-  });
-
-  it('is not defeated by a trailing newline after the question', () => {
-    const prompt = 'https://bitbucket.org/myteam/svc/pull-requests/42 -- Did we go deep enough?\n';
-    expect(extractPromptDirectives(prompt).question).toBe('Did we go deep enough?');
-  });
-
-  it('excludes a trailing PR URL when the question: prefix comes before it', () => {
-    const prompt = 'question: does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
-    expect(extractPromptDirectives(prompt).question).toBe('does this change handle concurrent writes safely?');
-  });
-
-  it('excludes a trailing PR URL when the -- suffix comes before it', () => {
-    const prompt = '-- does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
-    expect(extractPromptDirectives(prompt).question).toBe('does this change handle concurrent writes safely?');
-  });
-});
-
-describe('extractPromptDirectives — plain-sentence questions', () => {
-  const URL = 'https://bb.example.com/projects/P/repos/r/pull-requests/1';
-
-  it('keeps file names and versions inside the question', () => {
-    expect(extractPromptDirectives(`${URL} does foo.ts still work with v1.2 of the client?`).question)
-      .toBe('does foo.ts still work with v1.2 of the client?');
-  });
-
-  it('keeps a capitalised mode word at the start out of the question', () => {
-    const d = extractPromptDirectives(`Smart ${URL} does this handle retries properly?`);
-    expect(d.question).toBe('does this handle retries properly?');
-    expect(d.remainder).toBe('Smart');
-  });
-});
-
-describe('extractPromptDirectives — which key counts', () => {
-  const URL = 'https://bb.example.com/projects/P/repos/r/pull-requests/1';
-
-  it('does not take key-shaped prose as the ticket', () => {
-    expect(extractPromptDirectives(`smart ${URL} check the UTF-8 handling`).ticketKey).toBeUndefined();
-  });
-
-  it('takes the real key even when key-shaped prose comes first', () => {
-    expect(extractPromptDirectives(`smart ${URL} SHA-256 PAY-7`).ticketKey).toBe('PAY-7');
-  });
-
-  it('removes the matched key itself, not an earlier look-alike, from the remainder', () => {
-    const d = extractPromptDirectives(`smart ${URL} aPAY-7 PAY-7`);
-    expect(d.ticketKey).toBe('PAY-7');
-    expect(d.remainder).toBe('smart aPAY-7');
-  });
-});
-
-describe('extractPromptDirectives — the prompt left without the question', () => {
-  it('removes the -- question so mode-keyword detection does not see it', () => {
-    const stripped = extractPromptDirectives('review deep https://.../pull-requests/42 -- Did we go deep enough?').remainder;
-    expect(stripped).not.toMatch(/enough/);
-    expect(stripped).toMatch(/deep/); // the mode keyword itself, outside the question, is preserved
-  });
-
-  it('does not strip a -- embedded in a URL/repo slug, but still strips the real question', () => {
-    const prompt = 'https://bitbucket.org/myteam/api--service/pull-requests/42 review deep -- actual question here';
-    const stripped = extractPromptDirectives(prompt).remainder;
-    expect(stripped).toContain('review deep');
-    expect(stripped).not.toContain('actual question here');
-  });
-
-  it('strips the question even when followed by a trailing newline', () => {
-    const prompt = 'https://bitbucket.org/myteam/svc/pull-requests/42 -- Did we go deep enough?\n';
-    const stripped = extractPromptDirectives(prompt).remainder;
-    expect(stripped).not.toContain('deep');
-  });
-
-  it('keeps a trailing PR URL out of the question when the question: prefix comes before it', () => {
-    const prompt = 'question: does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
-    const stripped = extractPromptDirectives(prompt).remainder;
-    expect(stripped).toBe(''); // the URL is read separately; only the question is gone from the rest
-    expect(stripped).not.toContain('concurrent writes');
-  });
-
-  it('keeps a trailing PR URL out of the question when the -- suffix comes before it', () => {
-    const prompt = '-- does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42';
-    const stripped = extractPromptDirectives(prompt).remainder;
-    expect(stripped).toBe(''); // the URL is read separately; only the question is gone from the rest
-    expect(stripped).not.toContain('concurrent writes');
   });
 });
 
@@ -3363,46 +3079,6 @@ describe('PrReviewService.buildRequirementsPrompt and the coverage preamble', ()
     const md = service.formatReview([], pr, 1).markdown;
     expect(md).toBe(service.formatReview([], pr, 1, undefined, undefined).markdown);
     expect(md).not.toContain('COVERAGE');
-  });
-});
-
-describe('parseFollowUpIntent: stating the real goal', () => {
-  const withRequirements = { hasRequirements: true };
-
-  it('reads the strict "the goal is …" forms as a goal when the review has a requirements block', () => {
-    expect(parseFollowUpIntent('the goal is actually that nobody is charged twice', withRequirements))
-      .toEqual({ kind: 'goal', goal: 'that nobody is charged twice' });
-    expect(parseFollowUpIntent('Actually the goal is to retry captures', withRequirements)).toEqual({ kind: 'goal', goal: 'to retry captures' });
-    expect(parseFollowUpIntent('the real goal is: CSV export', withRequirements)).toEqual({ kind: 'goal', goal: 'CSV export' });
-    expect(parseFollowUpIntent('goal: keep the UI unchanged', withRequirements)).toEqual({ kind: 'goal', goal: 'keep the UI unchanged' });
-  });
-
-  it('treats a question that mentions the goal as a question, not a correction', () => {
-    expect(parseFollowUpIntent('The goal is to fix retries, does finding #2 matter?', withRequirements).kind).not.toBe('goal');
-  });
-
-  it('keeps a message that merely mentions the goal as a question', () => {
-    expect(parseFollowUpIntent('what is the goal of this PR?', withRequirements)).toMatchObject({ kind: 'explain' });
-    expect(parseFollowUpIntent('does #2 serve the goal is it?', withRequirements)).toMatchObject({ kind: 'explain' });
-  });
-
-  it('ignores the goal form when the review has no requirements block', () => {
-    expect(parseFollowUpIntent('the goal is actually X')).toMatchObject({ kind: 'explain' });
-    expect(parseFollowUpIntent('the goal is actually X', { hasRequirements: false })).toMatchObject({ kind: 'explain' });
-  });
-
-  it('prefers the goal over an add-to-review reading when the message starts as a goal', () => {
-    expect(parseFollowUpIntent('the goal is to add logging to the review', withRequirements))
-      .toEqual({ kind: 'goal', goal: 'to add logging to the review' });
-  });
-
-  it('returns an empty goal for "goal:" with nothing after it', () => {
-    expect(parseFollowUpIntent('goal:', withRequirements)).toEqual({ kind: 'goal', goal: '' });
-  });
-
-  it('still reads copy and add commands as before', () => {
-    expect(parseFollowUpIntent('copy', withRequirements)).toEqual({ kind: 'copy', targets: 'all' });
-    expect(parseFollowUpIntent('add #2 to review', withRequirements)).toMatchObject({ kind: 'add', targets: [2] });
   });
 });
 

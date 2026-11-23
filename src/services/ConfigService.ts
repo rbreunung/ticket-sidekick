@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { BitbucketAuthType, BitbucketConfig, ReviewMode } from '../bitbucket/IBitbucketClient';
+import type { BitbucketAuthType, BitbucketConfig } from '../bitbucket/IBitbucketClient';
 
 type AuthType = 'datacenter' | 'cloud';
 
@@ -51,16 +51,13 @@ export class ConfigService {
       baseUrl: config.get<string>('bitbucket.baseUrl'),
       authType: config.get<BitbucketAuthType>('bitbucket.authType') ?? 'datacenter',
       token: await this.context.secrets.get(ConfigService.BITBUCKET_TOKEN_KEY),
-      showConnectionInfo: config.get<boolean>('bitbucket.showConnectionInfo') ?? false,
       reviewInstructions: config.get<string>('bitbucket.reviewInstructions') || undefined,
       modelContextTokens: config.get<number>('bitbucket.modelContextTokens') || undefined,
       contextBudgetRatio: config.get<number>('bitbucket.contextBudgetRatio') ?? 0.7,
-      reviewMode: config.get<ReviewMode>('bitbucket.reviewMode') ?? 'standard',
       reviewExcludePatterns: config.get<string[]>('bitbucket.reviewExcludePatterns') ?? [],
       reviewContextLines: config.get<number>('bitbucket.reviewContextLines') ?? 12,
       confidenceThreshold: config.get<number>('bitbucket.confidenceThreshold') ?? 0.7,
       detailedDiagnostics: config.get<boolean>('bitbucket.detailedDiagnostics') ?? false,
-      showTokenUsage: config.get<boolean>('bitbucket.showTokenUsage') ?? false,
     };
   }
 

@@ -34,7 +34,7 @@ This shows a confirmation with the exact comment text before it runs. Nothing ha
 - **One pull request at a time.** Each tool works on a single pull request.
 - **No accidental duplicates.** If Copilot repeats the same comment within a minute, the repeat is skipped. A retry after a real failure still goes through.
 - **Auto-approve skips the confirmation.** If you turned on VS Code's `chat.tools.autoApprove`, the comment tool runs without asking. It still checks its own inputs.
-- **The review runs on the board.** `bitbucket_open_review` answers as soon as the board is open; Copilot reads the result with `bitbucket_read_findings` once the review has run. The deprecated `@bitbucket` chat participant still reviews too — see [Bitbucket PR Review](bitbucket-pr-review.md).
+- **The review runs on the board.** `bitbucket_open_review` answers as soon as the board is open; Copilot reads the result with `bitbucket_read_findings` once the review has run. See [Pull Request Review](bitbucket-pr-review.md).
 
 ## Jira tools
 

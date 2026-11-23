@@ -113,23 +113,6 @@ const fmt = (n: number): string => n.toLocaleString('en-US');
 /** Model ids come from the editor; escape markdown characters so they cannot break the footer or table. */
 const escapeMarkdown = (text: string): string => text.replace(/[\\`*_{}[\]<>|]/g, '\\$&');
 
-export function formatTokenFooter(params: {
-  input: number;
-  output: number;
-  estimated: boolean;
-  modelId: string;
-  budget?: number;
-}): string {
-  const mark = params.estimated ? '~' : '';
-  const parts = [
-    `Tokens: ${mark}${fmt(params.input)} in`,
-    `${mark}${fmt(params.output)} out`,
-    escapeMarkdown(params.modelId),
-  ];
-  if (params.budget !== undefined) parts.push(`budget ${fmt(params.budget)}`);
-  return `_${parts.join(' · ')}_`;
-}
-
 export function formatUsageTable(store: UsageStore, now: Date): string {
   const visible = withinWindow(store, now);
   const months = Object.keys(visible).sort().reverse();

@@ -82,43 +82,6 @@ export interface ReviewSession {
   requirements?: RequirementsTicket & { coverage: RequirementsCoverage };
 }
 
-export interface BitbucketCommentPreviewSession {
-  project: string;
-  repo: string;
-  prId: number;
-  items: Array<{ finding: ReviewFinding; text: string }>;
-}
-
-/**
- * `smart`-mode selection-failure fallback session — stored in `workspaceState` under
- * `bitbucket.session.smartFallback` and detected via the `smart-fallback-session`
- * `BitbucketSessionContinuity` kind (U4), following the exact same shape/convention as
- * `ReviewSession` (see docs/review-process.md
- * "Follow-ups"). Holds enough in-flight state to resume phase 2 once the user answers:
- * PR reference, fetched diff, chunk boundaries, and phase 1's already-collected standard-pass
- * findings. Built by the smart-mode aggregation call site in `BitbucketParticipant.ts`;
- * consumed by `resumeSmartReviewPhase2` there.
- */
-export interface SmartFallbackSession {
-  prTitle: string;
-  prUrl: string;
-  project: string;
-  repo: string;
-  prId: number;
-  /** Fetched diff, split per file — the same shape `buildAdaptiveChunks` consumes/produces. */
-  diffs: FileDiff[];
-  /** Chunk boundaries phase 1 already computed, reused so phase 2 doesn't re-chunk. */
-  chunks: FileDiff[][];
-  /** Findings phase 1's standard pass already collected, merged with phase 2's persona findings on resume. */
-  phase1Findings: ReviewFinding[];
-  /** R23: the review's focus question, so resumed persona passes and follow-ups keep it. */
-  upfrontQuestion?: string;
-  /** R23: phase 1's funnel counters and failure state, so the resumed review reports them. */
-  phase1Tally?: ReviewTally;
-  /** The ticket the user opted into, so the resumed review still runs the requirements pass. */
-  requirementsTicket?: RequirementsTicket;
-}
-
 /** Running counters for one review, reported by the shared completion step (KTD10). */
 export interface ReviewTally {
   raw: number;
@@ -736,16 +699,6 @@ export function buildFindingFollowUpPrompt(
   }
   lines.push('', `Developer's question: ${question}`);
   return lines.join('\n');
-}
-
-/** R19: the finding number the matcher model named — `2`, `#2`, `Finding 2`, `2.` — or undefined for
- * "none". A reply leading with "none"/"no" is a no-match even when it mentions a number
- * ("None of the 3 findings match"). */
-export function parseFindingMatchReply(reply: string): number | undefined {
-  const trimmed = reply.trim();
-  if (/^\W*no(ne)?\b/i.test(trimmed)) return undefined;
-  const m = trimmed.match(/^\W*(?:finding\s*)?#?\s*(\d+)\b/i) ?? trimmed.match(/(?:#|\bfinding\s*#?)\s*(\d+)\b/i);
-  return m ? parseInt(m[1], 10) : undefined;
 }
 
 /**

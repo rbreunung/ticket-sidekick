@@ -26,11 +26,9 @@ export interface BitbucketConfig {
   baseUrl: string | undefined;
   authType: BitbucketAuthType;
   token: string | undefined;
-  showConnectionInfo?: boolean;
   reviewInstructions?: string;
   modelContextTokens?: number;
   contextBudgetRatio?: number;
-  reviewMode?: ReviewMode;
   reviewExcludePatterns?: string[];
   /** Diff context lines requested around each hunk (wider = more surrounding code for the reviewer). */
   reviewContextLines?: number;
@@ -38,8 +36,6 @@ export interface BitbucketConfig {
   confidenceThreshold?: number;
   /** When true, emit one fenced structured diagnostic record per review (R7). Default false. */
   detailedDiagnostics?: boolean;
-  /** When true, every @bitbucket answer ends with an input/output token line. Default false. */
-  showTokenUsage?: boolean;
 }
 
 export interface BitbucketCommentResult {

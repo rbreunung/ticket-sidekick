@@ -1,229 +1,106 @@
-# Bitbucket PR Review
+# Pull Request Review
 
-> **Deprecated.** The `@bitbucket` chat participant this page describes is deprecated. It stays the way to do this until the pull request review has a board; see [Jira Tools for Copilot Chats](copilot-tools.md) and [Boards](boards.md) for the current way to work.
+A Bitbucket pull request is reviewed on the **review board**, an editor tab like the other [boards](boards.md). See the main [README](../../README.md#bitbucket-setup) for the Bitbucket setup first.
 
-Part of `@bitbucket` — the PR review walkthrough, multi-turn follow-ups, posting comments back to Bitbucket, and options for reducing token usage on large PRs. See the main [README](../../README.md) for setup and core commands first.
+## Opening a review
 
-## PR review
+Any of these opens the review board of a pull request:
 
-Paste any pull request URL into the chat:
-
-```text
-@bitbucket https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42
-@bitbucket https://bitbucket.org/myworkspace/myrepo/pull-requests/7
-```
-
-Trailing segments like `/overview`, `/diff`, or `/commits` are stripped automatically.
-
-The plugin:
-
-1. Fetches PR metadata and the full unified diff
-2. Applies any configured `reviewExcludePatterns` to skip files before analysis
-3. Splits the changed files into chunks sized to the model's context window, capped at about 24 000 tokens per call so every file gets a real share of the model's answer — large PRs take more calls in exchange for depth
-4. For each chunk: sends a structured diff-only prompt and, if the LLM requests additional context files, fetches them (as many as fit) and runs a second pass that sees both those files and the first pass's findings — it can add findings or retract one, and keeps the rest; the second pass is skipped in `quick` mode
-5. Merges all findings across chunks and streams a single structured report ordered by file, with numbered findings and severity badges
-
-> **Deleted files are reviewed** — removing a validation or error-handling block can be just as risky as adding code. Files with no textual diff (binary, pure renames, or mode-only changes) are skipped and reported in the chat.
->
-> **Very large files** that exceed the per-call budget on their own are split along diff-hunk boundaries and reviewed across several calls, rather than failing or being truncated.
-
-For token-saving options (`quick` mode, file exclusion, context tuning) see [Reducing token usage on large PRs](#reducing-token-usage-on-large-prs).
-
-### Upfront focus question
-
-Give the reviewer something specific to look for before it starts:
+- **Command Palette:** `Ticket Sidekick: Review a pull request`, then paste the link as shown in the browser and press **Open**.
+- **Typed command:** `/ts-bitbucket review <link> [question]` in a Copilot chat. A Jira key you type (`PROJ-123`) becomes the ticket to check against, the rest becomes the question.
+- **Copilot Agent mode:** paste the link and ask for a review in your own words. Copilot opens the board with `bitbucket_open_review` and says only that it opened; it does not review the pull request itself.
 
 ```text
-@bitbucket question: does this change handle concurrent writes safely? https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42
-@bitbucket https://bitbucket.org/myworkspace/myrepo/pull-requests/7 -- does this change handle concurrent writes safely?
+/ts-bitbucket review https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42
+/ts-bitbucket review https://bitbucket.org/myworkspace/myrepo/pull-requests/7 PROJ-123 does it handle empty input?
 ```
 
-You can also write the question as a plain sentence ending in `?`, before or after the URL, with no prefix:
+Trailing segments like `/overview`, `/diff` or `/commits` in the link are ignored. Asking again for a pull request that already has a stored review opens that review instead of starting a new one.
 
-```text
-@bitbucket review smart <url> does this handle retries?
-```
+## The first step
 
-The review's first line echoes the question it understood, so a wrong guess is easy to spot. A mode word or a Jira key inside the question never changes the review mode or the ticket.
+The board always stops on its first step before anything runs. No model call happens until you press **Start**.
 
-It combines freely with `quick`/`deep`, in either order:
+- **Review model.** Every model call of the review uses this model: the passes, Explain, Rewrite, the goal rewording and the requirements check. When `ticketSidekick.bitbucket.reviewModel` is empty or the model is not available, the board asks for one and saves your pick to that setting.
+- **Requirements source.** What the review checks the pull request against:
+  - **Jira ticket** — type a key, or press **Use PROJ-123** when the pull request title names one. A key you type wins over the title's. This needs Jira set up; without it the ticket is unavailable and the board says why.
+  - **A goal** — type what the change should do, then press **Reword**. The board rewrites it into in-scope and out-of-scope points you can correct before Start. Nothing is reworded unless you press Reword.
+  - **None** — no requirements check.
+- **Question** (optional) — something specific to look for, such as "does this handle concurrent writes safely?". It reaches every review call.
 
-```text
-@bitbucket review deep <url> question: Did I introduce any regression?
-```
+## Running the review
 
-Mode keywords and the focus question are fully independent — set the review depth,
-the focus, both, or neither, in any order. The focus question reaches every LLM
-call in the pipeline, including the deep-mode critic pass, not just the first
-analysis pass, so it keeps shaping the review from start to finish. When a
-question is supplied, the review output starts with a `_focus: <question>_` line.
+**Start** runs the regular pass over the pull request and shows its steps while it runs ("Reading the pull request…", then each batch). **Stop** ends a pass early; what it found so far is kept.
 
-Example output:
+When the regular pass is done, the board shows the findings and, above them, the extra passes the review suggests from what it saw. The suggestion can be empty. You decide what happens next, now or later:
 
-```text
-## PR #42 — Add OAuth login flow
-_by Jane Smith → main · 3 files changed_
+- keep the findings as they are,
+- run the suggestion,
+- or pick any extra passes under **Passes to run** and press **Run selected**: **Security**, **Performance**, **Reliability**, **Maintainability** and the **Critic**.
 
-2 🔴 critical · 1 🟡 warning · 3 🔵 suggestions
+The critic checks the findings it has not checked yet. It removes a finding it cannot confirm, or, when you already worked on that finding (explained it or drafted a comment), labels it *probably a false alarm* instead. Later passes see the files the regular pass saw, read at the reviewed commit. Each finding keeps its number for the whole review, so a removed finding leaves a gap.
 
----
+A new commit on the pull request never starts a review by itself. The board says the review is out of date; **Run again** reviews the pull request at the new commit after a confirmation. **New review** goes back to the first step.
 
-**📄 src/auth/login.ts**
-**#1** 🔴 `L42` SQL injection — user input concatenated into query string
-→ Use parameterised queries or a query builder instead.
-```
+### What the board shows
 
-### Checking a PR against its Jira ticket
+- **Findings (N)** — each finding with its severity (Critical, Warning, Suggestion), file and line, description, recommendation, provenance (new, existing or removed code), confidence and the passes that found it. A finding whose quoted code could not be found in the diff is marked *location unverified*; one below `ticketSidekick.bitbucket.confidenceThreshold` is marked *low confidence*. Findings are never hidden for either reason.
+- **Requirements coverage** — when a ticket or goal was chosen: the requirements the check found, each met, not evident or unclear, and the changed files the ticket does not account for. After changing the goal, **Re-check** redoes only the coverage; the findings stay.
+- **Not reviewed and dropped** — files left out (no text change, `reviewExcludePatterns`, a Data Center diff cut short and not fetched, a failed batch), findings dropped for naming a file outside the pull request, and findings the critic removed.
+- **Token usage per pass** — the input and output tokens of each pass and of Explain and Rewrite.
 
-In `smart` and `deep` reviews the review can read the Jira ticket behind the PR and tell you whether the change does what the ticket asked for, and what it changes beyond that. This needs Jira set up (see the main [README](../../README.md)); `@bitbucket` works without it.
+If no batch of the regular pass could be reviewed, the board shows a failure banner and no findings, never "No issues found"; **Run again** tries again. If only some batches failed, the other findings are shown under a banner. The "Ticket Sidekick" output channel (View → Output) has the details.
 
-- **From the PR title.** If the title contains a Jira key (for example `PROJ-123 add retry`), the review asks once before it starts: **Use PROJ-123** or **Skip**.
-- **From your command.** Write the key anywhere in the command to skip the question: `@bitbucket review smart <url> PROJ-123`. A key you write wins over the one in the title. Keys inside your question or the URL are ignored.
-- **Without a ticket.** Add `no ticket` to review as usual, with no lookup.
+## Findings: Explain, comments and copy
 
-```text
-@bitbucket review smart <url> PROJ-123
-@bitbucket review deep <url> PROJ-123 does this cover the retry case?
-@bitbucket review smart <url> no ticket
-```
+- **Explain** answers under the finding, using its code, the pull request title and description and your question. Explaining again replaces the answer.
+- **Comment for #N** is a draft you edit by hand. **Rewrite** with an instruction ("make it shorter", "focus on the security impact") rewrites it with the review model; **Undo** brings back your text.
+- **Post N comment(s)** posts the selected drafts after a VS Code confirmation that names them. A finding with a verified line becomes an inline comment on that line; one without goes to the pull request's activity. Each comment's result is shown, and only the failed ones are offered again. Bitbucket Cloud needs the **Pull requests: Write** scope on the App Password.
+- **Copy … for Teams** puts the selected findings, or all of them, on the clipboard as plain text grouped by severity, with the pull request's title, author, branch and link and the requirements coverage when there is one. **Copy … as Markdown** does the same as Markdown for anywhere else.
 
-The review reads the ticket's summary, description and comments. Many tickets are loose bug reports where the agreed fix only appears in a comment; the newest agreed direction wins, and a contradictory thread is flagged. The result is a **Requirements coverage** block above the findings:
+The review, its explanations, drafts and coverage are kept in a stored session, so the board comes back after a restart.
 
-- **How I read this ticket** — a short reading of the goal, so you can see at once whether it understood the ticket.
-- A table of the requirements it found, each with its source (description, comment or inferred) and a status: ✅ met, ⚠️ not evident or ❔ unclear.
-- **Not accounted for by the ticket** — changed files the ticket does not explain.
-- If the ticket gives no usable goal, the block says **No clear requirements found** and checks nothing; it never invents a requirement.
+## From a chat
 
-On a large PR the check may not see every file. It says how many it did not see and marks the affected requirements unclear rather than reporting a gap.
+After a review, ask Copilot about it in your own words, such as "explain finding 2" or "did this PR introduce a regression?". Copilot reads the stored review with `bitbucket_read_findings` (the summary, the findings list or one finding with its code, explanation and draft) and the diff with `bitbucket_getPullRequestDiff`.
 
-If the reading is wrong, tell it the real goal in your next message — `the goal is actually that nobody is charged twice` — and only the coverage block is redone; the findings and their numbers stay. The redo checks the version of the PR that was reviewed; if the PR has new commits since, it says so and suggests re-running the review. **Copy for Teams** includes the coverage block when you copy the whole review.
-
-If the title names a ticket in a `quick` or `standard` review, the review ends with a line and a **Check against PROJ-123** chip that re-run it as smart with the ticket. An explicit key in those modes is ignored with one line.
-
-If there is no key, Jira isn't configured, or the ticket can't be read (including when Jira does not answer within about 20 seconds), the review runs as usual and says why in one line. If a key you wrote does not exist but the PR title names another ticket, the line also gives the command for that one. Look-alikes such as `UTF-8` or `SHA-256` are not taken for ticket keys. Nothing is written to Jira.
-
-### When a review can't run
-
-If the model fails on every file, you see **Review failed** with the cause and a pointer to the "Ticket Sidekick" output channel (View → Output), never "No issues found". Nothing is stored, so there is nothing to follow up on; try again. If only some files fail, the findings you got are shown under a warning that some batches had failures, and the per-file notices name the files that could not be reviewed. "after retrying" appears only when the model was actually retried.
-
-## Follow-ups and posting comments
-
-After a review, the session stays active for multi-turn follow-ups. Reference a finding by number, describe it in natural language, or ask any general question about the PR:
-
-```text
-@bitbucket #2 is this always a problem or only if the site has third-party scripts?
-@bitbucket can the localStorage finding be downgraded if we enforce a strict CSP?
-@bitbucket explain the SQL injection issue and show a fixed version
-@bitbucket is this change backwards-compatible with the v2 API?
-@bitbucket are there missing test cases for the new endpoints?
-```
-
-Questions without a `#N` reference automatically answer at the PR level using the title and all findings as context. For reviews run after this feature, the underlying diff is stored alongside the session, so these general follow-ups can also draw on the actual code changes — not just the findings summary — giving more grounded answers to broad questions like "did I introduce a regression?".
-
-To see what each answer cost in tokens, turn on `ticketSidekick.bitbucket.showTokenUsage` — see [Token usage](#token-usage).
-
-To leave the review session, click the **Done** chip under any response, or reply `done`, `c` or `cancel`:
-
-```text
-done
-```
-
-The session also ends on its own when you move on:
-
-- A message with a PR URL always starts a fresh review, whatever mode word or question comes with it.
-- `/review` or a bare `quick`, `smart` or `deep` without a PR URL ends the session and shows the usual "point me at a PR" help instead of being answered as a question about the old review.
-
-`@bitbucket check` and `@bitbucket usage` do not end it: you can run either in the middle of a review and keep asking follow-up questions.
-
-Share the review in a Microsoft Teams chat (or anywhere else) — click the **Copy for Teams** chip after a review, or type:
-
-```text
-@bitbucket copy
-@bitbucket copy #1 #3
-```
-
-This puts the review on your clipboard as plain text: the PR title, author, target branch and link, the requirements coverage when the review had one, then every finding grouped under Critical / Warning / Suggestion with its file and line, title and recommendation. Paste it into any Teams chat — there are no Markdown tables or links that Teams would show as raw symbols. `copy #1 #3` copies only those findings. Low-confidence and location-unverified findings are marked, not left out. Nothing is sent anywhere; the text only goes to your clipboard.
-
-Push selected findings back to Bitbucket as PR comments:
-
-```text
-@bitbucket #2 #3, #5 add to review
-@bitbucket add #1 #2 #3 to review
-@bitbucket add all to review
-@bitbucket #1 add to review this is blocking merge
-```
-
-The `#N` references can appear anywhere in the message, but `add`/`post` must come before `to review` (`to the review` and `to PR review` also work). `add all to review` selects every finding at once. Any extra text (after stripping the command keywords) becomes a brief reviewer note appended to each comment.
-
-**Before posting, the plugin shows a preview** of each comment's exact text along with where it will land:
-
-- `📌 Inline comment on line 42 of src/auth.ts` — the comment will be anchored to that diff line
-- `⚠️ Line 42 could not be located in the diff — will fall back to activity feed comment` — the line was reported by the AI but isn't in the diff; you can cancel and investigate, or confirm to post as a general comment
-
-Click **Post it** (or reply `"post it"`) to post, click **Cancel** (or reply `(c)`) to drop the preview and stay in the review session, or give a refinement instruction to adjust the comment text before posting. For example:
-
-```text
-make it more concise
-focus on the security impact only
-add that this affects all authenticated endpoints
-```
-
-> **Note (Bitbucket Cloud):** Posting comments requires the **Pull requests: Write** scope on your App Password. See [Store your Bitbucket credentials](../../README.md#3-store-your-bitbucket-credentials) in the main README.
+- `/ts-bitbucket check` tests the Bitbucket connection.
+- `/ts-bitbucket usage` shows the tokens the reviews used, per month and model.
+- `/ts-bitbucket help review` explains the review in a few lines.
 
 ## Token usage
 
-Set `ticketSidekick.bitbucket.showTokenUsage` to `true` and every `@bitbucket` answer ends with one line:
+Every model call of a review is counted with the editor's tokenizer for the model in use; a `~` marks a figure that had to be estimated. Cache and reasoning tokens are not available and are not counted. The board shows the usage per pass, and `/ts-bitbucket usage` the running total per month and model on your machine:
 
-```
-Tokens: 41,230 in · 6,840 out · claude-sonnet-4.5 · budget 90,000
-```
-
-If the editor's model object cannot be wrapped for counting, the answer ends without the Tokens line, that response is not counted, and the output channel says why.
-
-The budget segment appears on reviews only. Counts come from the editor's tokenizer for the selected model and are approximate; a `~` marks figures that had to be estimated. Cache reads, cache writes, and reasoning tokens are not available and are not counted.
-
-Whether or not the line is shown, `@bitbucket` keeps a running total per month and model on your machine. Run `@bitbucket usage` to see it:
-
-```
+```text
 | Month   | Model             | Input     | Output  | Calls |
 | ------- | ----------------- | --------: | ------: | ----: |
 | 2026-10 | claude-sonnet-4.5 | 1,240,000 | 188,000 |    27 |
 ```
 
-The table covers the current month and the two before it; older months are deleted. Only counters are stored, never PR content. The totals are meant for comparing against current API prices yourself — the extension holds no prices and your Copilot plan may bill differently. Totals are per machine and do not sync.
+The table covers the current month and the two before it; older months are deleted. Only counters are stored, never pull request content. The extension holds no prices, and your Copilot plan may bill differently. Totals are per machine and do not sync.
 
-## Reducing token usage on large PRs
+## Reducing token usage on large pull requests
 
-The reviewer packs files into each LLM call up to the smaller of the model's context budget and about 24 000 tokens. The cap trades a few more calls on large PRs for a more thorough review of each file, and leaves room for the second pass's context files.
+The review packs files into each model call up to the smaller of the model's context budget and about 24 000 tokens, so every file gets a real share of the model's answer; large pull requests take more calls in exchange. A file too large for one call is split along its diff hunks. Deleted files are reviewed too.
 
-**Quick mode** — skips the second LLM pass (diffs only, no additional file context):
+- **Run fewer passes.** The regular pass alone is the cheapest review; extra passes are only run when you pick them.
+- **Exclude files** that don't need a review (migrations, snapshots, generated code). Both `*.snap` and `**/*.snap` match at any depth:
 
-```
-@bitbucket review quick https://bitbucket.company.com/...
-```
+  ```json
+  "ticketSidekick.bitbucket.reviewExcludePatterns": ["**/migrations/**", "**/*.snap", "**/*.generated.ts"]
+  ```
 
-Set `ticketSidekick.bitbucket.reviewMode` to `"quick"` to make this the default. Use `@bitbucket review deep <url>` to force standard mode for a single review.
+- **Less surrounding code.** Each change is sent with 12 unchanged lines around it by default. Lower it on very large pull requests:
 
-**Excluding files** — skip files that don't need review (migrations, snapshots, generated code):
+  ```json
+  "ticketSidekick.bitbucket.reviewContextLines": 6
+  ```
 
-```json
-"ticketSidekick.bitbucket.reviewExcludePatterns": [
-  "**/migrations/**",
-  "**/*.snap",
-  "**/*.generated.ts"
-]
-```
+- **Context size.** If the model's context size isn't detected, set it yourself, and adjust the share a call may use with `ticketSidekick.bitbucket.contextBudgetRatio`:
 
-Patterns use glob syntax. Both `*.snap` and `**/*.snap` work (bare filename patterns match at any depth).
+  ```json
+  "ticketSidekick.bitbucket.modelContextTokens": 128000
+  ```
 
-**Less surrounding code** — each change is sent with 12 unchanged lines around it by default, so the model sees the enclosing function. Lower this on very large PRs to save tokens:
-
-```json
-"ticketSidekick.bitbucket.reviewContextLines": 6
-```
-
-**Manual context override** — if the model's context size isn't auto-detected, set it explicitly:
-
-```json
-"ticketSidekick.bitbucket.modelContextTokens": 128000
-```
+See [Settings Reference → Bitbucket](settings-reference.md#bitbucket-settings-reference) for every `ticketSidekick.bitbucket.*` setting.

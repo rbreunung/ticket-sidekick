@@ -138,10 +138,9 @@ describe('bundled extension (out/extension.js)', () => {
     expect(declared.filter(id => !registered.commands.includes(id))).toEqual([]);
   });
 
-  it('creates exactly the chat participants package.json declares', () => {
-    const declared = (manifest.contributes.chatParticipants ?? []).map(p => p.id).sort();
-    expect(declared.length).toBeGreaterThan(0);
-    expect([...registered.participants].sort()).toEqual(declared);
+  it('declares and creates no chat participant, since @jira and @bitbucket are removed', () => {
+    expect(manifest.contributes.chatParticipants).toBeUndefined();
+    expect(registered.participants).toEqual([]);
   });
 
   it('registers exactly the language model tools package.json declares', () => {
