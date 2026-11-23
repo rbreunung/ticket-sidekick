@@ -4,6 +4,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # One pull request per week and kind instead of one per package. A major version still
+    # arrives on its own, so it gets its own review.
+    groups:
+      npm-production:
+        dependency-type: production
+        update-types: [minor, patch]
+      npm-development:
+        dependency-type: development
+        update-types: [minor, patch]
     ignore:
       # Must not exceed engines.vscode: `vsce package` refuses a newer @types/vscode. Raise both together.
       - dependency-name: "@types/vscode"
@@ -11,3 +20,6 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        update-types: [minor, patch]
