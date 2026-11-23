@@ -1,6 +1,6 @@
 ---
 name: ts-jira-create
-description: Creates one Jira ticket with the user, step by step, from a workspace template where one fits, showing the draft before creating it. Use when asked to create, open, file or raise a Jira ticket, bug or story. Not for showing, loading, searching or changing existing tickets.
+description: Creates one Jira ticket with the user, step by step, from a workspace template where one fits, showing the draft before creating it. Use when asked to create, open, file or raise a Jira ticket, bug or story. Not for showing, loading, searching or changing existing tickets. Not for tickets from attached or named .eml, Veracode .xml or Waltz .xlsx files, which open the Jira Import Board.
 argument-hint: <what the ticket is about>
 ---
 
@@ -10,6 +10,7 @@ Create one ticket together with the user. Ask only for what you cannot take from
 
 ## Steps
 
+0. If the request comes with, or names, `.eml` emails, a Veracode Detailed Report (`.xml`) or a Waltz OSS Report (`.xlsx`), draft and create nothing. Call `jira_open_board` with board `import`, kind `email`, `veracode` or `waltz`, and the files: for emails every path as `paths`, with `dragged` true when the user attached them to the message; for a report the path as `path`. Reply with only the status the tool returns, and stop. Email text pasted into the chat, with no file, is not such a request: go on with step 1.
 1. Call `jira_list_templates`. If a template fits the request, use it and tell the user which one. If several could fit, ask the user to pick one, naming each with its issue type. If none fits or there are none, go on without a template.
 2. Work out the project key, and the issue type when there is no template. Ask the user for each one you cannot tell from the request. Never pick an issue type yourself.
 3. Draft the summary (one line) and the description, as Markdown. With a template, use its description sections as headings and fill each from the request; leave a section you cannot fill as a short question to the user rather than inventing content.

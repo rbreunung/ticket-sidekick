@@ -273,6 +273,20 @@ describe('the /ts-jira-create skill', () => {
     expect(description).toContain('Not for showing, loading, searching or changing existing tickets.');
   });
 
+  it('is not for emails or report files, which go to the Jira Import Board', () => {
+    const description = parseFrontmatter(create)?.description ?? '';
+    expect(description).toContain('Not for tickets from attached or named .eml, Veracode .xml or Waltz .xlsx files');
+  });
+
+  it('opens the import board for such files before it looks at any template, and keeps pasted email text in the guided steps', () => {
+    const handOff = create.indexOf(OPEN_BOARD_TOOL);
+    expect(handOff).toBeGreaterThan(-1);
+    expect(handOff).toBeLessThan(create.indexOf(LIST_TEMPLATES_TOOL));
+    expect(create).toMatch(/board `import`/);
+    expect(create).toMatch(/`dragged` true/);
+    expect(create).toMatch(/Email text pasted into the chat, with no file, is not such a request/);
+  });
+
   it('asks only for what is missing, never picks the issue type, and shows the draft before creating', () => {
     expect(create).toMatch(/Ask only for what you cannot take from the request/);
     expect(create).toMatch(/Never pick an issue type yourself/);
