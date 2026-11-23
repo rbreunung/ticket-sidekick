@@ -28,7 +28,7 @@ _Resist a change when:_ it buys convenience by routing credentials off-device, o
 
 ## Key metrics
 
-- **Personal reach-for-it test** - whether daily ticket/PR work still gets done through @jira/@bitbucket instead of falling back to the web UI; judged informally, no dashboard.
+- **Personal reach-for-it test** - whether daily ticket/PR work still gets done through Ticket Sidekick's tools and boards instead of falling back to the web UI; judged informally, no dashboard.
 - **Colleague feedback** - friction reported and features requested by colleagues actually using it; gathered directly, not tracked in a dashboard.
 
 <!-- Intentionally qualitative and short of the usual 3-5: no telemetry is gathered by design. -->
@@ -37,7 +37,7 @@ _Resist a change when:_ it buys convenience by routing credentials off-device, o
 
 ### Onboarding/adoption
 
-Making @jira/@bitbucket easy to discover and start using — Language Model tools, slash commands, disambiguation, walkthroughs.
+Making the tools, skills and boards easy to discover and start using — Language Model tools, the `/ts-jira` and `/ts-bitbucket` commands, walkthroughs.
 
 _Why it serves the approach:_ an information-wall-closing tool only works if developers actually reach for it instead of the web UI.
 

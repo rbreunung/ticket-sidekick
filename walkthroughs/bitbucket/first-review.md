@@ -1,15 +1,15 @@
-Put it all together: point `@bitbucket` at a real pull request and get a structured, line-accurate review with severity-tagged findings.
+Put it all together: open the review board for a real pull request and get a line-accurate review with severity-tagged findings.
 
-[Ask @bitbucket to check your connection](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40bitbucket%20check%22%7D%5D)
+[Check the connection](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%2Fts-bitbucket%20check%22%7D%5D)
 
-Once your connection checks out, type in the chat box:
+Once your connection checks out, open the review board and paste the pull request link:
 
-`@bitbucket https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42`
+[Review a pull request](command:ticket-sidekick.boards.openReview)
 
-Optionally add a focus question after `--`:
+Or type in a Copilot chat:
 
-`@bitbucket <url> -- Did I introduce any regression?`
+`/ts-bitbucket review https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42`
 
-[Ask @bitbucket to review a PR](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40bitbucket%20%3CURL%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)
+The board stops on its first step: pick the review model, choose a Jira ticket, a goal or none to check against, add a question if you like, and press **Start**.
 
 This step completes once a review actually finishes successfully.

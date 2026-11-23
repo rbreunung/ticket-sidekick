@@ -1,4 +1,4 @@
-Point Ticket Sidekick at your Bitbucket Data Center instance so `@bitbucket` knows where to send requests.
+Point Ticket Sidekick at your Bitbucket Data Center instance so the Bitbucket tools and the review board know where to send requests.
 
 [Open Bitbucket base URL setting](command:workbench.action.openSettings?%22ticketSidekick.bitbucket.baseUrl%22)
 

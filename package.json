@@ -23,45 +23,6 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
-    "chatParticipants": [
-      {
-        "id": "ticket-sidekick.bitbucket",
-        "name": "bitbucket",
-        "fullName": "Ticket Sidekick — Bitbucket",
-        "description": "Paste a PR URL to review it: @bitbucket <url> — type \"help\" for options",
-        "isSticky": true,
-        "commands": [
-          {
-            "name": "check",
-            "description": "Verify your Bitbucket connection and credentials",
-            "sampleRequest": "check"
-          },
-          {
-            "name": "review",
-            "description": "Review a Bitbucket pull request",
-            "sampleRequest": "https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42"
-          },
-          {
-            "name": "usage",
-            "description": "Show token usage per model for recent months",
-            "sampleRequest": "usage"
-          }
-        ],
-        "disambiguation": [
-          {
-            "category": "bitbucket_pr_review",
-            "description": "The user wants an AI code review of a Bitbucket pull request, wants to ask a follow-up question about a finding from a review already run, or wants to verify their Bitbucket connection.",
-            "examples": [
-              "Review https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42",
-              "Do a deep review of https://bitbucket.org/myteam/myrepo/pull-requests/17",
-              "Explain finding #3",
-              "Add finding #2 as a comment on the PR",
-              "Check my Bitbucket connection"
-            ]
-          }
-        ]
-      }
-    ],
     "commands": [
       {
         "command": "ticket-sidekick.setDataCenterToken",
@@ -1069,11 +1030,6 @@
             "default": "datacenter",
             "description": "Bitbucket authentication mode: 'datacenter' uses Bearer PAT, 'cloud' uses Basic base64(username:App-password)"
           },
-          "ticketSidekick.bitbucket.showConnectionInfo": {
-            "type": "boolean",
-            "default": false,
-            "description": "When enabled, each @bitbucket response (except check) starts with an italic line showing the active base URL, API version, and auth type."
-          },
           "ticketSidekick.bitbucket.reviewInstructions": {
             "type": "string",
             "default": "",
@@ -1089,17 +1045,6 @@
             "minimum": 0.1,
             "maximum": 0.9,
             "description": "Fraction of the model's context window a review call's prompt may use (0.1–0.9, default 0.7); review chunks are additionally capped at about 24,000 tokens so each file gets a real share of the model's answer. The rest of the window is left for the model's output. Lower this value if you see context-limit errors during reviews."
-          },
-          "ticketSidekick.bitbucket.reviewMode": {
-            "type": "string",
-            "enum": [
-              "standard",
-              "quick",
-              "smart",
-              "deep"
-            ],
-            "default": "standard",
-            "description": "Default review depth, ordered by capability quick < standard < smart < deep. 'standard' enables the two-pass review where the LLM can request additional file context. 'quick' skips the second pass (diffs only) — faster and cheaper for large PRs. 'smart' adds specialist persona lenses (security, performance, reliability, maintainability) on top of standard. 'deep' adds persona lenses plus a critic (verification) pass — the most thorough and most expensive option. Override per-review with '@bitbucket review quick <url>', '@bitbucket review smart <url>', or '@bitbucket review deep <url>'."
           },
           "ticketSidekick.bitbucket.reviewExcludePatterns": {
             "type": "array",
@@ -1121,7 +1066,7 @@
             "default": 0.7,
             "minimum": 0,
             "maximum": 1,
-            "description": "Findings whose model-rated confidence falls below this value (0–1, default 0.7) show their confidence in plain instead of bold text, and a copied review marks them '(low confidence)'. They stay in their severity table and are never hidden or discarded."
+            "description": "Findings whose model-rated confidence falls below this value (0–1, default 0.7) are marked low confidence on the review board, and a copied review marks them '(low confidence)'. They are never hidden or discarded."
           },
           "ticketSidekick.bitbucket.detailedDiagnostics": {
             "type": "boolean",
@@ -1132,12 +1077,7 @@
             "type": "string",
             "scope": "application",
             "default": "",
-            "description": "The id of the language model the pull request review uses once reviews run on a board. Today the email boilerplate check falls back to it when ticketSidekick.email.checkModel is empty; @bitbucket still reviews with the model picked in the chat."
-          },
-          "ticketSidekick.bitbucket.showTokenUsage": {
-            "type": "boolean",
-            "default": false,
-            "description": "When enabled, every @bitbucket answer (review, follow-up, comment refinement) ends with one line showing its input and output tokens and the model, for example \"Tokens: 41,230 in · 6,840 out · claude-sonnet-4.5\". Counts come from the editor's tokenizer and are approximate (a ~ marks estimates). Usage is recorded for @bitbucket usage whether or not this is on."
+            "description": "The id of the language model the pull request review board uses for every call: the passes, Explain, Rewrite, the goal rewording and the requirements check. When it is empty or the model is not available, the review board asks for one on its first step and saves the pick here. The email boilerplate check falls back to it when ticketSidekick.email.checkModel is empty."
           }
         }
       },
@@ -1435,7 +1375,7 @@
           {
             "id": "bitbucketFirstReview",
             "title": "Review your first pull request",
-            "description": "Paste a real Bitbucket PR URL to @bitbucket and get a structured, line-accurate review.\n[Ask @bitbucket](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40bitbucket%20check%22%7D%5D)\n[Review a PR](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%40bitbucket%20%3CURL%3E%22%2C%22isPartialQuery%22%3Atrue%7D%5D)",
+            "description": "Open the review board for a real Bitbucket pull request, pick the model and start the review.\n[Review a pull request](command:ticket-sidekick.boards.openReview)\n[Check the connection](command:workbench.action.chat.open?%5B%7B%22query%22%3A%22%2Fts-bitbucket%20check%22%7D%5D)",
             "media": {
               "markdown": "walkthroughs/bitbucket/first-review.md"
             },

@@ -9,7 +9,7 @@ A **board** is a page Ticket Sidekick opens in its own editor tab: a large table
 | Cleanup (a ticket list loaded from a cleanup rule) | "run the cleanup Close released bugs" | `/ts-jira cleanup <rule> [in VERSION]` | `Ticket Sidekick: Run a cleanup rule` |
 | Stored sessions | "show the stored sessions" | `/ts-jira sessions` | `Ticket Sidekick: Open stored sessions` |
 | Import (Veracode or OSS report) | "import this Veracode report", with the file's path or the file dragged into the chat | `/ts-jira import <veracode or waltz> [PATH]` | `Ticket Sidekick: Open import board` |
-| Pull request review | | | `Ticket Sidekick: Review a pull request` |
+| Pull request review | "review this pull request", with the link | `/ts-bitbucket review <link> [question]` | `Ticket Sidekick: Review a pull request` |
 
 ## What you need
 
@@ -17,7 +17,7 @@ A **board** is a page Ticket Sidekick opens in its own editor tab: a large table
 - **For the Command Palette: nothing else.** The board commands work without Copilot.
 - **For asking Copilot: Agent mode.** Copilot opens a board through the `jira_open_board` tool; see [Jira Tools for Copilot Chats](copilot-tools.md).
 
-`Ticket Sidekick: Open import board` opens the import's start screen; see [Import board](#import-board).
+`Ticket Sidekick: Open import board` opens the import's start screen; see [Import board](#import-board). `Ticket Sidekick: Review a pull request` asks for the pull request link; see [Pull request review](#pull-request-review).
 
 `Ticket Sidekick: Open ticket list` asks for a JQL query; type `filter:` and a saved filter's id or name to open a filter instead. `Ticket Sidekick: Run a cleanup rule` lets you pick a rule from `.jira-templates.json` and, optionally, a fix version.
 
@@ -153,6 +153,17 @@ The board checks the report file and Jira when it opens, after a restart and whe
 
 When no tab has work left, the board says there is nothing left to do and offers **Close**. The import stays, with export and **Reload report**, until you close it or it expires after `ticketSidekick.sessions.retentionDays`.
 
+## Pull request review
+
+The review board reviews one Bitbucket pull request. It needs Bitbucket set up ([README](../../README.md#bitbucket-setup)); Jira only when you check the pull request against a ticket.
+
+- **First step.** The board always stops here: the review model, the requirements source (a Jira ticket, a goal you type and **Reword**, or none) and an optional question. No model call runs before **Start**, except a **Reword** you press.
+- **Regular pass, then your choice.** **Start** runs the regular pass with live steps and **Stop**. The board then suggests extra passes; keep the findings, run the suggestion, or pick any of Security, Performance, Reliability, Maintainability and the Critic under **Passes to run**, now or later.
+- **Findings.** Each finding has **Explain**, a draft comment you edit with **Rewrite** and **Undo**, and a checkbox for **Post** and **Copy**. **Post** writes the selected drafts to Bitbucket after the VS Code confirmation; **Copy … for Teams** and **Copy … as Markdown** put them on the clipboard.
+- **Out of date.** A new commit on the pull request never starts a review by itself; the board says the review is out of date and **Run again** reviews it at the new commit.
+
+Copilot can read a finished review with `bitbucket_read_findings`. See [Pull Request Review](bitbucket-pr-review.md) for the whole review.
+
 ## How a board keeps its data
 
 Every board shows a **session**: the data it read and what you set on the board. The page itself holds nothing.
@@ -166,7 +177,7 @@ Every board shows a **session**: the data it read and what you set on the board.
 
 ## Stored sessions
 
-Sessions are kept in VS Code's storage for the workspace, outside your repository. They hold what the board shows: for the security report the keys, summaries and Due Dates of open vulnerabilities, for a ticket list its rows, your selection and the chosen change, for an import the report's rows, the matched tickets, your choices and a running ticket merge. They never hold credentials.
+Sessions are kept in VS Code's storage for the workspace, outside your repository. They hold what the board shows: for the security report the keys, summaries and Due Dates of open vulnerabilities, for a ticket list its rows, your selection and the chosen change, for an import the report's rows, the matched tickets, your choices and a running ticket merge, for a pull request review the reviewed diff, the findings, explanations, drafts and coverage. They never hold credentials.
 
 - `/ts-jira sessions` opens a board listing every stored session with its source, when its data was read, when it was last used and its size, with **Reopen**, **Delete** and **Delete all**.
 - A session not used for `ticketSidekick.sessions.retentionDays` days (default 14) is deleted.
@@ -177,5 +188,4 @@ Sessions are kept in VS Code's storage for the workspace, outside your repositor
 ## Limits
 
 - A board belongs to the VS Code window that opened it and shows that window's workspace sessions.
-- The pull request review has no board yet. Until it does, it runs in the deprecated `@bitbucket` chat participant.
 - The same import open in two VS Code windows is not locked. The search for tickets that already exist, the check of each ticket before it is written and the out-of-date mark catch most collisions, but not all: work on one import in one window.

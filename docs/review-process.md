@@ -1,67 +1,78 @@
 # Bitbucket PR Review Process
 
-> **Deprecated surface.** This page documents the `@bitbucket` chat participant, which is deprecated and kept for maintenance until the PR review board exists. New work is built as extension tools and boards; see [`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md). The services, parsers and builders described here are reused by the boards.
-
-How `@bitbucket <pr-url>` turns a pull request into a grounded, line-accurate
+How the review board turns a pull request into a grounded, line-accurate
 review. **Keep this document in sync whenever the review pipeline changes** — it
-is the single source of truth for how the steps fit together.
+is the single source of truth for how the steps fit together. The user manual is
+[`docs/manual/bitbucket-pr-review.md`](manual/bitbucket-pr-review.md); how a board
+and its session work in general is in
+[`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md).
 
 The code lives in:
 
-- [`src/participant/BitbucketParticipant.ts`](../src/participant/BitbucketParticipant.ts) — orchestration (the handler).
-- [`src/services/PrReviewService.ts`](../src/services/PrReviewService.ts) — prompt building, critic prompt, report formatting.
-- [`src/participant/reviewSessionState.ts`](../src/participant/reviewSessionState.ts) — all pure helpers (numbering, anchor-locate, dedup, chunking).
+- [`src/boards/review/`](../src/boards/review/) — the review board kind: start screen, first step, runs, findings, Post and Copy.
+- [`src/review/engine/`](../src/review/engine/) — the staged review engine, vscode-free: `runRegularPass`, `runExtraPass`, `runCritic`, `recheckRequirements`, `rewordGoal`, the finding store and the shared pass plumbing.
+- [`src/review/`](../src/review/) — the pure review core: `reviewSessionState.ts` (diff parsing, chunking, anchor locate, dedup, reply parsing, diagnostic formatters), the requirements pass, `findingCalls.ts` (Explain and Rewrite), `shareFormat.ts` (Copy), `tokenMeter.ts`, `ticketRead.ts`.
+- [`src/services/PrReviewService.ts`](../src/services/PrReviewService.ts) — prompt building (regular, persona, critic, requirements), the persona catalog, comment posting.
 - [`src/bitbucket/BitbucketApiClient.ts`](../src/bitbucket/BitbucketApiClient.ts) — HTTP, diff fetch (with context lines), file fetch.
 
-## Pipeline overview
+## The staged review
+
+A review is not one run with a mode chosen up front. The board stops on a
+**first step** (the review model, the requirements source and an optional
+question), and **Start** runs the **regular pass**. Everything after that is the
+developer's choice, now or later: keep the findings, run the passes the regular
+pass suggests, or pick any of the four persona passes and the critic. Each pass
+is a board **run** (see "Model runs" in the architecture page): it reports each
+finished batch to the session, so a restart keeps the finished part, and **Stop**
+ends it with what it found so far. A new commit on the pull request never starts
+a run; the board marks the review out of date and **Run again** reviews it at the
+new commit.
 
 ```mermaid
 flowchart TD
-    A[PR URL in prompt] --> B[getPullRequest + getPullRequestDiffWithCoverage<br/>contextLines = reviewContextLines, default 12<br/>smart/deep with a title key: pause first, see Requirements pass]
-    B --> B2{Data Center cut<br/>the diff short?}
-    B2 -- yes --> B3[fetch each cut file on its own<br/>getPullRequestFileDiff]
-    B2 -- no --> C
-    B3 --> C[parseDiff → FileDiff per file]
-    C --> D[drop no-hunk files + reviewExcludePatterns]
-    D --> E[buildAdaptiveChunks<br/>pack to min of token budget and 24k cap]
-    E --> F{for each chunk}
-    F --> G[buildPrompt<br/>numberDiffLines render-only + grounding rules<br/>smart mode also asks for recommendedPersonas]
-    G --> H[LLM pass 1 → parseReviewReply<br/>unreadable reply retried like a provider error]
-    H --> I[resolveFindingAnchors<br/>tolerant locate → verified line, or location unverified]
-    I --> J{cut off mid-object?}
-    J -- yes --> K[continuation over the whole batch<br/>lists findings already reported]
-    J -- no --> L
-    K --> L{additionalFilesNeeded<br/>and not quick?}
-    L -- yes --> M[budget-aware Pass 2<br/>sees Pass 1 findings + context files<br/>adds findings or retracts by number]
-    L -- no --> N
-    M --> N[chunk findings]
-    N --> DP{deep mode?}
-    DP -- yes --> PP[persona passes, inline<br/>buildPersonaPrompt × 4, this chunk]
-    DP -- no --> O
-    PP --> O{deep mode?}
-    O -- yes --> P[critic pass, same context files as Pass 2<br/>buildCriticPrompt → parseCriticKeep → drop unverified]
-    O -- no --> Q
-    P --> Q[concat into allFindings]
-    Q --> F
-    F -- done --> SM{smart mode?}
-    SM -- no --> R
-    SM -- yes --> AGG[aggregateRecommendedPersonas<br/>across every chunk's trailer]
-    AGG --> USB{hasUsableSignal?}
-    USB -- no --> FB[askSmartFallbackChoice<br/>SmartFallbackSession → next turn]
-    USB -- yes --> PP2[phase 2: persona passes<br/>selected personas × every chunk<br/>runPersonaPassesForChunk]
-    PP2 --> R[completeReview<br/>dedupeFindings → number 1..N]
-    R --> RQ{ticket chosen?}
-    RQ -- yes --> RP[requirements pass<br/>one call + one file round]
-    RQ -- no --> T
-    RP --> T[formatReview<br/>coverage block, then three severity tables,<br/>muted low-confidence and location-unverified rows]
-    T --> U[store ReviewSession with the reviewed diff]
+    A[First step: model, requirements source, question] --> B[Start: regular pass]
+    B --> C[readReviewDiff<br/>getPullRequestDiffWithCoverage + cut files one by one<br/>drop no-hunk files and reviewExcludePatterns]
+    C --> D[buildAdaptiveChunks<br/>min of token budget and 24k cap]
+    D --> E{for each batch}
+    E --> F[reviewBatch: pass 1<br/>buildPrompt, also asks for recommendedPersonas]
+    F --> G[parseReviewReply → resolveFindingAnchors<br/>cut off? one continuation]
+    G --> H{asked for files?}
+    H -- yes --> I[pass 2 with the whole files<br/>adds findings or retracts by number]
+    H -- no --> J
+    I --> J[addFindings: dedupe, number once]
+    J --> E
+    E -- done --> K{requirements source?}
+    K -- ticket or goal --> L[requirements check<br/>one call + at most one file round]
+    K -- none --> M
+    L --> M[snapshot: batches, context paths, reviewed commit<br/>suggestion from the batches' recommendations]
+    M --> N{developer picks}
+    N -- persona pass --> O[runExtraPass over the stored batches]
+    N -- critic --> P[runCritic over unchecked findings]
+    N -- re-check --> Q[recheckRequirements on the stored diff]
+    O --> N
+    P --> N
+    Q --> N
 ```
 
-Smart mode's persona passes never run inside the per-chunk loop above — they need the
-recommendation aggregated across *all* chunks first, so phase 2 is a second, separate
-walk over the same `chunks` after the loop completes. `deep` mode instead runs all four
-persona passes inline, per chunk, alongside the standard pass — no aggregation needed
-because deep mode always uses every persona.
+**Later passes work on the snapshot.** The regular pass stores its batches, the
+context files each batch read and the commit it reviewed. A persona pass and the
+critic run over those batches and read the same context files again **at the
+reviewed commit**, so they see what the regular pass saw even after the pull
+request moved on.
+
+**Finding numbers never change.** `addFindings` (`engine/findingStore.ts`) dedupes
+a pass's findings among themselves, then merges each into the first numbered
+finding it duplicates (stronger severity, combined sources, the corroboration
+bump, the better provenance; the numbered finding keeps its number and text) or
+gives it the next unused number. A removed finding leaves a gap.
+
+**The suggestion.** Pass 1's prompt asks each batch which persona passes are worth
+a dedicated look (`recommendedPersonas`, ids from the fixed catalog only).
+`suggestionOf` unions them with `aggregateRecommendedPersonas`: a batch with no
+readable trailer gives no signal, an explicit empty list does. No signal from any
+batch means the board says it has no usable recommendation; a union that came
+back empty means it suggests no extra pass. Either way the developer can pick
+any pass.
 
 ## Diff intake and chunk budgeting
 
@@ -69,10 +80,10 @@ because deep mode always uses every persona.
 back to the `diff --git` header); a deletion (`+++ /dev/null`) keeps the source
 path and sets `deleted: true` so removed code is still reviewed. `reviewExcludePatterns`
 are matched via `minimatch` with `matchBase: true`, and excluded files are
-reported to the user; the review returns early if every file is excluded.
+listed under **Not reviewed and dropped**; when every file is excluded the board says the pull request has nothing to review.
 
 The token budget resolves in order: the `modelContextTokens` setting, then
-`request.model.maxInputTokens` (VS Code LM API), then a `60 000` fallback —
+the review model's `maxInputTokens` (VS Code LM API), then a `60 000` fallback —
 multiplied by `contextBudgetRatio` (default `0.7`). `buildAdaptiveChunks`
 packs files into chunks against the smaller of that budget and a fixed
 `REVIEW_CHUNK_TOKEN_CAP` of 24 000 estimated tokens, estimating each file's
@@ -141,64 +152,46 @@ parsing.
 
 A finding leaves the review only as a duplicate, for naming a file outside
 the PR, by an explicit Pass 2 retraction, or by the critic. Every other
-doubt keeps the finding visible. This protects recall — a review never looks
-empty because filters stacked up, and whenever findings were dropped the
-review says how many in one line above the tables
-(`formatDroppedFindingsNotice`).
+doubt keeps the finding visible. This protects recall: a review never looks
+empty because filters stacked up, and every dropped finding is listed under
+**Not reviewed and dropped**.
 
 | Step | When | Effect |
 | --- | --- | --- |
-| Dedup (`dedupeFindings`) | always | **merge** two findings on the same file + verified line with the same meaning (the stronger severity survives); a location-unverified finding is also dropped when another pass located a finding with the same title in the same file |
-| Path resolution (`resolveFindingAnchors`) | always | **drop and count** a finding whose file names nothing in the diff, after trying `./`, `a/`, `b/`, leading `/` and a unique suffix match |
-| Anchor locate (`resolveFindingAnchors`) | always | locate `anchorCode` in tiers — exact, whitespace-collapsed, then with a copied `L<n>` gutter or diff marker removed; when nothing matches, **keep** the finding as *location unverified*: no line, muted, activity-feed only when posted |
-| Confidence (`formatReview`, `confidenceThreshold`) | always | **mute** (render the confidence cell non-bold) if `confidence < threshold` — never deleted, always shown in its severity table |
-| Pass 2 retraction (`mergePass2Findings`) | standard, smart, deep | **drop** a Pass 1 finding only when Pass 2 names its number in the meta line's `retract` list |
-| Critic (`buildCriticPrompt` + `parseCriticKeep`) | deep mode only | **drop** findings the verification pass can't confirm; an unreadable verdict (no JSON, or an index outside 1..N) keeps the batch's findings unverified, with a notice |
+| Dedup (`dedupeFindings`, `addFindings`) | every pass | **merge** two findings on the same file + verified line with the same meaning (the stronger severity survives); a location-unverified finding is also dropped when another pass located a finding with the same title in the same file |
+| Path resolution (`resolveFindingAnchors`) | every pass | **drop and count** a finding whose file names nothing in the diff, after trying `./`, `a/`, `b/`, leading `/` and a unique suffix match |
+| Anchor locate (`resolveFindingAnchors`) | every pass | locate `anchorCode` in tiers — exact, whitespace-collapsed, then with a copied `L<n>` gutter or diff marker removed; when nothing matches, **keep** the finding as *location unverified*: no line, activity feed only when posted |
+| Confidence (`confidenceThreshold`) | always | **mark** *low confidence* if `confidence < threshold` — never deleted |
+| Pass 2 retraction (`mergePass2Findings`) | a batch that asked for files | **drop** a Pass 1 finding only when Pass 2 names its number in the meta line's `retract` list |
+| Critic (`buildCriticPrompt` + `parseCriticKeep`, `applyCriticVerdicts`) | when the developer runs it | **drop** a finding the critic can't confirm, unless the developer explained it or drafted a comment for it: then it stays, labelled *probably a false alarm*. An unreadable verdict keeps the batch's findings unchecked, with a notice |
 
-Persona-pass findings (smart/deep) are not a separate filtering stage — they
-flow through the exact same two hard drops as standard-pass findings (anchor
-locate, and critic in deep mode), then merge into `allFindings` alongside
-the standard pass's findings before the shared dedup/confidence/format steps
-run once over the combined set.
-
-Fixed order: `parse → number(render) → LLM → locate+classify (drop only for
-a file outside the PR) → [truncated: continuation] → [Pass 2 refine] →
-[deep: critic] → merge chunks → dedup → format`.
-The end-of-review findings funnel (below) reports these same stages — dedup,
-outside-PR drops, Pass 2 retractions, critic — in that conceptual order regardless of the
-pipeline's actual per-chunk execution order, since it's a summary of where
-findings went, not a step-by-step trace.
+Persona-pass findings are not a separate filtering stage: they go through the
+same anchor locate and dedup as regular-pass findings and join the same numbered
+list. The critic checks only findings it has not checked yet
+(`uncheckedFindings`), so running it again after a persona pass checks only the
+new ones.
 
 ## Resilience & debugging
 
-Every LLM call in the pipeline gets exactly 3 tries: the original request,
-one identical retry (short exponential backoff), and — for the two calls
-that dominate `deep` mode's extra load, the main review call and the critic
-call — a 3rd try that's genuinely easier for the model instead of a 3rd
-identical one: the batch of files (or findings) is split in half once and
-each half gets one final attempt. This bounds every chunk to at most 4 real
-LLM calls, never an open-ended retry storm. A file or finding that still
-fails standalone after its tries is skipped and reported — it does not
-abort the rest of the review. `dedupeFindings` → `formatReview` →
-`ReviewSession` run on whatever was collected, even after partial failures, so
-follow-ups keep working. The one exception is a review in which no file got a
-readable reply (no pass-1 file and no persona batch): it ends as a failure,
-not a clean review.
+Every model call in a pass gets three tries: the original request, one
+identical retry (short exponential backoff), and, for a batch's first call and
+the critic call, a third try that is easier for the model instead of a third
+identical one: the batch of files (or findings) is split in half once and each
+half gets one final attempt (`callBatchWithSplit`). A file or finding that still
+fails after its tries is skipped and reported; it never aborts the rest of the
+pass. A stop the developer asked for ends the pass at once, with no retry and no
+split, and keeps the finished batches.
 
-| Reviewed files | Chat | Stored session, walkthrough signal, chips | Completion log |
+| Regular pass | Board | Session | `firstReviewCompleted` |
 | --- | --- | --- | --- |
-| All batches readable | Findings, or "No issues found." | Yes | Info, finding count |
-| Some batches failed | Findings plus the partial-results warning | Yes | Info, finding count, reviewed and failed file counts |
-| None | "Review failed" with the file count, cause and an output-channel pointer | No | Error, reviewed and failed counts, first cause |
+| All batches readable | Findings, or "No issues found." | Stored | Set |
+| Some batches failed | Findings under the partial-results banner; the failed batch parts listed with their files | Stored | Set |
+| No batch readable | A failure banner, no findings, **Run again** | Stored, marked failed | Not set |
+| Stopped | The findings so far | Stored | Not set |
 
-"Reviewed" counts files in successful pass-1 batches only; persona passes
-re-run the same files, so they add only a "some persona batch succeeded" flag
-that keeps a deep review from counting as failed. The failed result follows the
-abort path's contract (no session, no `firstReviewCompleted` context key, no
-chips) and is decided right after the chunk loop, so smart mode never asks for
-lenses on a review that never ran. A per-file notice says "after retrying"
-only when the error is a class the retry layer retries (`isTransientLmError`);
-a non-transient error ends after one attempt.
+A failed batch's notice says "after retrying" only when the error is a class the
+retry layer retries (`isTransientLmError`); a non-transient error ends after one
+attempt and logs why.
 
 ### Reading replies
 
@@ -210,18 +203,18 @@ inside an unbalanced object or array; a reply that ends cleanly without its
 trailing meta line is complete, not truncated, and stays eligible for Pass 2.
 
 Parsing runs inside the retried call: a reply with nothing review-shaped
-(empty, or prose with no usable JSON) throws `UnparseableReplyError`, which
-the retry layer treats as transient. So a bad reply is retried and split like
-a provider error, and after its tries only that batch's files are reported as
-not reviewed — it never aborts the review.
+(empty, or prose with no usable JSON) throws `UnparseableReplyError`
+(`assertReadableReply`), which the retry layer treats as transient. So a bad
+reply is retried and split like a provider error, and after its tries only that
+batch's files are reported as not reviewed.
 
 ### Truncation continuation
 
-A cut-off reply — from Pass 1 or a persona pass — gets one continuation call.
+A cut-off reply, from Pass 1 or a persona pass, gets one continuation call.
 Findings arrive ordered by severity, not by file, so no file can be proven
 finished: the continuation re-reviews the whole batch, lists the findings
 already reported, and asks only for new ones. Duplicates are merged by the
-review-wide dedup.
+dedup.
 
 ### Pass 2 refines Pass 1
 
@@ -231,460 +224,215 @@ section and with Pass 1's findings as a numbered list. It may add findings,
 and it retracts a Pass 1 finding only by naming its number in the meta
 line's `retract` list; to correct a finding's severity or wording it retracts
 the number and reports the corrected version. These instructions sit outside
-the untrusted-content fence; only the numbered list sits inside it. Every Pass 1 finding it doesn't retract is kept
-(`mergePass2Findings`), so a Pass 2 reply cut off before its meta line, or a
-failed Pass 2, can never lose a Pass 1 finding. In `deep` mode the critic
-judges each chunk with the same context files Pass 2 used, in both rounds.
-A context file that doesn't fit the remaining budget is skipped and logged,
-never admitted over budget.
+the untrusted-content fence; only the numbered list sits inside it. Every Pass 1
+finding it doesn't retract is kept (`mergePass2Findings`), so a Pass 2 reply cut
+off before its meta line, or a failed Pass 2, can never lose a Pass 1 finding.
+A persona pass may ask for more files the same way. The critic judges each
+batch with the context files that batch read. A context file that doesn't fit
+the remaining budget is skipped and logged, never admitted over budget
+(`fetchAndBudgetContextFiles`).
 
 ### Always-on diagnostic timeline
 
-Every review opens with one line in the shared `"Ticket Sidekick"` output
-channel (`View → Output`) recording its effective configuration: model
-identity, resolved token budget, context budget ratio, review mode,
-critic-enabled, and context lines — enough to see a misconfiguration (e.g. an
-unusually small `contextBudgetRatio`) without re-running the review.
+Every pass logs to the shared `"Ticket Sidekick"` output channel (`View →
+Output`) under `bitbucket.review`. It opens with one line recording its
+configuration: the pass, model identity, resolved token budget, context budget
+ratio, whether it is the critic, and context lines, together with `metering`
+(`on`, or `off` when the token meter fell back to the raw model) and `frozen`
+(whether the host's model object is frozen).
 
-Every LLM call in the pipeline — pass 1, a truncation continuation, pass 2,
-each persona pass, and the critic pass — then logs one compact per-call
-line: pass, batch, attempt, a short run tag (`pr=PROJ/repo#42`, so two
-reviews running concurrently in one VS Code window stay attributable to
-their own lines), prompt size with estimated tokens, response size,
-duration, and outcome status (`ok`, `truncated`, or `error` with its code).
-A persona pass's `pass` value is the persona's own id (`security`,
-`performance`, `reliability`, or `maintainability`) — the exact same
-`formatCallLine`/`handleAttemptFailure` diagnostic machinery every other
-pass uses, just with that id instead of `pass1`/`pass2`/`critic` (KTD6). In
-`smart` mode, the standard pass's per-chunk `recommendedPersonas` trailer and
-the aggregation step that follows it are not separate LLM calls, so neither
-gets its own `pass` tag — instead each gets one plain diagnostic line: the
-aggregation result (`"Smart mode: personas selected — …"`, or an explicit
-`"no usable persona recommendation from any chunk"` line when every chunk's
-trailer failed to parse, which is also when the smart-fallback question
-fires). A truncated response —
-previously the one event in the pipeline that threw nothing and logged
-nothing — gets its own event: response size, complete-vs-cut-off line
-counts, whether the final meta line was present, which files were covered
-versus left uncovered, and a short raw preview of what came back (bounded
-length, same key-based redaction as everywhere else — not scanned for
-secret-shaped content). Recovery decisions — an identical retry in flight, a
-batch split into halves, a continuation starting with N files — are logged
-as their own lines too, so a reader can follow what happened without knowing
-the retry/split algorithm.
+Every model call then logs one compact line: pass (`pass1`, `pass2`, a persona
+id such as `security`, `critic` or `requirements`), batch, attempt, a short run
+tag (`pr=PROJ/repo#42`, so two reviews in one window stay apart), prompt size
+with estimated tokens, response size, duration, and status (`ok`, `truncated`,
+or `error` with its code). Every failed attempt, including ones that succeed on
+retry, names the error class (`errorName`); for an error with no provider code
+it carries `stackHead`, the top three frames reduced to function plus file and
+line. Recovery decisions (an identical retry, a split into halves, a
+continuation, a give-up with `not retrying: <class> is not a transient provider
+error`) are logged as their own lines. A truncated response gets its own event:
+response size, complete-vs-cut-off line counts, whether the meta line was
+present, which files were covered, and a short raw preview (bounded length,
+key-based redaction).
 
-At the end of every review, one findings-funnel summary line reports counts
-at each stage from the table above — raw findings from LLM responses,
-deduped as duplicate, dropped as outside the PR, retracted by Pass 2, and
-(deep mode) dropped by critic — down to the final count shown, with how many
-of those are location unverified. There is no
-"folded by confidence" stage: every finding lands in a severity table, so
-`final` is the total finding count shown (KTD5/KTD6). Persona-pass findings
-(smart/deep) fold into that same `raw`
-count alongside the standard pass's — there is no separate persona stage or
-line in the funnel (KTD6); a persona-heavy run is distinguishable only via
-the per-call `pass:` tags above, not via the funnel shape. If a review is
-cancelled or throws before reaching this line,
-the outer catch logs a closing line naming the last batch/stage reached, so
-that's distinguishable from a channel-write failure (the funnel's absence
-alone can't tell those apart).
-
-Every failed attempt — including ones that succeed on retry — is logged to
-the output channel this way, along with the model identity in use
-(vendor/family/id/version) once per review, together with `metering` (`on` or
-`off` when the token meter fell back to the raw model) and `frozen` (whether the
-host's model object is frozen). Every failed attempt's line also names the error
-class (`errorName`); for an error with no provider code it carries `stackHead`,
-the top three frames reduced to function plus file and line, without directories.
-When an error is not retried, one `not retrying: <class> is not a transient
-provider error` line says why only one attempt ran. A review that ends failed
-logs `Review failed — no file could be reviewed` at error level with the reviewed
-and failed file counts and the first cause; a partial review's completion line
-carries the same counts. This is what makes it possible
-to tell a one-off provider hiccup apart from a specific model that
-consistently fails on a specific prompt shape, or the model's output from
-an operator-side misconfiguration.
+At the end of every pass one findings-funnel line reports counts at each stage
+of the table above (raw findings, deduped, dropped as outside the PR, retracted
+by Pass 2, dropped by the critic) down to the final count, with how many are
+location unverified. A pass that ends with no readable batch logs `no file could
+be reviewed` at error level with the reviewed and failed file counts and the
+first cause; a pass that is stopped or throws logs the last stage it reached
+(`logAborted`).
 
 ### Detailed diagnostics (opt-in)
 
 `ticketSidekick.bitbucket.detailedDiagnostics` (boolean, default `false`)
-additionally buffers every line above during the run and, when the review
-completes, emits a single fenced structured record to the output channel —
-configuration, every per-call/event line, and the findings funnel — as one
+additionally buffers every line above during the pass and, when it ends, writes
+one fenced structured record to the output channel (`writeRunRecord`):
+configuration, every per-call and event line, and the findings funnel, as one
 copy-pasteable block for comparing two runs or filing a provider bug report.
-It adds no file persistence and no size cap; a large or deep-mode review
-produces a proportionally larger block. Off by default, it adds no
-measurable overhead to the normal always-on timeline.
 
 ## Provenance (new vs. existing code)
 
 Every located finding is tagged from the line type it anchored to:
 
-- 🆕 **new** — anchored to an added (`+`) line; introduced by this PR.
-- 📍 **existing** — anchored to an unchanged context line; a real issue, but
-  pre-existing. Surfaced and clearly marked, never confused with new work.
-- ➖ **removed** — anchored to a removed (`-`) line; kept and tagged (rare).
+- **new** — anchored to an added (`+`) line; introduced by this PR.
+- **existing** — anchored to an unchanged context line; a real issue, but
+  pre-existing. Shown and clearly marked, never confused with new work.
+- **removed** — anchored to a removed (`-`) line; kept and tagged (rare).
 
-Wider context (`reviewContextLines`, default 12) deliberately surfaces *more* 📍
-existing findings — they are labelled, not introduced by the PR.
+Wider context (`reviewContextLines`, default 12) deliberately surfaces *more*
+existing findings; they are labelled, not introduced by the PR.
 
 ## Multi-line findings
 
-A finding carries a primary anchor (where the bug manifests — the inline-comment
-location) plus optional `relatedCode` resolved to `relatedLines` (the other lines
-in a build-up). The report shows `L19 (also L12, L15)`; the report stays brief and
-the full line-by-line walk happens on follow-up.
+A finding carries a primary anchor (where the bug manifests, and where an inline
+comment lands) plus optional `relatedCode` resolved to `relatedLines` (the other
+lines in a build-up). The board shows `L19 (also L12, L15)`; **Explain** walks
+through them.
 
-## Modes
-
-Capability order is `quick < standard < smart < deep`; mode-keyword *detection*
-priority in the prompt is the reverse — `deep` > `smart` > `quick` > the
-configured default (`resolveReviewMode`, KTD1) — so a prompt that accidentally
-contains more than one keyword resolves to the more thorough mode rather than
-silently downgrading a `deep`/`smart` request.
-
-| Invocation | Pass 2 (whole-file context) | Persona passes | Critic pass |
-| --- | --- | --- | --- |
-| `@bitbucket review quick <url>` | off | off | off |
-| `@bitbucket <url>` (standard, default) | on (budget-aware) | off | off |
-| `@bitbucket review smart <url>` | on (budget-aware) | on — selected subset, phase 2 | off |
-| `@bitbucket review deep <url>` | on | on — all four, inline per chunk | on |
-
-Context widening applies in **all** modes — only the expensive whole-file Pass 2,
-the persona passes, and the critic pass are mode-gated.
-
-`deep` mode's critic pass adds one LLM call per chunk on top of the main
-review call — roughly doubling the number of sequential calls made per
-review, and proportionally increasing exposure to a transient provider
-failure (see "Resilience & debugging" above).
-
-## Persona lenses (`smart` and `deep`)
+## Persona passes
 
 `PERSONAS` (`src/services/PrReviewService.ts`) is a fixed catalog of four
-single-lens review personas, mirroring compound-engineering-plugin's persona
-set: **security**, **performance**, **reliability**, **maintainability**. Each
-is an independent LLM call over the same numbered diff chunks the standard
-pass already uses (`buildPersonaPrompt` — identical grounding rules, severity
-rubric, and NDJSON output contract as `buildPrompt`, with the generalist
-"Review the changes for:" section swapped for the persona's own focus
-paragraph, which explicitly tells the model not to report findings outside
-its lens).
+single-lens personas: **security**, **performance**, **reliability**,
+**maintainability**. Each is its own pass (`runExtraPass`) over the stored
+batches with `buildPersonaPrompt`: the same grounding rules, severity rubric and
+NDJSON output contract as `buildPrompt`, with the generalist "Review the changes
+for:" section replaced by the persona's focus paragraph, which tells the model
+not to report findings outside its lens. A persona pass runs only when the
+developer picks it, the suggestion included; a pass already run is refused. Its
+findings carry the persona as their source and join the numbered list.
 
-- **`deep` mode** runs all four persona passes inline, once per chunk,
-  alongside the standard pass — no selection step, since deep mode always
-  wants full coverage.
-- **`smart` mode** runs a cheaper two-phase flow instead of always paying for
-  all four:
-  1. **Phase 1** — the standard pass runs over every chunk as usual, but its
-     prompt also asks the model to name which personas it thinks are worth a
-     dedicated look, in a `recommendedPersonas` trailer field (ids from the
-     fixed catalog only).
-  2. **Aggregation** — after every chunk's phase 1 pass has returned,
-     `aggregateRecommendedPersonas` unions the recommended ids across all
-     chunks into one PR-wide selected set. A chunk that failed or returned no
-     parseable trailer contributes no signal; an empty `recommendedPersonas`
-     array (the model explicitly recommending nothing) still counts as usable
-     signal. If **no** chunk contributed usable signal, smart mode doesn't
-     guess — it stores a `SmartFallbackSession` and asks the user to choose
-     between running all four passes or continuing with the standard review
-     only (see "Follow-ups" below). Otherwise it streams one line announcing
-     the selected personas (or explicitly says none were selected, if the
-     union came back empty).
-  3. **Phase 2** — the selected personas' passes run once, after every
-     chunk's phase 1 has completed, over the *same* chunks
-     (`runPersonaPassesForChunk`, the same shared helper deep mode's inline
-     passes and the fallback-resume turn use) — never per-chunk during phase
-     1, since the selection is PR-wide, not per-chunk.
+## Upfront question
 
-Persona-sourced findings carry no persona tag on the `ReviewFinding` itself —
-they're formatted, deduped, and funneled exactly like a standard-pass finding
-(R2). The only place a persona pass is visible at all is the diagnostic
-timeline (see below); the review output and follow-up flow are unaware which
-pass produced which finding.
+The question from the first step (or from `/ts-bitbucket review <url>
+<question>`, or the agent's `question` input to `bitbucket_open_review`) is
+composed with any configured `reviewInstructions` into one trusted `ADDITIONAL
+INSTRUCTIONS` block and goes into **every** review call: Pass 1, the
+continuation, Pass 2, every persona pass and the critic. Reaching the critic
+matters: without it, the verification step would judge findings against a
+generic rubric and could drop question-driven findings. Explain also gets the
+question. Without a question and without `reviewInstructions`, no `ADDITIONAL
+INSTRUCTIONS` block is added.
 
-### Upfront question
+## Requirements check
 
-An optional focus question can be attached to any review, in either syntax (or as a
-plain sentence ending in `?`, below):
+An isolated call that checks the diff against a Jira ticket or a goal the
+developer typed. It adds the **Requirements coverage** block above the findings
+and adds no findings. **Only this call ever receives ticket or goal text**: the
+Pass 1, Pass 2, persona and critic prompts are untouched.
 
-```text
-@bitbucket question: does this change handle concurrent writes safely? <pr-url>
-@bitbucket <pr-url> -- does this change handle concurrent writes safely?
-```
+**Choosing the source.** On the first step: a Jira key typed by the developer
+wins over the key in the PR title (`findJiraKeyInText`, which skips well-known
+non-ticket shapes such as `UTF-8`, `SHA-256`, `CVE-…` and `RFC-…`); the title's
+key is offered with **Use KEY**. While Jira is not configured the ticket source
+is unavailable, with the reason. A goal is reworded only when the developer
+presses **Reword** (`rewordGoal`: one call that sorts the goal into in-scope and
+out-of-scope points in the developer's own terms, adds nothing they did not
+state, and lists open points); the developer corrects the text, and the check
+reads that text.
 
-(`--` is a plain double-dash, chosen for keyboard-typability — not an em-dash.)
-`extractPromptDirectives` (`reviewSessionState.ts`) extracts it and returns the
-prompt without it, which is read **before** `quick`/`deep` mode-keyword detection runs,
-so a question that happens to contain the word "deep" or "quick" can't flip the
-review mode. This makes the question orthogonal to the mode keywords — the two
-compose freely, in either order:
+**Reading the ticket.** `TicketService.getRequirementsSource` returns the
+summary, description and comments or a failure classified by HTTP status (404
+not found, 401/403 auth, anything else other). The read is guarded by
+`readTicketGuarded` (`src/review/ticketRead.ts`): it times out after 20 seconds
+and a throw becomes an `error` failure, so a slow or broken Jira never holds up or
+fails the review; the findings stand and the coverage names the failed read.
+When the key in use is not found and the PR title names another, the failure
+says so and offers **Use** with that key. Sizes are capped in
+`utils/requirementsSource.ts` (description 6,000 characters, comments 8,000
+newest first and 1,500 each); a failed comment fetch still returns the ticket.
+The review reaches Jira through the shared `TicketService`/`JiraApiClient`.
 
-```text
-@bitbucket review deep <url> question: Did I introduce any regression?
-```
+**The call.** One call over the whole PR at the end of the regular pass
+(`runRequirementsPass`, `src/review/requirementsPass.ts`). `packDiffFiles` fits as
+many files as the token budget allows, smallest first; files left out are listed
+by path and the prompt tells the model to mark a requirement *unclear*, never
+*not evident*, when its evidence could sit in an unseen file (KL14). The reply may
+ask for extra files; one round goes through `fetchAndBudgetContextFiles`, never a
+second, and a failed or unreadable second round keeps the first answer. The reply
+is one JSON object read by `parseRequirementsReply`; an unreadable reply is
+retried like a provider error, and if every try fails the findings stand and the
+coverage says the check failed. The call logs with pass id `requirements`.
 
-The question is composed with any configured `reviewInstructions` into a single
-trusted `ADDITIONAL INSTRUCTIONS` block, and injected into **every** LLM call in
-the pipeline: Pass 1, the truncation-continuation pass, Pass 2, and — when running
-in deep mode — the critic pass too. Reaching the critic pass matters: without it,
-a `deep` review's verification step would be checking findings against a generic
-rubric with no idea the question was the point, and could drop question-driven
-findings the critic didn't recognize as relevant.
+**Re-check.** After a new choice or an edited goal, **Re-check** runs only the
+check again on the stored diff (`recheckRequirements`), reading extra files at the
+reviewed commit, and replaces only the coverage; the findings are untouched. A
+failed or stopped re-check keeps the old coverage; the choice "none" removes it
+without a call.
 
-When no question is supplied, Pass 1, Pass 2, and the continuation pass behave
-exactly as before this feature — they already received `reviewInstructions` (if
-configured) pre-feature, and `ADDITIONAL INSTRUCTIONS` is only added when there's
-content to add. The one exception is the critic pass: in `deep` mode it now also
-receives `reviewInstructions` (if configured) as `ADDITIONAL INSTRUCTIONS` —
-previously `buildCriticPrompt` took no instructions parameter at all, so a user
-with `reviewInstructions` set will see a (usually minor) change to critic-pass
-behavior in deep mode even without asking a question. Behavior is unchanged
-everywhere for users without `reviewInstructions` configured.
+**Output and safety.** `renderCoverageText` renders the coverage as plain text:
+the board shows it as text, and Copy puts it between the header and the findings
+for a whole-review copy (a copy of some findings leaves it out). It is not made of
+numbered findings, so Explain, Post and Copy of a finding do not target it.
 
-If a question was supplied, the review's first streamed line is `_focus: <question>_`,
-before `_Fetching PR…_`.
+## Explain, comments, Post and Copy
 
-**Without a delimiter.** When neither `question:` nor `--` matches,
-`findInformalQuestionMatch` takes the last sentence of at least three words that ends in
-`?` outside every URL span (so a PR URL's `?w=1` is never a question). A PR URL ends a
-sentence, and mode words, `no ticket` and a Jira key at the start of the sentence stay in
-the prompt. It is a heuristic; the `_focus:_` echo makes a wrong guess visible (KL15 in
-`docs/known-limitations.md`).
+- **Explain** (`explainFinding`, `src/review/findingCalls.ts`) is one call with the
+  finding, its code, the PR title and description and the upfront question.
+  Explaining again replaces the answer; a failed Explain keeps the earlier one,
+  with an error line.
+- **Draft comments** start from the finding and are edited by hand. **Rewrite**
+  (`rewriteComment`) revises the draft with the developer's instruction; **Undo**
+  restores the text before it. A failed Rewrite keeps the hand-edited draft.
+- **Post** is the board's one write: the selected drafts as they are, after the
+  native confirmation. A finding with a verified line is posted inline on that
+  line; one without goes to
+  the pull request's activity. Each comment is reported, and only the failed ones
+  are offered again.
+- **Copy** builds the text in the extension from the stored review
+  (`formatShare`, `src/review/shareFormat.ts`), never from the page: `teams` is
+  plain text grouped by severity with no Markdown a Teams chat would show as
+  symbols, `markdown` is the same as Markdown. Both carry the PR title, author,
+  target branch and link, and mark a finding below `confidenceThreshold` "(low
+  confidence)".
 
-## Requirements pass (`smart` and `deep`)
+Explain and Rewrite use the review model and count toward the token usage.
 
-An isolated pass that checks the diff against the Jira ticket behind the PR. It
-adds a "Requirements coverage" block above the findings tables and adds no
-findings. **Only this call ever receives ticket text** — the pass-1, Pass 2,
-persona and critic prompts are untouched, which a recording fake model asserts in
-`src/test/bitbucketReviewFlow.test.ts`.
+## The agent's side
 
-**What happens when.** `extractPromptDirectives` (`reviewSessionState.ts`) reads the
-prompt in a fixed order — upfront question, PR URLs, `no ticket`, the first Jira
-key — so a key or mode word inside the question or URL never acts. After
-`getPullRequest`, `decideTicketStep` (`bitbucket/requirementsFlow.ts`, pure) picks
-one outcome from the mode, the explicit key, `no ticket`, the key in the PR title
-(`findJiraKeyInText`, which skips well-known non-ticket shapes such as `UTF-8`, `SHA-256`, `CVE-…` and `RFC-…`) and whether Jira is configured:
-
-| Mode | Prompt / title | Outcome |
-| --- | --- | --- |
-| any | `no ticket` | review as usual, no lookup |
-| smart, deep | explicit key, Jira configured | read the ticket, run the pass (no pause) |
-| smart, deep | title key only, Jira configured | **pause**: Use / Skip |
-| smart, deep | key, Jira not configured | one line, review as usual |
-| smart, deep | no key | one line, review as usual |
-| quick, standard | explicit key | ignored, one line |
-| quick, standard | title key, Jira configured | hint line + chip with the exact smart command |
-
-**The pause is stateless.** Its two links are complete re-run commands — the
-original prompt plus the key, or plus `no ticket` — built with
-`buildChatCommandLink`, so no session kind or `workspaceState` key is stored. The
-directive goes right after the PR URL, never at the end, because a trailing `--` or
-`question:` question would swallow it and pause the re-run again.
-The PR is fetched a second time on the re-run (the first fetch only reads the
-title); the pause happens before the diff is fetched.
-
-**Reading the ticket.** `TicketService.getRequirementsSource` returns the summary,
-description and comments or a failure classified by HTTP status (404 not found,
-401/403 auth, anything else other). The read is guarded by `readTicketGuarded`: it times out after 20 seconds and a throw becomes an `error` failure, so a slow or broken Jira never holds up or fails the review. When a key written in the prompt is not found and the PR title names another, the failure line is followed by the exact command for the title's ticket. Sizes are capped in `utils/requirementsSource.ts`
-(description 6,000 characters, comments 8,000 newest first and 1,500 each); a failed
-comment fetch still returns the ticket. `@bitbucket` reaches Jira through the shared
-`TicketService`/`JiraApiClient`; it never imports `JiraParticipant`.
-
-**The call.** One call over the whole PR, run inside `completeReview` after every
-other pass (so the smart-fallback resume gets it too, via
-`SmartFallbackSession.requirementsTicket`). `packDiffFiles` fits as many files as
-the token budget allows, smallest first; files left out are listed by path and the
-prompt tells the model to mark a requirement *unclear*, never *not evident*, when its
-evidence could sit in an unseen file. The reply may ask for extra files
-(`additionalFilesNeeded`); one round goes through `fetchAndBudgetContextFiles` (and the review's shared file cache), never a
-second; a failed or unreadable second round keeps the first answer. The pass itself lives in `bitbucket/requirementsPass.ts`, `vscode`-free, with the model call and file fetch injected. A cancelled request ends the review like in every other pass. The reply is one JSON object read by `parseRequirementsReply`; an unreadable
-reply is retried like a provider error, and if every try fails the review completes
-without the block and says so in one line. The pass logs with pass id `requirements`.
-
-**Output and safety.** `renderCoverageMarkdown` neutralizes every ticket- or
-model-derived string (the response is trust-gated, so un-neutralized ticket text could
-plant live command links) and keeps table cells on one line. The block is inserted by
-`formatReview` after the header and before the severity tables. It is not made of
-numbered findings, so `explain`, `add` and `copy #N` do not target it.
-
-**Stored state.** `ReviewSession.requirements` keeps the ticket key, the capped source
-and the parsed coverage. "Copy for Teams" puts the plain-text coverage
-(`renderCoverageText`) between the header and the findings for a whole-review copy; a
-copy limited to some findings leaves it out. A message that starts "the goal is …" or
-"goal: …" (only when the session has `requirements`) re-runs just this pass on the
-stored diff with that goal as the primary requirement, replaces the stored coverage and
-leaves the findings alone; a failed redo keeps the old block. The session keeps the commit the review ran against (`ReviewSession.prFromCommitHash`), so extra files for the redo are read at that commit, and when the PR has new commits the answer ends with a line saying it covers the reviewed version. A message that ends in `?` is a question, not a correction, and a review stored without its diff says so instead of redoing the check.
+`bitbucket_open_review` opens the board and answers as soon as it is open; it
+never waits for the review. The agent reads a stored review with
+`bitbucket_read_findings`: the summary (findings by severity, passes run, the
+requirements coverage), the findings list (each marked when its comment is
+drafted, posted or failed to post), or one finding with its code, explanation and
+draft. It matches a free-text question to a finding itself and reads the diff
+with `bitbucket_getPullRequestDiff`.
 
 ## Token usage
 
-Every `@bitbucket` model call (reviews, follow-ups, comment refinement) goes through
-a token meter (`src/participant/bitbucket/tokenMeter.ts`): the handler wraps
-`request.model` once per response in a proxy that replaces only `sendRequest`.
-The proxy targets an empty object and reads the real model itself, because the
-host may freeze its model: a `get` trap may not return a different value for a
-read-only, non-configurable property of its target, and the old wrapper threw
-on every method access. If the model cannot be wrapped (checked once at
-creation) the meter fails open: the raw model is used, the response goes
-uncounted and shows no footer, and a warning is logged (KL12 in
-[`known-limitations.md`](known-limitations.md)).
-Input is counted with `model.countTokens` on the request messages once the
-provider accepts the request; output is counted on the streamed text when the
-stream ends, breaks, or is abandoned. Every accepted attempt counts, retries
-included. When `countTokens` throws, that figure falls back to `ceil(chars / 4)`
-and the call is flagged estimated. Cache reads, cache writes, and reasoning
-tokens are not exposed by the VS Code API and are not tracked.
+Every model call of a review (the passes, the requirements check, the goal
+rewording, Explain and Rewrite) goes through a token meter (`createTokenMeter`,
+`src/review/tokenMeter.ts`): a proxy over the model that replaces only
+`sendRequest`. The proxy targets an empty object and reads the real model itself,
+because the host may freeze its model: a `get` trap may not return a different
+value for a read-only, non-configurable property of its target. If the model
+cannot be wrapped (checked once at creation) the meter fails open: the raw model
+is used, the call goes uncounted and a warning is logged (KL12 in
+[`known-limitations.md`](known-limitations.md)). Input is counted with
+`model.countTokens` once the provider accepts the request; output is counted on
+the streamed text when the stream ends, breaks, or is abandoned. Every accepted
+attempt counts, retries included. When `countTokens` throws, that figure falls
+back to `ceil(chars / 4)` and the call is flagged estimated. Cache reads, cache
+writes, and reasoning tokens are not exposed by the VS Code API.
 
 Each counted call is added to a per-month, per-model counter in
-`ExtensionContext.globalState` (`src/utils/tokenUsage.ts`, key
-`bitbucket.tokenUsage`), whether or not the footer is shown. Months older than
-the current one plus the two before it are deleted on write. Writes inside one
-window are queued; two windows writing at the same instant can lose an update
-(KL11 in [`known-limitations.md`](known-limitations.md)). `@bitbucket usage`
-(and `/usage`) prints the stored months as a table; it needs no Bitbucket
-credentials and the extension holds no prices.
-
-With `ticketSidekick.bitbucket.showTokenUsage` on (default off), each answer ends
-with `_Tokens: <in> in · <out> out · <model>_`; a review adds `· budget K`.
-Figures are the totals of all calls in that response; `~` marks estimated ones.
-
-## Follow-ups
-
-After a review, `ReviewSession` is stored in `workspaceState` with the findings,
-each carrying its numbered `diffHunk`. A follow-up question (`#3`, or a free-text
-match) feeds that hunk into the follow-up prompt so the answer reasons about the
-real code instead of reconstructing it from the finding text (a finding on a
-removed line gets the hunk around that removed line). The session also
-persists the upfront `question` (see "Upfront question" above), if one was
-asked, and every follow-up prompt includes it, so it keeps informing
-follow-up answers.
-
-**Copy for Teams.** `copy`, `copy for teams`, `share` or `copy #1 #3` (and the
-"Copy for Teams" chip, whose prompt is `copy for teams`) puts the review on the
-clipboard as plain text via `vscode.env.clipboard.writeText` — nothing is posted
-anywhere. `parseFollowUpIntent` checks for it first, and only accepts a message
-that is the command alone (filler words like `all`, `review`, `for teams` and
-`#N` references), so a question that mentions copying is still answered. The
-text comes from `formatReviewForSharing` over the stored `ReviewSession` (never
-the rendered chat): a header with PR number, title, author, target branch and
-bare URL, then Critical / Warning / Suggestion groups in the same order as the
-chat tables, one block per finding. It is plain text on purpose — extensions
-can only write plain text to the clipboard, and Teams does not render pasted
-Markdown — so finding text is copied verbatim apart from collapsed whitespace
-and removed control characters, without the chat renderer's link
-neutralization. Low-confidence (below `confidenceThreshold`) and
-location-unverified findings carry a marker. An unknown `#N` gets the same
-"Finding #N not found" answer as `add … to review` and copies nothing; every
-outcome keeps the review session active.
-
-`#N <question>` answers are built by `buildFindingFollowUpPrompt`: the PR's
-title and description, the upfront question, and the finding's own detail
-and `diffHunk`. A free-text question is first matched to a finding by the
-model; `parseFindingMatchReply` reads `2`, `#2`, `Finding 2` or `2.` as
-finding 2, and "none" as a general PR question. A message counts as "add to
-review" only when it asks to add or post findings *to the review*
-(`add … to (the) review`); a question that merely mentions both words is
-answered. `#N` where `N` doesn't exist gets a friendly "Finding #N
-not found. The review has findings #1–#M." message.
-
-**Leaving a session.** Every response that keeps a session alive carries an
-end-session chip, derived from the `bitbucketSession` kinds in the result
-metadata by `computeBitbucketFollowups` (so no return site has to ask for
-it): **Done** for a review session, **Post it** and **Cancel** for a
-comment preview, **Cancel** for the smart-fallback question. They sit after
-the action chips and outside their cap of three. `done`, `c`, `cancel` etc.
-(`isEndSessionRequest`: `done` plus `isCancellation`; `done` is deliberately
-not in the shared `isCancellation`, whose other callers match live Jira
-option names) clear all three `bitbucket.session.*` keys through
-`endBitbucketSessions` and show "Review session ended." without carrying the
-session forward. Cancel inside a comment preview drops only the preview and
-returns the review-session marker, so its response shows Done.
-
-A session also ends when the user moves on. A message with a PR URL skips
-every session branch (`hasPrUrl`) and clears any stored preview or fallback
-question from an earlier review. A typed `done` under a comment preview acts
-like Cancel; under the smart-fallback question it ends that question. `/review` without a URL, or a message
-that is only `quick`, `smart` or `deep` (`isReviewStartWithoutUrl`,
-whole-message only so "is this quick to fix?" stays a follow-up), ends the
-session and falls through to the usual no-URL response. `check` and `usage` are neutral: they return the active session's
-marker so a live session survives them. Any LLM error surfaces as `**Follow-up failed: …**` with the
-session kept alive so the user can retry; a comment-preview refinement error
-surfaces as `**Refinement failed: …**` with the comment-preview session kept
-alive the same way.
-
-Each finding's own heading in a completed review is itself a clickable
-element (`composeReviewOutput()` in `BitbucketParticipant.ts`, over
-`PrReviewService.formatReview()`'s returned `findingHeadings`) that resubmits
-`#<id>` — the exact text the `#N` follow-up path above already accepts — so
-clicking a finding produces the same answer as typing a reference to it.
-Every externally-influenced string `formatReview()` combines into that
-response (PR title/author, each finding's file path/title/recommendation) is
-neutralized first via `neutralizeMarkdownLinks()`, since the composed output
-is streamed as a trusted `vscode.MarkdownString` once those links are woven
-in — see `docs/jira-flows.md`'s "Clickable replies" for why.
-
-The session also stores `rawDiff` — the diff of the reviewed files, distinct
-from any single finding's `diffHunk` — built by `buildStoredReviewDiff`:
-excluded and binary files are left out, a split file's pieces stay together,
-files with findings come first, and whole files are dropped to fit the token
-budget, never cut mid-way (`rawDiffOmittedFiles` names them). A generic
-follow-up (no `#N`, and no match against an existing finding) draws on this
-stored diff via `buildDiffAwarePrompt`, which combines PR metadata, the
-upfront question, all findings, and the diff itself, re-bounded at read time
-by dropping whole files again. The prompt names every omitted file so the
-model knows its view is incomplete. Sessions without a stored `rawDiff` (e.g. from before this
-feature) keep falling back to the old findings-only prompt.
-
-`ReviewSession` is looked up under the `workspaceState` key `bitbucket.session.review`
-and expires once its `kind` is no longer present in `ChatResult.metadata.bitbucketSession`
-on the **last** assistant turn (`getActiveBitbucketSession()` in `BitbucketParticipant.ts`,
-mirroring Jira's `JiraSessionContinuity` — see `BitbucketSessionContinuity` in
-`reviewSessionState.ts`) — no visible marker rides along in the rendered response. The
-Bitbucket handler's detection order is: `check` command → comment preview → smart-mode
-fallback question → review-session follow-up (cancel check first, then try-catch around
-intent handling) → new PR review. A PR URL anywhere in the prompt always bypasses every
-follow-up branch and starts a fresh review, even when a `review-session` (or
-`comment-preview`/`smart-fallback-session`) kind is active — `hasPrUrl()` in
-`reviewSessionState.ts` encodes this check and is unit-tested.
-
-### Smart-mode fallback session
-
-`SmartFallbackSession` (`bitbucket.session.smartFallback` in `workspaceState`,
-detected via the `smart-fallback-session` `bitbucketSession` kind) is a second,
-narrower multi-turn session that only fires mid-`smart`-mode-review — not
-after one has completed. It's created when phase 1's aggregation step (`aggregateRecommendedPersonas`)
-finds no usable persona recommendation from any chunk: rather than guessing,
-the handler stores the PR reference, the fetched diffs, the chunk boundaries,
-phase 1's already-numbered findings, the upfront question and phase 1's
-counters and failure state, then asks the user to reply **all**
-(run all four persona passes) or **standard** (skip straight to formatting
-phase 1's findings). The next turn's reply resumes via
-`resumeSmartReviewPhase2`, which — having none of the original review's local
-state in scope — rebuilds its own client/service/`runTag`, runs phase 2 (or
-skips it, for "standard") over the stored chunks with `runPersonaPassesForChunk`
-(the same helper the main flow's phase 2 and deep mode's inline passes use,
-with the same upfront question), merges the result with the stored phase 1
-findings, and finishes through `completeReview` — the same completion step
-the main flow uses. So a resumed review shows the partial-failure banner,
-dropped-findings notice, token estimate and follow-up chips, and stores a
-normal `ReviewSession` with the reviewed diff, exactly like an uninterrupted
-review.
+`ExtensionContext.globalState` (`TokenUsageService`, `src/utils/tokenUsage.ts`,
+key `bitbucket.tokenUsage`). Months older than the current one plus the two
+before it are deleted on write. Writes inside one window are queued; two windows
+writing at the same instant can lose an update (KL11). The board shows the usage
+per pass and of Explain and Rewrite; `bitbucket_token_usage` (`/ts-bitbucket
+usage`) prints the stored months as a table, needs no Bitbucket credentials, and
+the extension holds no prices.
 
 ## Settings that shape the run
 
 | Setting | Default | Effect |
 | --- | --- | --- |
+| `ticketSidekick.bitbucket.reviewModel` | `""` | the model every call uses; asked for on the first step when empty or unavailable |
+| `ticketSidekick.bitbucket.reviewInstructions` | `""` | added to every review call, the persona passes and the critic |
 | `ticketSidekick.bitbucket.reviewContextLines` | 12 | context lines around each hunk |
-| `ticketSidekick.bitbucket.confidenceThreshold` | 0.7 | below → muted (non-bold) confidence cell, not folded |
-| `ticketSidekick.bitbucket.reviewMode` | standard | default depth (`standard` \| `quick` \| `smart` \| `deep`) — `smart`/`deep` are also selectable per-review via the `review smart`/`review deep` prompt keyword, same as `quick` already was |
+| `ticketSidekick.bitbucket.confidenceThreshold` | 0.7 | below → marked *low confidence*, never removed |
 | `ticketSidekick.bitbucket.contextBudgetRatio` | 0.7 | fraction of the context window for a review call's prompt; chunks are further capped at 24 000 estimated tokens |
 | `ticketSidekick.bitbucket.modelContextTokens` | (model API) | token budget override |
 | `ticketSidekick.bitbucket.reviewExcludePatterns` | `[]` | globs skipped before review |
-
-## Onboarding: follow-up chips and greeting detection
-
-Follow-up suggestion chips after a completed review (add findings to
-review, explain finding #1, Copy for Teams — the only chip when a review found
-nothing), and greeting/empty-prompt detection ahead of
-the "Point me at a PR to review" guidance, are documented in
-[`docs/onboarding.md`](onboarding.md#follow-up-suggestion-chips-greeting-detection-and-the-unclassifiable-prompt-fallback).
+| `ticketSidekick.bitbucket.detailedDiagnostics` | `false` | one structured run record per pass in the output channel |

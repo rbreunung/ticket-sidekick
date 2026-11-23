@@ -6,9 +6,9 @@ Jira and Bitbucket inside GitHub Copilot Chat in VS Code:
 
 - **Jira tools for Copilot** — Copilot's agent views, finds, creates, comments on, moves and updates Jira tickets through Ticket Sidekick's tools, or you type a command such as `/ts-jira view PROJ-123`
 - **Boards** — ticket lists, the security report and the imports of Veracode reports, OSS reports and emails open in an editor tab, where you select, preview and apply changes; a board comes back after a restart
-- **`@bitbucket` chat participant (deprecated)** — runs the pull request reviews until the review board exists
+- **Pull request review** — a Bitbucket pull request is reviewed on its own board: a regular pass first, then the extra passes you pick, with Explain, editable comments posted to Bitbucket, and Copy for Teams
 
-> **`@jira` is gone.** Every Jira task, the email import included, runs from a Copilot chat with the Jira tools and `/ts-jira` commands, or on a board. The `@bitbucket` chat participant is deprecated and will be removed once the pull request review has moved to a board. Start with [Copilot tools and boards](#copilot-tools-and-boards).
+> **`@jira` and `@bitbucket` are gone.** Every task runs from a Copilot chat with the Jira and Bitbucket tools and the `/ts-jira` and `/ts-bitbucket` commands, or on a board. Start with [Copilot tools and boards](#copilot-tools-and-boards).
 
 ---
 
@@ -24,9 +24,13 @@ Five skills sit on top of the tools: `/ts-jira <command>` runs one Jira command 
 
 See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool and its inputs, the skills, approvals, troubleshooting and a checklist to try it out. The Bitbucket tools (`bitbucket_*`) are listed in [Agent Mode Tools](docs/manual/agent-mode-tools.md).
 
+### Bitbucket tools
+
+Copilot's agent reads a pull request and its diff, posts a general comment after a confirmation, opens the review board and reads a review's findings through the Bitbucket tools. `/ts-bitbucket <command>` runs one Bitbucket command you type: `review <link> [question]`, `check`, `usage` and `help`. Set up the Bitbucket connection first ([Bitbucket setup](#bitbucket-setup)).
+
 ### Boards
 
-Larger views open as a **board** in their own editor tab. The security report opens with "the security report for PROJ", `/ts-jira security-report PROJ` or `Ticket Sidekick: Open security report`. A ticket list opens when you ask Copilot to see tickets or to change several of them, with `/ts-jira search <JQL or filter>` or `Ticket Sidekick: Open ticket list`: you select tickets there and move them or set a field after a preview. A cleanup rule from `.jira-templates.json` opens the same board with "run the cleanup Close released bugs", `/ts-jira cleanup <rule> [in VERSION]` or `Ticket Sidekick: Run a cleanup rule`. A Veracode Detailed Report, a Waltz OSS Report or one or more `.eml` emails are imported on the import board: `Ticket Sidekick: Open import board`, `/ts-jira import <veracode, waltz or email> [PATH ...]`, or ask Copilot with the files' paths or with the emails attached. A board keeps its work in progress as a stored session, so it comes back after a restart; `/ts-jira sessions` or `Ticket Sidekick: Open stored sessions` lists the stored sessions and `Ticket Sidekick: Clear stored sessions` deletes them all. The Command Palette commands work without Copilot. See [Boards](docs/manual/boards.md).
+Larger views open as a **board** in their own editor tab. The security report opens with "the security report for PROJ", `/ts-jira security-report PROJ` or `Ticket Sidekick: Open security report`. A ticket list opens when you ask Copilot to see tickets or to change several of them, with `/ts-jira search <JQL or filter>` or `Ticket Sidekick: Open ticket list`: you select tickets there and move them or set a field after a preview. A cleanup rule from `.jira-templates.json` opens the same board with "run the cleanup Close released bugs", `/ts-jira cleanup <rule> [in VERSION]` or `Ticket Sidekick: Run a cleanup rule`. A Veracode Detailed Report, a Waltz OSS Report or one or more `.eml` emails are imported on the import board: `Ticket Sidekick: Open import board`, `/ts-jira import <veracode, waltz or email> [PATH ...]`, or ask Copilot with the files' paths or with the emails attached. A board keeps its work in progress as a stored session, so it comes back after a restart; `/ts-jira sessions` or `Ticket Sidekick: Open stored sessions` lists the stored sessions and `Ticket Sidekick: Clear stored sessions` deletes them all. A Bitbucket pull request is reviewed on the review board: `Ticket Sidekick: Review a pull request`, `/ts-bitbucket review <link>`, or ask Copilot with the link (see [Pull Request Review](docs/manual/bitbucket-pr-review.md)). The Command Palette commands work without Copilot. See [Boards](docs/manual/boards.md).
 
 ---
 
@@ -102,9 +106,7 @@ See [Settings Reference → Jira](docs/manual/settings-reference.md#jira-setting
 
 ---
 
-## @bitbucket — Bitbucket PR Reviews
-
-> **Deprecated.** `@bitbucket` is being replaced by Copilot tools and a review board. Until the review board exists, it remains the way to run a pull request review.
+## Bitbucket setup
 
 ### Quickstart
 
@@ -112,7 +114,7 @@ See [Settings Reference → Jira](docs/manual/settings-reference.md#jira-setting
 2. Data Center only: also set `ticketSidekick.bitbucket.baseUrl` (Cloud talks to `api.bitbucket.org` automatically — leave unset)
 3. Command Palette → `Ticket Sidekick: Set Bitbucket Personal Access Token` (Data Center) or `Ticket Sidekick: Configure Bitbucket Cloud Credentials` (Cloud)
 
-Then open Copilot Chat and run `@bitbucket check` to confirm the connection, or paste a PR URL to start a review. Full setup details and every command are below.
+Then type `/ts-bitbucket check` in a Copilot chat to confirm the connection, and open a review with `Ticket Sidekick: Review a pull request`. Full setup details are below.
 
 ### Prerequisites
 
@@ -153,49 +155,24 @@ You will be prompted for your Bitbucket **username** and an **App Password**. Cr
 | --- | --- |
 | Repositories: Read | Fetching file contents for review context |
 | Pull requests: Read | PR metadata and diff |
-| Pull requests: Write | Posting findings as PR comments (`add to review`) |
-| Account: Read | (optional) shows your username in `@bitbucket check` |
+| Pull requests: Write | Posting findings as PR comments (**Post** on the review board) |
+| Account: Read | (optional) shows your username in `/ts-bitbucket check` |
 
 > **Note:** Bitbucket App Passwords use `Authorization: Basic` — they are not the same as Atlassian API tokens (used for Jira Cloud). Using an Atlassian API token here will fail with 401.
 
-Run `@bitbucket check` after setup to confirm the connection and see which account is active.
+Run `/ts-bitbucket check` after setup to confirm the connection and see which account is active.
 
-### Core commands
+### Reviewing a pull request
 
-| What you type | What happens |
+| How | What happens |
 | --- | --- |
-| `@bitbucket check` | Test connection and show active configuration |
-| `@bitbucket usage` | Show input and output tokens per model for the current month and the two before it |
-| `@bitbucket <pr-url>` | Full structured review of the PR |
-| `@bitbucket review quick <pr-url>` | Review using diffs only — no second-pass file fetch (fewer tokens) |
-| `@bitbucket review deep <pr-url>` | Force standard two-pass review regardless of default setting |
-| `@bitbucket <pr-url> question: <text>` (or `-- <text>`, or just a sentence ending in `?`) | Review with an upfront focus question — nudges the model toward that concern in every pass |
-| `@bitbucket review smart <pr-url> PROJ-123` | Check the PR against Jira ticket PROJ-123 (smart and deep only): a **Requirements coverage** block appears above the findings. If the PR title names a ticket and you don't, the review asks first |
-| `@bitbucket review smart <pr-url> no ticket` | Skip the ticket for this review |
-| `@bitbucket #2` | Explain finding #2 in detail |
-| `@bitbucket #2 is this always a problem?` | Ask a follow-up question about a specific finding |
-| `@bitbucket is the change backwards-compatible?` | Ask any general question about the PR — no finding reference needed |
-| `@bitbucket copy` (or the **Copy for Teams** chip) | Copy the review to the clipboard as plain text, grouped by severity, ready to paste into a Teams chat |
-| `@bitbucket copy #1 #3` | Copy only findings #1 and #3 (without the requirements coverage) |
-| `@bitbucket the goal is actually <text>` | After a ticket check, redo the requirements coverage against your own statement of the goal; the findings stay as they are |
-| `@bitbucket done` (or the **Done** chip) | End the review session. `c` and `cancel` work too; a new PR URL also ends it |
-| `@bitbucket #1 #3 add to review` | Preview findings #1 and #3 as comments — reply "post it" to confirm, "(c)" to cancel, or refine |
-| `@bitbucket add #1 #2 #3 to review` | Same — numbers can appear anywhere relative to the keywords |
-| `@bitbucket add all to review` | Preview all findings as PR comments at once |
-| `@bitbucket #2 add to review blocking merge` | Preview with reviewer note "blocking merge" appended — confirm before posting |
-| `@bitbucket c` | Exit the current review session |
+| `Ticket Sidekick: Review a pull request` | Asks for the pull request link and opens its review board |
+| `/ts-bitbucket review <pr-url> [PROJ-123] [question]` | Opens the review board; a Jira key becomes the ticket to check against, the rest the question |
+| Paste the link in Agent mode and ask for a review | Copilot opens the same board |
+| `/ts-bitbucket check` | Tests the connection and shows the active configuration |
+| `/ts-bitbucket usage` | Shows input and output tokens per model for the current month and the two before it |
 
-**Slash commands** — typing `@bitbucket /` lists the same shortcuts:
-
-| Command | Example | What it does |
-| --- | --- | --- |
-| `@bitbucket /check` | `@bitbucket /check` | Verify your Bitbucket connection and credentials |
-| `@bitbucket /review` | `@bitbucket /review https://bitbucket.mycompany.com/projects/PROJ/repos/myrepo/pull-requests/42` | Review a pull request |
-| `@bitbucket /usage` | `@bitbucket /usage` | Show token usage per model for recent months |
-
-### PR review
-
-Paste any pull request URL into the chat to get a structured, multi-pass review — with an optional upfront focus question, multi-turn follow-ups, and the ability to post selected findings back to Bitbucket as PR comments. See [Bitbucket PR Review](docs/manual/bitbucket-pr-review.md) for the full walkthrough, including token-usage tuning for large PRs.
+The board stops on its first step: the review model, the requirements source (a Jira ticket, a goal or none) and an optional question. **Start** runs the regular pass; you then keep the findings, run the suggested extra passes or pick any of them, now or later. Each finding can be explained, drafted as a comment, posted to Bitbucket after a confirmation, or copied for Teams or as Markdown. Ask Copilot about a finished review ("explain finding 2") and it reads the findings with `bitbucket_read_findings`. See [Pull Request Review](docs/manual/bitbucket-pr-review.md) for the whole review, including token-usage tuning for large pull requests.
 
 ### Settings reference
 
@@ -205,15 +182,15 @@ See [Settings Reference → Bitbucket](docs/manual/settings-reference.md#bitbuck
 
 ## Troubleshooting
 
-The Jira tools, the boards and `@bitbucket` log diagnostic detail beyond what's shown in
+The Jira and Bitbucket tools and the boards log diagnostic detail beyond what's shown in
 chat or on a board to a shared VS Code output channel: **View → Output → "Ticket
 Sidekick"**.
 
-For `@bitbucket` reviews specifically, this includes: the model in use
-(vendor/family/id/version) for the review, every LLM call that failed
-(including ones that succeeded on a retry), the call site and which files
-or findings were in that attempt, and the raw error. If a review or
-follow-up ever shows a failure message, check this channel first — it
+For reviews on the review board specifically, this includes: each pass's
+configuration and the model in use, every model call that failed
+(including ones that succeeded on a retry), which files or findings were
+in that attempt, and the raw error. If a review, an Explain or a Rewrite
+ever shows a failure message, check this channel first — it
 usually explains whether it was a one-off provider hiccup (worth just
 retrying) or something more persistent.
 

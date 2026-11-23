@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   TokenUsageService,
   USAGE_STORAGE_KEY,
-  formatTokenFooter,
   formatUsageTable,
   monthKey,
   normalizeStore,
@@ -161,27 +160,5 @@ describe('formatUsageTable', () => {
   it('escapes pipes in model ids so the table keeps its shape', () => {
     const table = formatUsageTable({ '2026-10': { 'a|b': { input: 1, output: 1, calls: 1, estimated: false } } }, now);
     expect(table).toContain('| 2026-10 | a\\|b | 1 | 1 | 1 |');
-  });
-});
-
-describe('formatTokenFooter', () => {
-  it('writes input, output, model and budget on one line', () => {
-    expect(formatTokenFooter({ input: 41_230, output: 6_840, estimated: false, modelId: 'claude-sonnet-4.5', budget: 90_000 }))
-      .toBe('_Tokens: 41,230 in · 6,840 out · claude-sonnet-4.5 · budget 90,000_');
-  });
-
-  it('omits the budget segment when none applies', () => {
-    expect(formatTokenFooter({ input: 1_200, output: 300, estimated: false, modelId: 'm' }))
-      .toBe('_Tokens: 1,200 in · 300 out · m_');
-  });
-
-  it('escapes markdown characters in the model id so the italic line stays intact', () => {
-    expect(formatTokenFooter({ input: 1, output: 1, estimated: false, modelId: 'gpt_4o*mini' }))
-      .toBe('_Tokens: 1 in · 1 out · gpt\\_4o\\*mini_');
-  });
-
-  it('marks estimated figures with a tilde', () => {
-    expect(formatTokenFooter({ input: 1_200, output: 300, estimated: true, modelId: 'm' }))
-      .toBe('_Tokens: ~1,200 in · ~300 out · m_');
   });
 });

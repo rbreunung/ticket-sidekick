@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderReviewTable, neutralizeMarkdownLinks, isGreetingOrEmpty, type ReviewTableColumn } from '../utils/chatPrimitives';
+import { renderReviewTable, neutralizeMarkdownLinks, type ReviewTableColumn } from '../utils/chatPrimitives';
 
 interface Widget {
   name: string;
@@ -87,41 +87,5 @@ describe('neutralizeMarkdownLinks', () => {
   it('replaces [ and ] with visually similar full-width brackets, leaving other characters untouched', () => {
     expect(neutralizeMarkdownLinks('[Click here](command:evil)')).toBe('［Click here］(command:evil)');
     expect(neutralizeMarkdownLinks('Normal summary text — nothing to escape')).toBe('Normal summary text — nothing to escape');
-  });
-});
-
-describe('isGreetingOrEmpty', () => {
-  it('detects a bare greeting', () => {
-    expect(isGreetingOrEmpty('hi')).toBe(true);
-  });
-
-  it('detects an empty prompt', () => {
-    expect(isGreetingOrEmpty('')).toBe(true);
-  });
-
-  it('detects a bare "help"', () => {
-    expect(isGreetingOrEmpty('help')).toBe(true);
-  });
-
-  it('detects greetings/help phrases case-insensitively and with surrounding whitespace/punctuation', () => {
-    expect(isGreetingOrEmpty('  Hi!  ')).toBe(true);
-    expect(isGreetingOrEmpty('HELLO?')).toBe(true);
-    expect(isGreetingOrEmpty('What can you do?')).toBe(true);
-  });
-
-  it('does not classify a real operation prompt as a greeting', () => {
-    expect(isGreetingOrEmpty('update PROJ-1 priority to high')).toBe(false);
-  });
-
-  it('does not misclassify a prompt whose ticket key looks like a greeting word (specific-before-generic)', () => {
-    // A ticket literally keyed "HI-1" must not make this prompt read as the greeting "hi" —
-    // isGreetingOrEmpty only matches the whole normalized prompt, never a substring/word within it
-    // (see docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md).
-    expect(isGreetingOrEmpty('update HI-1 status')).toBe(false);
-    expect(isGreetingOrEmpty('show me HELP-42')).toBe(false);
-  });
-
-  it('does not classify an ordinary multi-word sentence as a greeting just because it starts with a greeting word', () => {
-    expect(isGreetingOrEmpty('hi there, can you show me PROJ-123 please')).toBe(false);
   });
 });

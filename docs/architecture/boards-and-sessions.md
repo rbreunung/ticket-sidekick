@@ -13,12 +13,12 @@ This page describes how Ticket Sidekick is built once the chat participants are 
 - **Tools:** the Jira tool catalog (`src/tools/jiraTools/`) is registered with VS Code as language model tools by `src/tools/registerJiraTools.ts`. That is the only route; no setting chooses one. Decision D21.
 - **Host:** a board is a webview in an editor tab the extension opens (`src/boards/boardPanels.ts`). The tab loads the page from the extension's own files and the page talks to the extension with `postMessage`. Decisions D18 and D20.
 - **Removed on 2026-11-13:** the MCP server with its lifecycle, keys, request guard and diagnostics command; the `ticketSidekick.jira.toolsFrom` setting; the local HTTP server and the `http.noProxy` requirement; the canvas program, the agent plugin and the `@github/copilot-sdk` and `@modelcontextprotocol/sdk` dependencies. Why: an organisation's Copilot policy blocked the MCP server while extension tools got through, VS Code 1.146 did not register an extension's canvas, and two routes for the same tools was a switch nobody wanted to operate.
-- **Built:** the session core, the board message handling, the security report board, the ticket list board (search with narrowing, paging, configurable columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules`, the out-of-date state), the sessions board, the import board for Veracode and Waltz reports and for emails (with the boilerplate cleanup stage and the consented model check) with its start screen (`src/boards/import/`, over the shared import engine in `src/imports/`), and of the plan's step 1 tools R40 to R42, plus spell check (R28) and template from a ticket (R29) as `/ts-jira-spell-check` and `/ts-jira-template` with their tools.
+- **Built:** the session core, the board message handling, the security report board, the ticket list board (search with narrowing, paging, configurable columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules`, the out-of-date state), the sessions board, the import board for Veracode and Waltz reports and for emails (with the boilerplate cleanup stage and the consented model check) with its start screen (`src/boards/import/`, over the shared import engine in `src/imports/`), the PR review board with its start screen (`src/boards/review/`, over the staged review engine in `src/review/engine/`) and the Bitbucket tools in the catalog shape with `/ts-bitbucket`, and of the plan's step 1 tools R40 to R42, plus spell check (R28) and template from a ticket (R29) as `/ts-jira-spell-check` and `/ts-jira-template` with their tools.
 - **Open points:** the full list, with the requirement each belongs to and the participant flow it blocks, is in [`migration-status.md`](migration-status.md).
 - **Removed on 2026-11-14:** every Step 1 flow of `@jira`.
 - **Removed on 2026-11-15:** `@jira`'s Veracode and Waltz imports and their two Command Palette commands.
 - **Removed on 2026-11-16:** `@jira` itself, with its email import, its help screen, its sessions and the "Create Jira ticket from email (.eml)" command.
-- **Not built:** the PR review board with its Bitbucket tool additions, and the removal of `@bitbucket`.
+- **Removed on 2026-11-23:** `@bitbucket`, with `src/participant/`, the `chatParticipants` contribution, its follow-up chips and sessions, and the settings `reviewMode`, `showTokenUsage` and `showConnectionInfo`. The extension declares no chat participant.
 
 ## 1. The idea in one paragraph
 
@@ -228,7 +228,11 @@ sequenceDiagram
 | Removal | Finish or Close on the board (which also closes its tab), Delete on the sessions board, and the command "Ticket Sidekick: Clear stored sessions". |
 | Size | A session over a fixed limit is kept in memory only, and the board says it will not survive a restart. |
 
-### 4.5 Restart
+### 4.5 Model runs
+
+A board whose work is model calls (the review board) does it in a **run**, not in an Apply. The page sends `run` with a request; the kind's pure `beginRun` names the run and records it in the working state, or refuses it. The session manager then calls the kind's `run` outside the session's queue, so the page stays usable while it goes. After each finished step (one batch, one pass) the run reports its change through `progress`, which saves the session without raising its revision and tells the page, so a restart keeps the finished steps. `stop` aborts the run's signal, as does closing the board; the run records how it ended, stopped or failed included. A stored session that still says a run is going, or a run that threw, is passed to the kind's `interrupted`, which keeps what was finished. A check or a Refresh never starts a run, and no model call runs without the developer's request on the board.
+
+### 4.6 Restart
 
 VS Code restores a board's tab with the window and hands back the small state the page stored with `setState`: board kind, session ID and title. The board panels check that state, write the tab's document again, and the page loads the stored session as in 4.1. A tab whose state is not a board's is closed. `onWebviewPanel:ticketSidekick.board` is an activation event, so a restored tab starts the extension.
 
@@ -282,6 +286,8 @@ extension → page    { id, ok: true, data }  or  { id, ok: false, status, error
 | `apply` with `planId` | Redeems a plan ID |
 | `save` with `format` | For boards that export: writes a file through VS Code's save dialog |
 | `discard` | Deletes the session and closes its tab (the page's Close) |
+| `run` with `revision`, `request`; `stop` with optional `what` | Starts a model run the kind names from `request`, or stops it (4.5) |
+| `copy` | The review board only: puts the selected findings on the clipboard through the host's `copyText`, built in the extension from the stored review, never from the page |
 | `pick-file` | The import board only: "Pick the file again". The path comes from VS Code's native open dialog, never from the page; the session moves with `relocate` and the tab follows it to the new id |
 | `list`, `delete`, `delete-all`, `open` | The sessions board only: list stored sessions, delete one or all, reopen one in its own tab |
 | `view`, `kind`, `pick-file`, `template`, `issue-type`, `open`, `start-over`, `open-setting` | The import start screen only (`ImportStartScreen.handle`): the native file dialog, the template setting write and the Settings screen are supplied by the host, so the page names no path, setting key or session |
@@ -339,22 +345,23 @@ src/
     securityReport/    one folder per board kind: kind.ts, and what only it needs
     ticketList/
     import/            the import board: kind, read, recipe, one handler per area, start screen
-    review/            planned
+    review/            the PR review board: kind, recipe, first step, runs, findings, start screen
   tools/
     toolDefinition.ts  ToolDefinition, defineTool, callTool, ToolFailure (vscode-free)
     jiraTools/         the Jira tool catalog, one module per tool, names in toolNames.ts (vscode-free)
     jiraToolConfirmation.ts  what a write tool asks before it runs (pure)
     jiraToolManifest.ts      the package.json entries, generated from the catalog
     registerJiraTools.ts     registers the catalog with vscode.lm and builds the tool dependencies (imports vscode)
-    bitbucketTools.ts        the Bitbucket language model tools
+    bitbucketTools/          the Bitbucket tool catalog, one module per tool (vscode-free)
+    registerBitbucketTools.ts  registers the Bitbucket catalog with vscode.lm (imports vscode)
   imports/             the shared report import engine and the Veracode, Waltz and email descriptors (vscode-free)
   services/, jira/, bitbucket/, utils/, templates/   unchanged; services/importSettings.ts reads the import settings
-  participant/         deprecated: @bitbucket only (@jira was removed on 2026-11-16)
+  review/              the review core shared by the review board and the Bitbucket tools; engine/ is the staged review (vscode-free)
 board-pages/           page sources: shared client and style, one folder per board; copied to out/board-pages
-skills/                /ts-jira, /ts-jira-create, /ts-jira-brief
+skills/                /ts-jira, /ts-jira-create, /ts-jira-brief, /ts-jira-spell-check, /ts-jira-template, /ts-bitbucket
 ```
 
-`src/participant/` holds the deprecated chat participants. It shrinks with each step and is gone after step 3. Nothing new is added there. Pure helpers that boards still need move out of it into `src/boards/<kind>/` or `src/utils/` before their participant code is deleted.
+There is no `src/participant/` any more: `@jira` went on 2026-11-16 and `@bitbucket` on 2026-11-23.
 
 ---
 

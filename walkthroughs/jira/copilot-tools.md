@@ -6,4 +6,4 @@ Lists of tickets, the security report and Veracode and OSS report imports open a
 
 A tool that changes Jira asks you to confirm first, showing exactly what it will write.
 
-Every Jira task, the email import included, runs with these tools, the `/ts-jira` commands and the boards. The `@bitbucket` chat participant still reviews pull requests and is deprecated.
+Every Jira task, the email import included, runs with these tools, the `/ts-jira` commands and the boards. Pull requests are reviewed on the review board (`/ts-bitbucket review <link>`).

@@ -1,6 +1,6 @@
 # Migration status: from chat participants to tools and boards
 
-Last updated: 2026-11-16.
+Last updated: 2026-11-23.
 
 This page says where the migration stands and what is still open. It is the working list; the other documents hold the detail:
 
@@ -9,6 +9,8 @@ This page says where the migration stands and what is still open. It is the work
 - **History, superseded:** [`copilot-harness-migration.md`](copilot-harness-migration.md) and the plans dated 2026-11-05 and 2026-11-09
 
 Update this page in every change that closes or adds an open point.
+
+**Where it stands (2026-11-23).** The code side of the migration is done: `@bitbucket` is removed, and no chat participant is left. What is open is manual: the checklist runs on the managed machine (O6, O21, O22), the keyboard and screen reader check (O17), the remaining Jira flow prose (O20) and the not-verified points in section 5. The stable release waits for those.
 
 **Release rule for the whole migration.** Every release made while the migration runs is a **preview** (`channel: preview`). The stable channel stays on its current version, with no hotfix release, until the whole migration is done and tested, so colleagues are not interrupted and work in the middle of a branch never has to stop for a release. Each step adds its part to the [manual checklist](manual-checklist.md) and runs it on the preview build; the one normal release at the end reruns the whole checklist. This replaces "each step is a preview release first" in the boards plan (R35, AE9).
 
@@ -19,7 +21,7 @@ Update this page in every change that closes or adds an open point.
 | | |
 | --- | --- |
 | **Build on** | Extension tools (VS Code language model tools), the `/ts-jira` skills, and boards (webviews in editor tabs that show a session the extension owns) |
-| **Deprecated** | The `@bitbucket` chat participant. It runs the pull request review until the review board exists and gets bug fixes only. `@jira` was removed on 2026-11-16 |
+| **Removed chat participants** | `@jira` on 2026-11-16 and `@bitbucket` on 2026-11-23. The extension declares no chat participant |
 | **Removed, not coming back without a new decision** | The MCP server, the `ticketSidekick.jira.toolsFrom` setting, VS Code canvases, the agent plugin, the local HTTP server and its `http.noProxy` requirement |
 
 ## 2. What is done
@@ -32,7 +34,9 @@ Update this page in every change that closes or adds an open point.
 | Removed `@jira` flows | Every Step 1 flow: create, view, summarize, show fields, check required fields, comments, field, move, load, upload, workflow, check, search, filters, bulk transition, bulk field update, cleanup, `/security-report`, the description and comment preview, spell check and template generation. `@jira` has no slash command left. The Veracode and Waltz imports and their two Command Palette commands followed on 2026-11-15. On 2026-11-16 the email import, its Command Palette command, the `ticketSidekick.jira.showConnectionInfo` setting and `@jira` itself were removed ([`../plans/2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md`](../plans/2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md)) |
 | Session model | Sessions stored per workspace, shown from cache and checked in the background, conflicts, single-use write plans, native confirmation for risky writes, expiry and a clear command; on every board a save after each write of an Apply, Apply progress with the controls locked, a rebuild from the stored recipe after an update that changes the stored format (`revalidate`), a `prepare` read before a plan's preview, and `relocate` to give a session a new source |
 | Boards | Security report (filters, sort, CSV and Excel export), ticket list (search, 50 rows a page up to 300, `searchFields`/`cleanupFields` columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules` with nested subtasks, an out-of-date state that offers only Refresh), stored sessions, the import board for Veracode and Waltz reports (start screen with the template settings, tabs New, Already ticketed, Stale and Accepted, the ticket merge tab with its resumable run, per-tab out-of-date marks, Pick the file again, search, CSV and Excel export) and for emails (several `.eml` files, the boilerplate cleanup with the model check as a previewed step, the model pick and check, likely repeats by subject, a ticket or a comment per email with the attachments read from the file at the write). Close discards a board's session and closes its tab |
-| Documentation | README, manual, `CLAUDE.md`, glossary, architecture page and plan describe tools and boards as current, `@jira` as removed and `@bitbucket` as deprecated |
+| Review board | Built in PR #140 (2026-11-20), units U1 to U10 of [`../plans/2026-11-19-0828-feat-pr-review-board-and-bitbucket-removal-plan.md`](../plans/2026-11-19-0828-feat-pr-review-board-and-bitbucket-removal-plan.md). A start screen that asks for the PR link, and a first step that always stops before Start: the review model (`ticketSidekick.bitbucket.reviewModel`, asked for and saved when empty), the requirements source (Jira ticket, a goal reworded on Reword, or none) and an optional question. Then the staged review: the regular pass, the suggested or picked extra passes (Security, Performance, Reliability, Maintainability) and the critic, now or later, with live steps and Stop. Findings with Explain, draft comments with Rewrite and Undo, Post after the native confirmation, Copy for Teams and as Markdown, the requirements coverage with Re-check, token usage per pass. The review core moved to `src/review/` (vscode-free); `@bitbucket` still runs on it |
+| Bitbucket tools and skill | The Bitbucket tools are in the catalog shape of the Jira tools (`src/tools/bitbucketTools/`, generated `package.json` entries): `bitbucket_check_connection`, `bitbucket_getPullRequest`, `bitbucket_getPullRequestDiff`, `bitbucket_postComment`, `bitbucket_open_review`, `bitbucket_read_findings` and `bitbucket_token_usage`. `/ts-bitbucket` (`review`, `check`, `usage`, `help`). The review parity ledger below and `src/test/reviewBoardParity.test.ts` |
+| Documentation | README, manual, `CLAUDE.md`, glossary, architecture page, onboarding and `docs/review-process.md` describe tools and boards only; both participants are described as removed. Superseded plans, specs and the older AI-usage and slide notes are kept as history |
 
 ## 3. Open points
 
@@ -48,12 +52,10 @@ O1, O2 and O5 are closed by [`../plans/2026-11-14-1257-feat-ticket-list-parity-a
 
 ### Step 2: imports
 
-Done. The Veracode and Waltz kinds are closed by [`../plans/2026-11-14-1641-feat-import-board-veracode-waltz-parity-plan.md`](../plans/2026-11-14-1641-feat-import-board-veracode-waltz-parity-plan.md); O7, O8 and O11, and the email parts of O9 and O10, by [`../plans/2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md`](../plans/2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md). The board's model call outside a chat request was confirmed on the managed machine (Q1). What is left of O9 and O10 belongs to the review board:
+Done. The Veracode and Waltz kinds are closed by [`../plans/2026-11-14-1641-feat-import-board-veracode-waltz-parity-plan.md`](../plans/2026-11-14-1641-feat-import-board-veracode-waltz-parity-plan.md); O7, O8 and O11, and the email parts of O9 and O10, by [`../plans/2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md`](../plans/2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md). The board's model call outside a chat request was confirmed on the managed machine (Q1). The review board parts of O9 and O10 were closed by PR #140: the review model is asked for and saved on the review board's first step when `ticketSidekick.bitbucket.reviewModel` is empty or unavailable, and the model and the requirements source are chosen there before any model call. What is left:
 
 | # | Open point | Requirement | Blocks removal of |
 | --- | --- | --- | --- |
-| O9 | The review passes read `ticketSidekick.bitbucket.reviewModel` and ask for a model on the review board when it is empty; the setting and the email check's pick already exist | R24 | — |
-| O10 | The review board's prompts (model pick, requirements-pass choice) happen on the board, before any model call; the email consent already does | R45 | — |
 | O21 | Run the email part of the [manual checklist](manual-checklist.md) on the preview build on the managed machine | R35 | — |
 
 #### Import board parity ledger
@@ -113,13 +115,11 @@ What the `@jira` import did and what the import board does with it. The list is 
 
 ### Step 3: Bitbucket
 
+O12, O13 and O14 are closed by PR #140 (the review board, `bitbucket_read_findings` and `/ts-bitbucket`; see section 2). The findings note in O12 was dropped by the review board plan's decision "No note field on findings": the editable draft carries the developer's own words. O15 and O16 are closed by the removal of `@bitbucket` on 2026-11-23 (the plan's U11 and U12). The plan held the removal until the Step 3 checklist had run; the maintainer chose on 2026-11-23 to remove it first, so O22 no longer blocks anything but the stable release.
+
 | # | Open point | Requirement | Blocks removal of |
 | --- | --- | --- | --- |
-| O12 | Review board: today's pipeline (quick, smart, deep, requirements pass), findings with note, copy for Teams and post comment, token usage, findings kept in the session | R20, R21, R26 | `@bitbucket` review and follow-ups |
-| O13 | `bitbucket_read_findings` tool, so explain and goal questions are answered in chat | R22 | `@bitbucket` follow-ups |
-| O14 | `/ts-bitbucket` skill: `review`, `check`, `usage`, `help` | R27 | `@bitbucket check`, `usage` |
-| O15 | Remove `@bitbucket`, `src/participant/`, the `chatParticipants` contribution, follow-up chips, disambiguation entries and the participant walkthrough steps | R33, R37 | — |
-| O16 | Final review of every developer and user document | R50 | — |
+| O22 | Run the Step 3 part of the [manual checklist](manual-checklist.md) on the preview build on the managed machine, against Bitbucket Data Center. Run after the removal by the maintainer's decision, so a failure is fixed on the review board, with no `@bitbucket` to fall back to | R35 | — (the stable release) |
 
 #### Review board parity ledger
 
@@ -230,22 +230,22 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 
 ### Across all steps
 
+O18 (no deprecation mark in the chat UI) and O19 (participant steps in the `CLAUDE.md` Bitbucket checklist) closed with the removal of `@bitbucket`.
+
 | # | Open point | Note |
 | --- | --- | --- |
 | O17 | Keyboard and screen reader check of every board control | R46. The built boards use VS Code Elements and plain tables; not yet checked with a screen reader |
-| O18 | `@bitbucket` is presented in the chat UI without a deprecation mark | `@jira` is removed, and the Jira walkthrough teaches the tools and boards. `@bitbucket` and the Bitbucket walkthrough still teach the participant |
-| O19 | The participant checklist in `CLAUDE.md` ("Adding a new Bitbucket operation") still carries participant steps, marked as deprecated | R48. The Jira checklist no longer routes into `@jira`; drop the Bitbucket steps when `@bitbucket` goes |
-| O20 | `docs/onboarding.md`, `docs/jira-flows.md`, `docs/report-import.md` and `docs/review-process.md` describe participant flows, each under a deprecation note | `docs/jira-flows.md` now marks the removed Step 1 flows as removed and keeps their rules as the reference the boards and tools follow, and `docs/report-import.md` does the same for the Veracode and Waltz chat flows, with a section on the import board. Rewrite or delete the rest with the step that removes the flow |
+| O20 | `docs/jira-flows.md` and `docs/report-import.md` still describe the removed `@jira` flows | Each marks the removed flows as removed and keeps their rules as the reference the boards and tools follow. The Bitbucket part (`docs/onboarding.md`, `docs/review-process.md`) was rewritten with the `@bitbucket` removal. Rewrite or trim the Jira prose when it next changes |
 
 ## 4. Open decisions
 
 | # | Decision | Needed before |
 | --- | --- | --- |
 | Q1 | Answered yes on 2026-11-16: on the managed machine with VS Code 1.146 and the Local harness hidden (`chat.editor.localAgent.enabled: false`; the `vscode.temporaryAllowLocalHarness` policy can only be set by the organisation), the import start screen listed the models, saved the pick and got "The model answered." from a call outside any chat request. Not tested with the organisation policy itself set | — |
-| Q2 | Do the Bitbucket tools move into the catalog shape of the Jira tools (`defineTool`, generated `package.json` entries), or stay as they are with one tool added? | O13 |
-| Q3 | How the review board shows progress during a long review, and whether it opens before or after the passes finish | O12 |
-| Q4 | Whether the organisation plans to turn the Local harness off, and when. It changes urgency, not scope. VS Code 1.146's release notes deprecate the Local harness and announce its removal for February 2027, so the participants stop working then at the latest | — |
-| Q5 | Mark the participants as deprecated in the chat UI now (O18), or only in the documentation? | Next release |
+| Q2 | Answered by the review board plan: the Bitbucket tools move into the catalog shape of the Jira tools. Done in PR #140 | — |
+| Q3 | Answered by the review board plan: the board opens at once and shows live steps while a pass runs, with Stop; a stopped pass keeps what it found. Done in PR #140 | — |
+| Q4 | Answered by the removal: the extension no longer uses chat participants, so the Local harness's removal (announced for February 2027 in VS Code 1.146's release notes) or an organisation policy turning it off no longer affects it | — |
+| Q5 | Answered by the review board plan: no interim deprecation mark in the chat UI; O18 closes with the removal of `@bitbucket` | — |
 
 ## 5. Not verified
 
@@ -258,11 +258,11 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 
 ## 6. Removal checklist for the end of the migration
 
-When O5, O11 and O15 are done, none of the following is left:
+Done on 2026-11-23, with the removal of `@bitbucket`:
 
-- `src/participant/` and its tests
-- `contributes.chatParticipants`, their slash commands and disambiguation entries in `package.json`
-- `workspaceState` keys of the participant sessions (`bitbucket.session.*`; the `jira.session.*` keys are no longer read since `@jira` went and are left in place)
-- The README section "@bitbucket — Bitbucket PR Reviews" as a participant manual; its setup steps move to the top
-- The deprecation notes added on 2026-11-13, since nothing deprecated remains to point at
-- Guard tests tied to the participants (`importBoardParity.test.ts` with the import board parity ledger, the `@jira` command table in `skillsGuard.test.ts`; `jiraCommandsGuard.test.ts` and `importCommandsGuard.test.ts` went with `@jira`)
+- `src/participant/` and its tests are gone; the review core moved to `src/review/` in PR #140
+- `package.json` has no `contributes.chatParticipants`, slash commands or disambiguation entries, and no `reviewMode`, `showTokenUsage` or `showConnectionInfo` setting; `src/test/bundleSmoke.test.ts` and `src/test/userDocsSync.test.ts` fail if a participant comes back
+- The `workspaceState` keys of the participant sessions (`jira.session.*`, `bitbucket.session.*`) are no longer read and are left in place
+- The README's participant manual is gone; the Bitbucket setup is its own section
+- The deprecation notes added on 2026-11-13 are gone
+- Guard tests: both parity guards stay (`importBoardParity.test.ts`, `reviewBoardParity.test.ts`), as the review board plan's KTD12 decided; `skillsGuard.test.ts` keeps its tables of the former `@jira` and `@bitbucket` commands, so each keeps a tool or skill
