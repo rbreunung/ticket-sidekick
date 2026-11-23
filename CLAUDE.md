@@ -8,18 +8,18 @@ The project itself is always English: source code, comments, identifiers, commit
 
 ## What this is
 
-A VS Code extension that brings Jira and Bitbucket into GitHub Copilot Chat. It is moving from chat participants to tools and boards, and that direction is settled:
+A VS Code extension that brings Jira and Bitbucket into GitHub Copilot Chat. It has moved from chat participants to tools and boards, and that direction is settled:
 
 - **Current, build here:** **extension tools** (VS Code language model tools Copilot's agent calls; the Jira catalog is in `src/tools/jiraTools/`), the **`/ts-jira` skills** on top of them, and **boards** (editor views: webviews in editor tabs that show a session the extension owns). See "Tools, skills and boards" below.
-- **Deprecated, do not build on:** the chat participant **`@bitbucket`** (pull request review with follow-ups). The review board (`src/boards/review/`) replaces it; until it is removed it gets bug fixes only, and a new feature is never added to it. It is removed once the Step 3 manual checklist has passed on the preview build (see [`docs/architecture/migration-status.md`](docs/architecture/migration-status.md)). **`@jira` was removed on 2026-11-16**: every Jira task, the email import included, runs from a tool, a skill or a board.
-- **Release rule during the migration:** every release is a preview; the stable channel gets no release, not even a hotfix, until the whole migration is done and tested. See [`docs/architecture/migration-status.md`](docs/architecture/migration-status.md).
+- **Removed, no chat participant left:** **`@jira` was removed on 2026-11-16** and **`@bitbucket` on 2026-11-23**. Every Jira task, the email import included, and every pull request review runs from a tool, a skill or a board; the review runs on the review board (`src/boards/review/`). `package.json` declares no `chatParticipants`, and `src/test/bundleSmoke.test.ts` fails if one comes back.
+- **Release rule during the migration:** every release is a preview; the stable channel gets no release, not even a hotfix, until the whole migration is done and tested. The code side is done; what is left is the manual checklist runs and the accessibility check. See [`docs/architecture/migration-status.md`](docs/architecture/migration-status.md).
 - **Removed, do not plan with:** the MCP server, the `ticketSidekick.jira.toolsFrom` setting, VS Code canvases, the agent plugin and the local HTTP server (`http.noProxy`). Documents that describe them are marked superseded.
 
-Jira and Bitbucket share `ConfigService` for credential storage but are otherwise independent. Neither requires the other to be configured. The one crossing: in smart and deep reviews `@bitbucket` can read the Jira ticket named in the PR title or prompt through the shared `TicketService`/`JiraApiClient`, only when Jira is configured and the user opts in (see `docs/review-process.md` "Requirements pass").
+Jira and Bitbucket share `ConfigService` for credential storage but are otherwise independent. Neither requires the other to be configured. The one crossing: the review board can check a pull request against a Jira ticket (typed on its first step, or the one the PR title names) through the shared `TicketService`/`JiraApiClient`, only when Jira is configured and the developer chooses it (see `docs/review-process.md` "Requirements check").
 
 ## Architecture (three layers — never skip)
 
-The service and client layers below are shared by everything. The top layer is a tool (`src/tools/jiraTools/*` → `TicketService`), a board kind (`src/boards/<kind>/` → services; the import board goes through the shared import engine `src/imports/`) or, for Bitbucket, the deprecated `@bitbucket` participant.
+The service and client layers below are shared by everything. The top layer is a tool (`src/tools/jiraTools/*` → `TicketService`, `src/tools/bitbucketTools/*` → `IBitbucketClient`/`PrReviewService`) or a board kind (`src/boards/<kind>/` → services; the import board goes through the shared import engine `src/imports/`, the review board through the staged review engine `src/review/engine/`).
 
 ### Jira
 
@@ -35,10 +35,10 @@ Jira tool / board → TicketService → IJiraClient (interface)
 ### Bitbucket
 
 ```text
-BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
-                                               ↓
-                                       BitbucketApiClient (production HTTP)
-                                       MockBitbucketClient (test fixture returns)
+Bitbucket tool / review board → PrReviewService → IBitbucketClient (interface)
+                                                        ↓
+                                                BitbucketApiClient (production HTTP)
+                                                MockBitbucketClient (test fixture returns)
 ```
 
 **Rule:** `PrReviewService` imports `IBitbucketClient` only — never `BitbucketApiClient` directly.
@@ -51,12 +51,12 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/jira/JiraApiClient.ts` | Real HTTP; builds auth header from authType |
 | `src/bitbucket/IBitbucketClient.ts` | All Bitbucket types + IBitbucketClient interface |
 | `src/bitbucket/BitbucketApiClient.ts` | Real HTTP; Data Center (Bearer PAT) + Cloud (Basic base64(username:apppassword)). `getPullRequestDiffWithCoverage`/`getPullRequestFileDiff` find and re-fetch files a truncated Data Center diff cut, and `summarizeDcDiffShape` logs each Data Center response's content-free shape (see `docs/review-process.md` "Data Center truncated diffs") |
-| `src/services/TicketService.ts` | Jira business logic; depends on IJiraClient. `getRequirementsSource(key)` returns a ticket's capped summary/description/comments or a failure classified by HTTP status, for the `@bitbucket` requirements pass. `getLinkTypeNames()`, `linkIssues(from, to, typeName)`, `hasLinkBetween()` and `markTicketMerged()` serve the Waltz ticket merge. `createTicket`/`rewriteTicket` take optional `optionalFields` (the Waltz Due Date) and repeat a write once without a field Jira refuses (`withOptionalFields`, `droppedFields`), and `rewriteTicket` takes `extraFields`/`removeLabels`. `isMultiLine()` decides table-row vs own-section by field schema (textarea / description / environment → section; single-line text & URL stay inline even when long), falling back to a length heuristic |
+| `src/services/TicketService.ts` | Jira business logic; depends on IJiraClient. `getRequirementsSource(key)` returns a ticket's capped summary/description/comments or a failure classified by HTTP status, for the review board's requirements check. `getLinkTypeNames()`, `linkIssues(from, to, typeName)`, `hasLinkBetween()` and `markTicketMerged()` serve the Waltz ticket merge. `createTicket`/`rewriteTicket` take optional `optionalFields` (the Waltz Due Date) and repeat a write once without a field Jira refuses (`withOptionalFields`, `droppedFields`), and `rewriteTicket` takes `extraFields`/`removeLabels`. `isMultiLine()` decides table-row vs own-section by field schema (textarea / description / environment → section; single-line text & URL stay inline even when long), falling back to a length heuristic |
 | `src/services/PrReviewService.ts` | PR review logic: diff parsing, file gathering, two-pass LLM prompt building, result formatting |
 | `src/services/ConfigService.ts` | VS Code settings + SecretStorage for both Jira and Bitbucket |
-| `src/services/configValidation.ts` | Pure (vscode-free) config validators; `validateBaseUrl` rejects malformed/non-http(s) base URLs. Surfaced by `jira_check_connection` (`/ts-jira check`) and `@bitbucket check` (DC) before attempting a connection. `PROJECT_KEY_PATTERN`/`normalizeProjectKey` are the one project-key rule |
+| `src/services/configValidation.ts` | Pure (vscode-free) config validators; `validateBaseUrl` rejects malformed/non-http(s) base URLs. Surfaced by `jira_check_connection` (`/ts-jira check`) and `bitbucket_check_connection` (`/ts-bitbucket check`, DC) before attempting a connection. `PROJECT_KEY_PATTERN`/`normalizeProjectKey` are the one project-key rule |
 | `src/services/defaultProjectCheck.ts`, `src/services/defaultProjectNotice.ts` | The check of `ticketSidekick.jira.defaultProject` at start and after a change (debounced): `checkDefaultProject` (form first, then Jira's project lookup when Jira is set up; only a 404 counts as wrong) and `defaultProjectWarning`; the notice offers Open Setting and never writes the setting |
-| `src/services/setupHints.ts` | Pure (vscode-free) `buildJiraNotConfiguredMessage(config)`: the plain-text Jira setup hint the Jira tools answer with while Jira is not configured; kept outside the participant layer so `src/tools/` does not depend on it |
+| `src/services/setupHints.ts` | Pure (vscode-free) `buildJiraNotConfiguredMessage(config)`: the plain-text Jira setup hint the Jira tools answer with while Jira is not configured |
 | `src/tools/bitbucketTools/` | The vscode-free Bitbucket tool catalog (`ToolDefinition`s over `IBitbucketClient`/`PrReviewService` and the review board's stored sessions) |
 | `src/tools/registerBitbucketTools.ts` | Registers the Bitbucket tool catalog with VS Code as language model tools |
 | `src/tools/jiraTools/loadCore.ts` | vscode-free load core behind a small writer interface: writes `ticket.md`, `comments.md` and the eligible or named attachments into `.jira-context/<KEY>/` and keeps it git-ignored; used by the load tool |
@@ -86,19 +86,15 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/utils/waltzDates.ts` | Pure, `vscode`-free Waltz remediation-date logic: `effectiveDueDate`/`earliestDueDate` (planned date else policy date; earliest over a group), `diffRemediationDates`, the shared "Remediation dates" section constants, and `parseRecordedDates` (reads a ticket description's recorded dates back, leniently; round-trip tested against the builder). The third date is the attestation date (`COLUMN_ATTESTATION`, report column `Attested Rem Plan Due By`); the old "Plan deadline" title is not read back. See `docs/report-import.md` "Remediation dates and the Due Date (Waltz)" |
 | `src/utils/jiraFieldErrors.ts` | `refusedFieldsOf(err, names)`: which optional fields a Jira 400 names under `errors` (keyed on the field name, never the message). `TicketService.createTicket`/`rewriteTicket` use it to repeat a write once without a refused Due Date and report `droppedFields` |
 | `src/services/AcceptedListService.ts` | Reads/writes `.jira-oss-accepted.json` in the workspace root (vscode-free, like `TemplateService`); `load()` never throws; `add`/`remove`/`removePair`/`removeComponent` refuse to write over a file that could not be read in full (invalid JSON or a skipped entry) |
-| `src/participant/BitbucketParticipant.ts` | Bitbucket chat handler: check, PR review, multi-turn follow-ups. Runs the ticket step after `getPullRequest` and the requirements pass inside `completeReview` (`runRequirementsPass`) |
-| `src/participant/bitbucket/requirementsFlow.ts` | Pure, `vscode`-free: `decideTicketStep` (what a review does about a Jira ticket for each mode/key/Jira combination), the pause text (two links that are full re-run commands, so nothing is stored), and the hint/failure lines. `readTicketGuarded` (timeout + throw → a failure the review continues from) is in `src/review/ticketRead.ts`, shared with the review board |
 | `src/review/requirementsPass.ts` | Pure, `vscode`-free `runRequirementsPass(params, deps)`: packs the diff, makes the one call and at most one extra-file round, and words a failure; the model call, file fetch and cancellation arrive as `deps`. A cancelled request is rethrown |
-| `src/review/requirementsCoverage.ts` | Pure, `vscode`-free requirements-pass core: `parseRequirementsReply` (tolerant, throws `UnparseableReplyError`), `packDiffFiles`, and the chat (`renderCoverageMarkdown`, all text neutralized) and plain-text (`renderCoverageText`) renderers |
+| `src/review/requirementsCoverage.ts` | Pure, `vscode`-free requirements-pass core: `parseRequirementsReply` (tolerant, throws `UnparseableReplyError`), `packDiffFiles`, and the plain-text renderer (`renderCoverageText`) the board and Copy use |
 | `src/utils/requirementsSource.ts` | Pure: shapes a Jira issue and its comments into a size-capped `RequirementsSource` (newest comment first) and its prompt text |
-| `src/review/reviewDiagnostics.ts` | Diagnostics orchestration glue for the review pipeline's LLM call sites: `CallAttemptOut`/`OnCallAttemptError`/`CallDiagHooks` types, `errorCodeOf`, `handleAttemptFailure` (shared pass1/critic `onAttemptFailed` handling — logs the failure plus the R1/R2 per-call error line, then R5's recovery-decision line, gated on item-array identity against the original unsplit batch so a split half's terminal attempt never falsely logs a retry that won't happen); re-exports `createAttemptTracker`; also `describeErrorForLog` (error class plus a trimmed stack head for log lines), the failure-wording helpers (`formatBatchFailureNotice` says "after retrying" only for transient errors, `PARTIAL_REVIEW_WARNING`, `formatReviewFailedMessage`), and the logged not-retried `give-up` decision. No `vscode` import — pure and Vitest-loadable; `BitbucketParticipant.ts` injects its own logging as callbacks |
+| `src/review/reviewDiagnostics.ts` | Diagnostics orchestration glue for the review pipeline's LLM call sites: `CallAttemptOut`/`OnCallAttemptError`/`CallDiagHooks` types, `errorCodeOf`, `handleAttemptFailure` (shared pass1/critic `onAttemptFailed` handling — logs the failure plus the R1/R2 per-call error line, then R5's recovery-decision line, gated on item-array identity against the original unsplit batch so a split half's terminal attempt never falsely logs a retry that won't happen); re-exports `createAttemptTracker`; also `describeErrorForLog` (error class plus a trimmed stack head for log lines), the failure-wording helpers (`formatBatchFailureNotice` says "after retrying" only for transient errors, `PARTIAL_REVIEW_WARNING`, `formatReviewFailedMessage`), and the logged not-retried `give-up` decision. No `vscode` import — pure and Vitest-loadable; callers inject their logging as callbacks |
 | `src/review/tokenMeter.ts` | `createTokenMeter(model, record, onDiag?)`: per-response proxy over the chat model (proxies an empty target so a frozen host model cannot trip the Proxy invariants; fails open to the raw model with `metered: false` when it cannot wrap) that counts every `sendRequest` (input via `countTokens` once the request is accepted, output when the stream ends or breaks, `chars/4` fallback flagged estimated) and records it. No `vscode` import. See `docs/review-process.md` "Token usage" |
-| `src/utils/tokenUsage.ts` | Pure monthly per-model token counters (`TokenUsageService` over `globalState`, current month + two before, pruned on write), plus `formatTokenFooter` and `formatUsageTable` for the opt-in `showTokenUsage` footer and `@bitbucket usage` |
-| `src/participant/reviewSessionState.ts` | Chat-only helpers of the deprecated `@bitbucket`: `hasPrUrl`, `isEndSessionRequest` (`done` plus the cancel words — kept out of the shared `isCancellation`), `isReviewStartWithoutUrl` (bare `/review` or mode word), `endBitbucketSessions` + `BITBUCKET_SESSION_KEYS` (clears every `bitbucket.session.*` key), end-session chips derived from the session kind inside `computeBitbucketFollowups`, `extractPromptDirectives` (the upfront question, an explicit Jira key and `no ticket`, extracted in a fixed order so a key or mode word inside the question or URL never acts), `parseFollowUpIntent` (parses multi-turn follow-up messages into a typed `FollowUpIntent` — a start-anchored `goal` statement when the session has a requirements block, a strict whole-message `copy` command with `targets: number[] \| 'all'`, `add` with `targets: number[] \| 'all'` and extracted note, or `explain` with cleaned `question` text and optional `findingRef`), and its own `buildChatCommandLink()`. Goes with `@bitbucket` |
-| `src/review/reviewSessionState.ts` | The vscode-free review core shared by the review board and `@bitbucket`: `parsePrUrl`, `parseDiff`, `parseReviewReply` (tolerant reply parser — NDJSON, pretty-printed, arrays, wrappers, cut-off replies), `buildAdaptiveChunks`, `numberDiffLines` (render-only gutter), `locateAnchor` + `resolveFindingAnchors` (tiered match of the quoted `anchorCode` → verified line + provenance, or *location unverified*; drops and counts findings naming files outside the PR), `mergePass2Findings`, `buildStoredReviewDiff`, `formatReviewForSharing` (the plain-text "Copy for Teams" block — see `docs/review-process.md` "Follow-ups"), `buildFindingFollowUpPrompt`, `dedupeFindings`, `extractHunkAround`, `selectFilesWithinBudget`, `parseCriticKeep`, `createAttemptTracker`, `buildRunTag`, `formatCallLine`, `buildTruncationEvent`, `formatRecoveryDecision`, `formatFindingsFunnel`, `formatStructuredRunRecord`, `formatContinuationMessage` — the Bitbucket review pipeline's diagnostic-timeline formatters (see `docs/review-process.md` "Resilience & debugging") — plus its own `neutralizeMarkdownLinks()` (duplicated from `src/utils/chatPrimitives.ts` rather than shared) |
+| `src/utils/tokenUsage.ts` | Pure monthly per-model token counters (`TokenUsageService` over `globalState`, current month + two before, pruned on write), plus `formatUsageTable` for `bitbucket_token_usage` (`/ts-bitbucket usage`) |
+| `src/review/reviewSessionState.ts` | The vscode-free review core of the review board and the Bitbucket tools: `parsePrUrl`, `parseDiff`, `parseReviewReply` (tolerant reply parser — NDJSON, pretty-printed, arrays, wrappers, cut-off replies), `buildAdaptiveChunks`, `numberDiffLines` (render-only gutter), `locateAnchor` + `resolveFindingAnchors` (tiered match of the quoted `anchorCode` → verified line + provenance, or *location unverified*; drops and counts findings naming files outside the PR), `mergePass2Findings`, `buildStoredReviewDiff`, `formatReviewForSharing`, `buildFindingFollowUpPrompt`, `dedupeFindings`, `extractHunkAround`, `selectFilesWithinBudget`, `parseCriticKeep`, `createAttemptTracker`, `buildRunTag`, `formatCallLine`, `buildTruncationEvent`, `formatRecoveryDecision`, `formatFindingsFunnel`, `formatStructuredRunRecord`, `formatContinuationMessage` — the Bitbucket review pipeline's diagnostic-timeline formatters (see `docs/review-process.md` "Resilience & debugging") — plus its own `neutralizeMarkdownLinks()` (duplicated from `src/utils/chatPrimitives.ts` rather than shared) |
 | `src/review/engine/` | The staged review engine, vscode-free: the regular pass (`regularPass.ts`), the persona passes (`extraPass.ts`), the critic, the requirements check and the goal rewording, over the shared batch review; findings are kept in a `FindingStore` with numbers that never change. The review board drives it |
 | `src/boards/review/` | The review board kind (vscode-free): the session-less start screen that asks for the PR link (`startScreen.ts`), the first step (model, requirements source: Jira ticket, a goal or none, optional question; `firstStep.ts`), the runs (regular pass, suggested and picked extra passes, critic, re-check; `runs.ts`), and the findings with Explain, draft comments with Rewrite, Post and Copy (`findings.ts`). Opened by `bitbucket_open_review`, `/ts-bitbucket review` and `Ticket Sidekick: Review a pull request` |
-| `src/utils/chatMarkdown.ts` | `trustedChatMarkdown(text)` — wraps a string in a `vscode.MarkdownString` trusted only for `workbench.action.chat.open`, the command every `buildChatCommandLink()` link points at. Any response containing one or more of those links must pass through this before `stream.markdown(...)` |
 | `src/services/WorkflowService.ts` | Workflow graph cache I/O, BFS path-finding, `discoverWorkflow` sampling; the cache entry also keeps `doneStatuses` (Jira's Done category, `IJiraClient.getDoneStatuses`) |
 | `src/utils/finalStatus.ts` | Pure `isFinalStatus(status, doneStatuses?)`: the Done category decides when known, else `FINAL_STATUS_NAMES`; used by the ticket list board (resolution only on final moves, R39 risk) and the imports' stale close |
 | `src/templates/TemplateService.ts` | Reads `.jira-templates.json`; returns `{ templates, cleanupRules }` |
@@ -107,11 +103,11 @@ BitbucketParticipant → PrReviewService → IBitbucketClient (interface)
 | `src/utils/markdownFormatter.ts` | `formatJiraBody(node)` — converts Jira wiki markup (v2 string) or ADF object (v3/legacy) to Markdown; `wikiToMarkdown(str)` delegates to `jiraWikiToMarkdown` |
 | `src/utils/jiraWikiToMarkdown.ts` | Own Jira wiki markup → Markdown converter; handles headings, tables, lists, code/noformat blocks, quotes, panels, and all inline markup without any third-party dependency |
 | `src/utils/htmlToMarkdown.ts` | Converts HTML email body to Markdown; resolves `cid:` references via optional `inlineImageMap`; strips OWA span whitespace inside bold/italic |
-| `src/utils/extractJsonObject.ts` | Bracket-counting extractor for the first complete JSON object in a raw LLM response (ignores braces in strings + trailing prose). Shared by `parseIntent` (Jira) and the Bitbucket review parser; `reviewSessionState.ts` re-exports it so neither participant imports the other |
+| `src/utils/extractJsonObject.ts` | Bracket-counting extractor for the first complete JSON object in a raw LLM response (ignores braces in strings + trailing prose). Used by the Bitbucket review reply parsers; `src/review/reviewSessionState.ts` re-exports it |
 | `src/utils/lmRetry.ts` | 3-try retry for VS Code Language Model API calls: `withLmRetry` (identical-retry, for a single non-splittable prompt) and `withEasierRetry` (the 3rd try splits a batch in half instead of repeating it). `isTransientLmError` classifies which failures are worth retrying. `PartialLmResponseError` preserves any text a broken response stream had already sent; `UnparseableReplyError` marks a review reply with no usable JSON so it is retried like a provider error |
 | `src/utils/diagTypes.ts` | `LogLevel` (`'info' \| 'warn' \| 'error'`) and `DiagLogger` types — no `vscode` import, so `TicketService`/`PrReviewService`/`JiraApiClient`/`BitbucketApiClient` can depend on them without pulling in `vscode` transitively |
 | `src/utils/logRedaction.ts` | `sanitizeDetails()` — recursively redacts values whose key looks like a secret and truncates long strings before a `logDiag` details object is written to the Output Channel. Applied automatically inside `logDiag`; no call site invokes it directly |
-| `src/utils/diagLog.ts` | Shared `"Ticket Sidekick"` VS Code Output Channel singleton (`getOutputChannel()`) and `logDiag(scope, level, message, details?)` — the place for diagnostic detail beyond the chat transcript. `level` (`'info' \| 'warn' \| 'error'`) tags each line for skimmability; `details` is redacted/truncated via `logRedaction.ts` automatically. Used throughout the tools, the boards and `@bitbucket` |
+| `src/utils/diagLog.ts` | Shared `"Ticket Sidekick"` VS Code Output Channel singleton (`getOutputChannel()`) and `logDiag(scope, level, message, details?)` — the place for diagnostic detail beyond the chat transcript. `level` (`'info' \| 'warn' \| 'error'`) tags each line for skimmability; `details` is redacted/truncated via `logRedaction.ts` automatically. Used throughout the tools and the boards |
 
 ## Running tests
 
@@ -134,7 +130,7 @@ Releases are manual: `.github/workflows/release.yml` is a `workflow_dispatch` wi
 
 Write tests for **user-facing use cases**, not internal mechanics. A test should read like a scenario: given this input, what does the user get back? Cover the happy path and the main failure case for every new feature.
 
-`BitbucketParticipant.ts` imports `vscode` and cannot be loaded by Vitest. Keep pure logic (string extraction, data formatting) in `src/utils/`, `reviewSessionState.ts`, `bitbucket/reviewDiagnostics.ts`, `TicketService.ts`, or `PrReviewService.ts` so it can be unit-tested. The participants' chat flows are covered by Vitest suites that mock `vscode` (e.g. `bitbucketReviewFlow.test.ts`); the e2e suite only smoke-tests activation, registration, a tool call and a board tab. Tools are tested by calling them through `callTool` (`jiraReadTools.test.ts`, `jiraWriteTools.test.ts`), boards through `boardMessages.test.ts`, `boardPanels.test.ts` and each kind's scenario tests.
+Only a few files import `vscode` (`extension.ts`, `registerBoards.ts`, `boardPanels.ts`, the `register*` tool files, `ConfigService.ts`, `importSettings.ts`, `defaultProjectNotice.ts`, `diagLog.ts`). Keep logic in vscode-free modules (`src/utils/`, `src/review/`, `src/boards/<kind>/`, `src/imports/`, `TicketService.ts`, `PrReviewService.ts`) so it can be unit-tested; the e2e suite only smoke-tests activation, registration, a tool call and a board tab. Tools are tested by calling them through `callTool` (`jiraReadTools.test.ts`, `jiraWriteTools.test.ts`), boards through `boardMessages.test.ts`, `boardPanels.test.ts` and each kind's scenario tests.
 
 ## Adding a new Jira operation
 
@@ -146,21 +142,21 @@ Steps 1 to 6 hold for every Jira operation. The entry point is a **tool** or a b
 4. Add a fixture file to `src/test/fixtures/` matching real Jira v3 API shape
 5. Write failing tests in `TicketService.test.ts`
 6. Implement in `TicketService` (business logic) until tests pass
-7. Add the tool to the catalog in `src/tools/jiraTools/` and run `node scripts/sync-tools.mjs`; put pure helpers outside `src/participant/`
+7. Add the tool to the catalog in `src/tools/jiraTools/` and run `node scripts/sync-tools.mjs`; keep pure helpers vscode-free
 8. If the operation introduces a new multi-step flow, document it in `docs/jira-flows.md` (or the relevant domain doc) — add only a one-line summary and link here, not new flow prose (see "Where documentation belongs")
 9. If users can see the change (a new command, reply, chip, setting, or changed behaviour), update the user manual too — see "Where documentation belongs"
 
 ## Adding a new Bitbucket operation
 
-Steps 1 to 5 hold for every Bitbucket operation. Step 6 describes the deprecated `@bitbucket` participant; new entry points are tools (the catalog in `src/tools/bitbucketTools/`, registered by `src/tools/registerBitbucketTools.ts`) or the planned review board.
+The entry point is a **tool** (the catalog in `src/tools/bitbucketTools/`, registered by `src/tools/registerBitbucketTools.ts`) or the review board (`src/boards/review/`).
 
 1. Add method to `IBitbucketClient` interface
 2. Implement in `BitbucketApiClient` (real HTTP, handle both DC and Cloud branches)
 3. Implement in `MockBitbucketClient` (fixture return)
 4. Write failing tests in `PrReviewService.test.ts`
 5. Implement in `PrReviewService` (business logic) until tests pass
-6. Add routing in `BitbucketParticipant.ts`
-7. If the operation introduces pure helpers, put them in `reviewSessionState.ts` and test them in `PrReviewService.test.ts`
+6. Add the tool to the catalog in `src/tools/bitbucketTools/` and run `node scripts/sync-tools.mjs`, or the action to the review board kind
+7. If the operation introduces pure helpers, put them in `src/review/` and test them
 8. If the operation introduces a new multi-step flow, document it in `docs/review-process.md` (or the relevant domain doc) — add only a one-line summary and link here, not new flow prose (see "Where documentation belongs")
 9. If users can see the change (a new command, reply, chip, setting, or changed behaviour), update the user manual too — see "Where documentation belongs"
 
@@ -213,13 +209,13 @@ via `getOutputChannel()`/`logDiag(scope, level, message, details?)` in
 `src/utils/diagLog.ts`) is the place for anything a user or a future
 debugging session needs beyond the chat transcript — model identity, retry
 attempts, raw API errors, and major operations (ticket created, PR review
-completed, cleanup batch run) across the tools, the boards and `@bitbucket`. `level`
+completed, cleanup batch run) across the tools and the boards. `level`
 is `'info' | 'warn' | 'error'`; `details`, when given, is automatically
 redacted/truncated by `src/utils/logRedaction.ts` before being written, so
 call sites never need to sanitize their own data.
 
-Files that already import `vscode` (`BitbucketParticipant.ts`, `extension.ts`,
-`registerBoards.ts`, `boardPanels.ts`) call `logDiag` directly. The four
+Files that already import `vscode` (`extension.ts`, `registerBoards.ts`,
+`boardPanels.ts`, the `register*` tool files) call `logDiag` directly. The four
 files that must stay `vscode`-free to remain loadable by Vitest
 (`TicketService`, `PrReviewService`, `JiraApiClient`, `BitbucketApiClient`)
 take an optional injected `onDiag?: DiagLogger` (constructor param on the
@@ -227,7 +223,7 @@ services, config field on the API clients) instead — the caller binds it to
 a scope-tagged `logDiag` call at construction time, e.g.
 `new TicketService(client, (level, message, details) => logDiag('jira.ticketService', level, message, details))`.
 This mirrors the `onAttemptFailed` hook `src/utils/lmRetry.ts` already used
-for the same reason. **New features in either participant should log
+for the same reason. **New features should log
 through `logDiag()`/`onDiag` too**, rather than inventing separate
 console/output-channel logging.
 
@@ -278,11 +274,9 @@ Chat flows, reply words and chips are not checked, so review them by hand
 Regex: `[A-Z][A-Z0-9]+-\d+` applied to `git branch --show-current` output.
 Example: `feature/PROJ-123-add-login` → `PROJ-123`
 
-## Multi-turn session state
+## Multi-step state
 
-Multi-turn flows store structured state in `vscode.ExtensionContext.workspaceState` and carry an expiry signal through `ChatResult.metadata` (the same channel `JiraFollowupState`/`BitbucketFollowupState` already use for follow-up chips) rather than a visible marker in the response. Each session-producing response returns `{ metadata: { jiraSession: { kinds: [...] } } }` (Jira) or `{ metadata: { bitbucketSession: { kinds: [...] } } }` (Bitbucket); on the next turn, `getActiveJiraSession()`/`getActiveBitbucketSession()` reads that off the **last** turn in `chatContext.history`. If the user moved on (a different, non-session response is last), no metadata is present and the session is silently ignored — no HTML comment tag rides along in any rendered response.
-
-Jira's session types plus their `workspaceState` keys and metadata kinds live in [`docs/jira-flows.md`](docs/jira-flows.md#jira-sessions) (also documents the clickable-reply mechanism every discrete-choice session uses). Bitbucket's `ReviewSession`, `BitbucketCommentPreviewSession`, and `SmartFallbackSession` — keys, kinds, detection order, and the PR-URL-bypass rule — live in [`docs/review-process.md`](docs/review-process.md#follow-ups).
+There are no chat sessions any more: the `workspaceState` chat sessions and their `ChatResult.metadata` expiry went with `@jira` and `@bitbucket`, and their stored `jira.session.*` and `bitbucket.session.*` keys are left in place and never read. Multi-step work is a board's **session** (see "Tools, skills and boards" below).
 
 ## Jira flows
 
@@ -290,9 +284,10 @@ Jira's session types plus their `workspaceState` keys and metadata kinds live in
 
 ## PR review flow (Bitbucket)
 
-How `@bitbucket <pr-url>` turns a PR into a grounded, line-accurate,
-multi-pass LLM review — chunking, anchor verification, provenance tagging,
-quick/deep modes, the critic pass, and follow-up turns — is documented in
+How the review board turns a PR into a grounded, line-accurate,
+staged LLM review — chunking, anchor verification, provenance tagging, the
+regular pass, the persona passes, the critic, the requirements check, Explain,
+Post and Copy — is documented in
 [`docs/review-process.md`](docs/review-process.md). **Keep that document in
 sync with any change to the review pipeline.**
 
@@ -314,12 +309,11 @@ This is the current architecture; design, module layout, security model and the 
 
 **Skills.** `/ts-jira-create`, which the agent also starts by itself for a new ticket so it goes through a template and a draft, and the explicit-only (`disable-model-invocation`) `/ts-jira-brief`, `/ts-jira-spell-check`, `/ts-jira-template` and `/ts-jira`, a command router the user types, e.g. `/ts-jira load PROJ-123`, whose `help brief`/`help create`/`help spell-check`/`help template` print `help-brief.md`/`help-create.md`/`help-spell-check.md`/`help-template.md` from its folder, live in `skills/<name>/SKILL.md`, contributed through `contributes.chatSkills`; `src/test/skillsGuard.test.ts` fails on a `jira_` name not in the catalog, a frontmatter `name` other than the folder, a `ts-` skill other than `ts-jira-create` without `disable-model-invocation`, or another skill with it, a `/ts-jira` row naming a tool or skill that does not exist or a tool without a row, or a basic `@jira` command with no tool or skill left for it. User manual page: [`docs/manual/copilot-tools.md`](docs/manual/copilot-tools.md), checked against the catalog by `src/test/userDocsSync.test.ts`.
 
-**Boards and sessions.** A board is a webview in an editor tab that shows a **session** the extension owns and caches on disk; the page holds no state. `src/boards/boardPanels.ts` opens the tab for the `jira_open_board` tool and five Command Palette commands, writes its document (`boardPanelHtml.ts`), answers the page's `postMessage` requests through `src/boards/boardMessages.ts` (vscode-free; the tab, not the page, names the session) and restores the tab after a restart. `src/sessions/` (vscode-free) has the session types, the id derived from kind and source, the file store, and `SessionManager` (open or restore, actions in order, background check (told `background` or `refresh` through `CheckMode`) with conflicts, single-use plan ids, native confirmation for risky writes, no preview or Apply while the last check failed (`writesBlocked`), expiry). A board's rules live in one `BoardKind` object under `src/boards/<kind>/` with pure `reduce`, `plan` and `reconcile`; `src/boards/registerBoards.ts` and `boardPanels.ts` are the only board files that import `vscode`. Pages are plain files in `board-pages/` (shared client and style, one `page.js` per board), copied to `out/board-pages` by `esbuild.js`. Built so far: the security report, the ticket list (`src/boards/ticketList/`: `kind.ts` for the rules — paging, extra columns, the out-of-date state, add or remove of list values — `cleanupSource.ts` for a cleanup rule's check and lookup (`checkCleanupRules`, `lookupCleanupRule`), query, subtasks and paths, `jiraDeps.ts` for search, move, field update, rules, workflow and resolutions over the services), the sessions board, the import board for Veracode, Waltz and emails (`src/boards/import/`: a session-less start screen, the kind with one area handler per tab and the email cleanup stage, over the shared engine `src/imports/`), and the PR review board (`src/boards/review/`: a session-less start screen, the first step, the staged review over `src/review/engine/`, Explain, Post and Copy). The session model saves after each write of an Apply, shows Apply progress with the controls locked, rebuilds a board from its stored recipe after an update that changes the stored format (`revalidate`), reads before a plan's preview (`prepare`) and moves a session to a new source (`relocate`, for "Pick the file again"). User manual: [`docs/manual/boards.md`](docs/manual/boards.md).
+**Boards and sessions.** A board is a webview in an editor tab that shows a **session** the extension owns and caches on disk; the page holds no state. `src/boards/boardPanels.ts` opens the tab for the `jira_open_board` and `bitbucket_open_review` tools and six Command Palette commands, writes its document (`boardPanelHtml.ts`), answers the page's `postMessage` requests through `src/boards/boardMessages.ts` (vscode-free; the tab, not the page, names the session) and restores the tab after a restart. `src/sessions/` (vscode-free) has the session types, the id derived from kind and source, the file store, and `SessionManager` (open or restore, actions in order, background check (told `background` or `refresh` through `CheckMode`) with conflicts, single-use plan ids, native confirmation for risky writes, no preview or Apply while the last check failed (`writesBlocked`), expiry). A board's rules live in one `BoardKind` object under `src/boards/<kind>/` with pure `reduce`, `plan` and `reconcile`; `src/boards/registerBoards.ts` and `boardPanels.ts` are the only board files that import `vscode`. Pages are plain files in `board-pages/` (shared client and style, one `page.js` per board), copied to `out/board-pages` by `esbuild.js`. Built so far: the security report, the ticket list (`src/boards/ticketList/`: `kind.ts` for the rules — paging, extra columns, the out-of-date state, add or remove of list values — `cleanupSource.ts` for a cleanup rule's check and lookup (`checkCleanupRules`, `lookupCleanupRule`), query, subtasks and paths, `jiraDeps.ts` for search, move, field update, rules, workflow and resolutions over the services), the sessions board, the import board for Veracode, Waltz and emails (`src/boards/import/`: a session-less start screen, the kind with one area handler per tab and the email cleanup stage, over the shared engine `src/imports/`), and the PR review board (`src/boards/review/`: a session-less start screen, the first step, the staged review over `src/review/engine/`, Explain, Post and Copy). The session model saves after each write of an Apply, shows Apply progress with the controls locked, rebuilds a board from its stored recipe after an update that changes the stored format (`revalidate`), reads before a plan's preview (`prepare`) and moves a session to a new source (`relocate`, for "Pick the file again"). User manual: [`docs/manual/boards.md`](docs/manual/boards.md).
 
 ## Onboarding
 
 Language Model tools (`contributes.languageModelTools`, letting Copilot Agent
-Mode call Jira/Bitbucket operations directly), slash commands, disambiguation
-metadata, follow-up suggestion chips, the first-touch/unclassified-prompt
-fallback, and the two Getting-Started walkthroughs are documented in
+Mode call Jira/Bitbucket operations directly), the `/ts-jira` and
+`/ts-bitbucket` skills, and the two Getting-Started walkthroughs are documented in
 [`docs/onboarding.md`](docs/onboarding.md).

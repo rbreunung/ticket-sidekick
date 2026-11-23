@@ -99,11 +99,9 @@ describe('user manual covers everything else users see from package.json', () =>
     expect(missing, 'add these command titles to README.md or docs/manual/').toEqual([]);
   });
 
-  it('lists every slash command in the README', () => {
-    const missing = (contributes.chatParticipants as Array<{ name: string; commands?: Array<{ name: string }> }>)
-      .flatMap((p) => (p.commands ?? []).map((c) => `@${p.name} /${c.name}`))
-      .filter((command) => !readme.includes(`\`${command}\``));
-    expect(missing, 'add these to the slash-command tables in README.md').toEqual([]);
+  it('teaches no chat participant, since package.json declares none', () => {
+    expect(contributes.chatParticipants).toBeUndefined();
+    expect(readme.match(/`@(jira|bitbucket) [^`]*`/g) ?? [], 'README.md still teaches a removed chat participant command').toEqual([]);
   });
 
   it('lists every Agent Mode tool, with its # reference, on the tools page', () => {

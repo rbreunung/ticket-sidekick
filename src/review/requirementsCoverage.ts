@@ -1,11 +1,10 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
 import { UnparseableReplyError } from '../utils/lmRetry';
-import { neutralizeMarkdownLinks, sanitizeGfmCellText, normalizeShareText, type FileDiff } from './reviewSessionState';
+import { normalizeShareText, type FileDiff } from './reviewSessionState';
 
-// Pure and `vscode`-free: the requirements pass's reply parsing and its two renderers (the chat
-// block and the plain text for "Copy for Teams"). Everything derived from the ticket or the model
-// is untrusted — the chat block is trust-gated by the caller, so nothing here may pass through
-// un-neutralized.
+// Pure and `vscode`-free: the requirements pass's reply parsing and its plain-text renderer (the
+// review board's coverage block and "Copy for Teams"). Everything derived from the ticket or the
+// model is untrusted.
 
 export type RequirementSourceLabel = 'description' | 'comment' | 'inferred';
 export type RequirementStatus = 'met' | 'not-evident' | 'unclear';
@@ -134,51 +133,10 @@ export function buildCoverage(
   };
 }
 
-const STATUS_ICON: Record<RequirementStatus, string> = { met: '✅ met', 'not-evident': '⚠️ not evident', unclear: '❔ unclear' };
 const STATUS_WORD: Record<RequirementStatus, string> = { met: 'met', 'not-evident': 'not evident', unclear: 'unclear' };
-
-function oneLine(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
-}
 
 function unseenLine(count: number): string {
   return `${count} file${count === 1 ? ' was' : 's were'} not shown to this check, so requirements that could depend on ${count === 1 ? 'it' : 'them'} are marked unclear.`;
-}
-
-/** The "Requirements coverage" block for the chat response. Every ticket- or model-derived string is
- * neutralized, and table cells are kept on one line without pipes. */
-export function renderCoverageMarkdown(coverage: RequirementsCoverage): string {
-  const safe = (value: string): string =>
-    neutralizeMarkdownLinks(oneLine(value)).replace(/\\/g, '\\\\').replace(/</g, '\\<');
-  const cell = (value: string): string => sanitizeGfmCellText(safe(value));
-  const lines: string[] = [`### Requirements coverage — ${safe(coverage.ticketKey)}`, ''];
-
-  if (coverage.userGoal) lines.push(`_Using your stated goal: ${safe(coverage.userGoal)}_`, '');
-  if (coverage.reading) lines.push(`_How I read this ticket:_ ${safe(coverage.reading)}`, '');
-
-  if (coverage.noClearRequirements) {
-    lines.push(`No clear requirements found in ${safe(coverage.ticketKey)} — the requirements and scope checks were skipped.`);
-    return lines.join('\n').trimEnd();
-  }
-
-  if (coverage.requirements.length > 0) {
-    lines.push('| Requirement | Source | Status | Evidence |', '| --- | --- | --- | --- |');
-    for (const r of coverage.requirements) {
-      lines.push(`| ${cell(r.text)} | ${r.source} | ${STATUS_ICON[r.status]} | ${cell(r.evidence)} |`);
-    }
-    lines.push('');
-  }
-
-  if (coverage.outOfScope.length > 0) {
-    lines.push('**Not accounted for by the ticket**', '');
-    for (const o of coverage.outOfScope) lines.push(`- \`${oneLine(o.file).replace(/`/g, "'")}\`${o.note ? ` — ${safe(o.note)}` : ''}`);
-    lines.push('');
-  }
-
-  if (coverage.conflict) lines.push(`_Conflict in the ticket: ${safe(coverage.conflict)}_`, '');
-  if (coverage.unseenFileCount > 0) lines.push(`_${unseenLine(coverage.unseenFileCount)}_`, '');
-
-  return lines.join('\n').trimEnd();
 }
 
 /** The same content as plain text for pasting into a chat that does not render Markdown. */

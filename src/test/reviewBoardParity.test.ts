@@ -367,7 +367,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     actions: ['start', 'recheck'],
     tests: [
       [RUNS, 'a ticket that cannot be read: the findings stand, the coverage position names the failed read, and Re-check runs only the check'],
-      ['requirementsFlow.test.ts', 'turns a read that never settles into a failure the review can continue from'],
+      ['ticketRead.test.ts', 'turns a read that never settles into a failure the review can continue from'],
       ['requirementsSource.test.ts', 'caps many long comments within the total budget, keeps the newest, and says how many older ones were left out'],
     ],
   },

@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import { ConfigService } from './services/ConfigService';
-import { createBitbucketParticipant } from './participant/BitbucketParticipant';
 import { registerBitbucketTools } from './tools/registerBitbucketTools';
 import { registerJiraTools } from './tools/registerJiraTools';
 import type { BoardStats } from './boards/boardPanels';
@@ -100,7 +99,6 @@ export function activate(context: vscode.ExtensionContext): TicketSidekickApi {
     }),
   );
 
-  createBitbucketParticipant(context, configService);
   // The Jira tools for Copilot (language model tools) and the boards they open in editor tabs.
   const boards = registerJiraTools(context, configService);
   // The Bitbucket tools, which open and read the review board.

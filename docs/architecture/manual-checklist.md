@@ -169,11 +169,11 @@ Run on the preview build on the managed machine, against Jira Data Center, with 
 - [ ] Typing `@jira` in a chat offers no participant.
 - [ ] The Command Palette has no "Create Jira ticket from email (.eml)" command.
 - [ ] `ticketSidekick.jira.showConnectionInfo` is no longer in the Settings screen; `/ts-jira check` shows the connection.
-- [ ] `@bitbucket` still reviews a pull request.
+- [ ] `@bitbucket` still reviews a pull request (only on builds before its removal on 2026-11-23).
 
 ## Step 3: PR review board
 
-Run on the preview build of the review board on the managed machine, against Bitbucket Data Center and Jira Data Center, with a real pull request whose title names a Jira ticket, and if you can one large enough that the Data Center server cuts its diff. `@bitbucket` is still installed for this part; the plan removes it only after this part passes.
+Run on the preview build of the review board on the managed machine, against Bitbucket Data Center and Jira Data Center, with a real pull request whose title names a Jira ticket, and if you can one large enough that the Data Center server cuts its diff. `@bitbucket` is already removed in this build, so the review board is the only way to review.
 
 **Opening the board**
 
@@ -211,4 +211,9 @@ Run on the preview build of the review board on the managed machine, against Bit
 
 - [ ] After a review, asking Copilot "explain finding 2" answers from `bitbucket_read_findings` with the same finding.
 - [ ] `/ts-bitbucket check` reports the connection; `/ts-bitbucket help review` explains the staged review.
-- [ ] `@bitbucket` still reviews a pull request.
+
+**`@bitbucket` is gone**
+
+- [ ] Typing `@bitbucket` in a chat offers no participant.
+- [ ] `ticketSidekick.bitbucket.reviewMode`, `showTokenUsage` and `showConnectionInfo` are no longer in the Settings screen.
+- [ ] The Bitbucket walkthrough's last step opens the review board and completes after a finished review.
