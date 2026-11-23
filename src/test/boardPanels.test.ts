@@ -199,7 +199,7 @@ describe('a page\'s requests', () => {
 describe('the import start screen', () => {
   it('opens as a tab without a session that loads its own page, and answers its page through the start screen', async () => {
     panels = new BoardPanels(manager, ['security-report'], { fsPath: '/ext/out/board-pages' } as never, message => errors.push(message), startScreen());
-    expect(await panels.open('import-start', { kind: 'waltz', reportPath: path.join(dir, 'report.xlsx') })).toEqual({ ok: true, title: 'Open import' });
+    expect(await panels.open('import-start', { kind: 'waltz', reportPath: path.join(dir, 'report.xlsx') })).toEqual({ ok: true, title: 'Jira Import Board' });
     expect(created[0].webview.html).toContain('data-kind="import-start" data-session=""');
     expect(created[0].webview.html).toContain('src="vscode-resource:/ext/out/board-pages/import-start/page.js"');
     await created[0].send({ id: 1, op: 'view', body: {} });
@@ -225,7 +225,7 @@ describe('the import start screen', () => {
     expect(created).toHaveLength(0);
 
     panels = new BoardPanels(manager, ['security-report'], { fsPath: '/ext/out/board-pages' } as never, message => errors.push(message), startScreen());
-    expect(await panels.open('import-start', { kind: 'waltz', reportPath: file, openWhenReady: true })).toEqual({ ok: true, title: 'Open import' });
+    expect(await panels.open('import-start', { kind: 'waltz', reportPath: file, openWhenReady: true })).toEqual({ ok: true, title: 'Jira Import Board' });
     expect(created[0].webview.html).toContain('data-kind="import-start"');
   });
 

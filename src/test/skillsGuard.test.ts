@@ -273,6 +273,21 @@ describe('the /ts-jira-create skill', () => {
     expect(description).toContain('Not for showing, loading, searching or changing existing tickets.');
   });
 
+  it('is not for emails or report files, which go to the Jira Import Board', () => {
+    const description = parseFrontmatter(create)?.description ?? '';
+    expect(description).toContain('Not for tickets from attached or named .eml, Veracode .xml or Waltz .xlsx files');
+  });
+
+  it('opens the import board for such files before it looks at any template, and keeps pasted email text in the guided steps', () => {
+    const handOff = create.indexOf(OPEN_BOARD_TOOL);
+    expect(handOff).toBeGreaterThan(-1);
+    expect(handOff).toBeLessThan(create.indexOf(LIST_TEMPLATES_TOOL));
+    expect(create).toMatch(/board `import`/);
+    expect(create).toMatch(/`dragged` true/);
+    expect(create).toMatch(/Email text pasted into the chat, with no file, is not such a request/);
+    expect(create).toMatch(/neither is a file that is only the subject of the ticket/);
+  });
+
   it('asks only for what is missing, never picks the issue type, and shows the draft before creating', () => {
     expect(create).toMatch(/Ask only for what you cannot take from the request/);
     expect(create).toMatch(/Never pick an issue type yourself/);
@@ -422,6 +437,35 @@ describe('the /ts-bitbucket command skill, specifically', () => {
     const help = readFileSync(resolve(root, 'skills/ts-bitbucket/help-review.md'), 'utf-8');
     for (const text of [router, help]) expect(text).not.toMatch(/\b(quick|smart|deep)\b/i);
     expect(help).toContain('regular pass');
+  });
+});
+
+describe('/ts-jira create, the natural name for an import', () => {
+  const router = readFileSync(resolve(root, 'skills/ts-jira/SKILL.md'), 'utf-8');
+  const rows = tableRows(router);
+  const row = (command: string) => rows.find(r => r.command === command);
+
+  it('opens the import board with a kind, like import does', () => {
+    expect(row('create')?.action).toContain(OPEN_BOARD_TOOL);
+    expect(row('create')?.action).toMatch(/same call as the `import` row/);
+    expect(row('import')?.action).toContain(OPEN_BOARD_TOOL);
+  });
+
+  it('answers a bare create with the page that lists every way to create, calling no tool', () => {
+    expect(row('create')?.action).toMatch(/Without a kind: call no tool and reply with the text of `help-create\.md` exactly/);
+  });
+
+  it('lists the create line before the import line in the help, naming them as one command', () => {
+    const help = router.slice(router.indexOf('Usage: /ts-jira'), router.indexOf('```', router.indexOf('Usage: /ts-jira')));
+    expect(help).toMatch(/^ {2}create \[from <kind>\] \[PATH \.\.\.\] +.*Jira Import Board/m);
+    expect(help).toMatch(/^ {2}import <kind> \[PATH \.\.\.\] +same as create from <kind>$/m);
+  });
+
+  it('names the guided create and every create from <kind> on the help create page', () => {
+    const page = readFileSync(resolve(root, 'skills/ts-jira/help-create.md'), 'utf-8');
+    expect(page).toContain('/ts-jira-create');
+    for (const kind of ['email', 'veracode', 'waltz']) expect(page).toContain(`/ts-jira create from ${kind}`);
+    expect(page).toContain('Jira Import Board');
   });
 });
 

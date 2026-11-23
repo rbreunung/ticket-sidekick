@@ -46,7 +46,7 @@ const openBoardShape = {
 const IMPORT_START_BOARD = 'import-start';
 
 /** The title of the import start screen (`IMPORT_START_TITLE` in src/boards/import/startScreen.ts). */
-const IMPORT_START_TITLE = 'Open import';
+const IMPORT_START_TITLE = 'Jira Import Board';
 
 /**
  * Whether a path names a file on another machine: a UNC path (`\\server\share`, `//server/share`)
@@ -102,7 +102,7 @@ export const openBoardTool = defineTool<JiraToolDeps, typeof openBoardShape>({
   title: 'Open a Ticket Sidekick board',
   description:
     'Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, the stored sessions, '
-    + 'or the import board for a Veracode or Waltz report or for .eml emails. '
+    + 'or the Jira Import Board for a Veracode or Waltz report or for .eml emails. '
     + 'Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; '
     + 'do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. '
     + 'For a cleanup by a rule from .jira-templates.json, pass the rule\'s name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. '
@@ -122,13 +122,13 @@ export const openBoardTool = defineTool<JiraToolDeps, typeof openBoardShape>({
     if (args.board === 'import') {
       const given = [...(args.path ? [args.path] : []), ...(args.paths ?? [])];
       if (given.some(isNetworkPath)) {
-        return 'Not opened: the report is on another machine (a network path). Ask the user to copy it into the workspace or to choose it in the import board\'s file dialog.';
+        return 'Not opened: the report is on another machine (a network path). Ask the user to copy it into the workspace or to choose it in the Jira Import Board\'s file dialog.';
       }
       // The start screen, opened as the import board when the files read and the template and project settings are complete.
       const resolved = args.kind ? given.map(p => reportPathOf(p, deps.workspaceFolders()[0])).filter((p): p is string => p !== undefined) : [];
       if (args.kind === 'email') {
         const refused = await refusedEmailPath(resolved);
-        if (refused) return `Not opened: "${refused}" is not an .eml file outside a dotfile or dotfolder. Ask the user to choose the emails in the import board's file dialog.`;
+        if (refused) return `Not opened: "${refused}" is not an .eml file outside a dotfile or dotfolder. Ask the user to choose the emails in the Jira Import Board's file dialog.`;
       }
       const files = args.kind === 'email'
         ? { ...(resolved.length > 0 ? { reportPaths: resolved } : {}), ...(args.dragged === true ? { emailConsent: true } : {}) }

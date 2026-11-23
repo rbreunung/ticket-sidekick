@@ -62,7 +62,7 @@
       },
       {
         "command": "ticket-sidekick.openImportBoard",
-        "title": "Ticket Sidekick: Open import board"
+        "title": "Ticket Sidekick: Open Jira Import Board"
       },
       {
         "command": "ticket-sidekick.boards.openReview",
@@ -765,7 +765,7 @@
       {
         "name": "jira_open_board",
         "displayName": "Open a Ticket Sidekick board",
-        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, the stored sessions, or the import board for a Veracode or Waltz report or for .eml emails. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. For a cleanup by a rule from .jira-templates.json, pass the rule's name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. For a report import, pass board import with kind and path; the user reviews and creates the tickets on the board. For emails, pass kind email with paths, and dragged true when the user dragged them into the chat; the user creates tickets or adds the emails as comments on the board. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
+        "modelDescription": "Opens a board in its own editor tab: the security report of a project, a ticket list for a JQL query or saved filter, the stored sessions, or the Jira Import Board for a Veracode or Waltz report or for .eml emails. Use it whenever the user asks to see a list of tickets, to search Jira, to change more than one ticket, or for the security report; do not list the tickets in chat and do not change them one by one. For a change to several tickets, pass it as change: the user reviews and applies it on the board. For a cleanup by a rule from .jira-templates.json, pass the rule's name as cleanupRule. Narrow a list with fixVersion, sprint, assignee or myTeam instead of writing those clauses into jql yourself. For a report import, pass board import with kind and path; the user reviews and creates the tickets on the board. For emails, pass kind email with paths, and dragged true when the user dragged them into the chat; the user creates tickets or adds the emails as comments on the board. The answer says only whether the board opened, never its content. Changes nothing in Jira.",
         "userDescription": "Opens a board in its own editor tab.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "jiraOpenBoard",
@@ -933,7 +933,7 @@
           "ticketSidekick.jira.defaultProject": {
             "type": "string",
             "default": "",
-            "description": "Default Jira project key (e.g. 'PROJ'). Used when creating tickets if no project is specified in your prompt. Checked at start and after a change: a value that is not a project key, or a project Jira does not have, brings up a warning. The import board's start screen asks for a project key (typed, or chosen from Jira's projects) when this is empty or wrong, and saves it here."
+            "description": "Default Jira project key (e.g. 'PROJ'). Used when creating tickets if no project is specified in your prompt. Checked at start and after a change: a value that is not a project key, or a project Jira does not have, brings up a warning. The Jira Import Board's start screen asks for a project key (typed, or chosen from Jira's projects) when this is empty or wrong, and saves it here."
           },
           "ticketSidekick.jira.overviewCsvDelimiter": {
             "type": "string",
@@ -1093,13 +1093,13 @@
           "ticketSidekick.email.template": {
             "type": "string",
             "default": "",
-            "description": "Name of the template in .jira-templates.json that an email import on the import board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the import board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
+            "description": "Name of the template in .jira-templates.json that an email import on the Jira Import Board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the Jira Import Board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
           },
           "ticketSidekick.email.checkModel": {
             "type": "string",
             "scope": "application",
             "default": "",
-            "description": "The id of the language model the email boilerplate check uses, after you agree to it for an email on the import board. When empty, the model in ticketSidekick.bitbucket.reviewModel is used; when both are empty, the import board asks you to pick one and saves it here."
+            "description": "The id of the language model the email boilerplate check uses, after you agree to it for an email on the Jira Import Board. When empty, the model in ticketSidekick.bitbucket.reviewModel is used; when both are empty, the Jira Import Board asks you to pick one and saves it here."
           },
           "ticketSidekick.email.maxBatchSizeMB": {
             "type": "number",
@@ -1226,7 +1226,7 @@
           "ticketSidekick.veracode.template": {
             "type": "string",
             "default": "",
-            "description": "Name of the template in .jira-templates.json that a Veracode import on the import board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the import board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
+            "description": "Name of the template in .jira-templates.json that a Veracode import on the Jira Import Board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the Jira Import Board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
           }
         }
       },
@@ -1266,7 +1266,7 @@
           "ticketSidekick.waltz.template": {
             "type": "string",
             "default": "",
-            "description": "Name of the template in .jira-templates.json that an OSS report (Waltz) import on the import board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the import board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
+            "description": "Name of the template in .jira-templates.json that an OSS report (Waltz) import on the Jira Import Board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the Jira Import Board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
           }
         }
       }

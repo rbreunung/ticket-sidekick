@@ -130,7 +130,7 @@ export class BoardPanels implements BoardHost {
       // Asked for loaded (the open-board tool): the import board when nothing is missing, the start screen otherwise.
       if ((input as { openWhenReady?: unknown } | null | undefined)?.openWhenReady === true) {
         const loaded = await this.importStart.openIfReady();
-        if (loaded.opened) return { ok: true, title: loaded.title ?? 'Import board' };
+        if (loaded.opened) return { ok: true, title: loaded.title ?? 'Jira Import Board' };
       }
       this.reveal({ kind, id: '', title: IMPORT_START_TITLE });
       return { ok: true, title: IMPORT_START_TITLE };

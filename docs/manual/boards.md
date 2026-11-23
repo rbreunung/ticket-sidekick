@@ -8,7 +8,7 @@ A **board** is a page Ticket Sidekick opens in its own editor tab: a large table
 | Ticket list | "show my open bugs", "move my done tickets to Closed" | `/ts-jira search <JQL or filter>` | `Ticket Sidekick: Open ticket list` |
 | Cleanup (a ticket list loaded from a cleanup rule) | "run the cleanup Close released bugs" | `/ts-jira cleanup <rule> [in VERSION]` | `Ticket Sidekick: Run a cleanup rule` |
 | Stored sessions | "show the stored sessions" | `/ts-jira sessions` | `Ticket Sidekick: Open stored sessions` |
-| Import (Veracode or OSS report) | "import this Veracode report", with the file's path or the file dragged into the chat | `/ts-jira import <veracode or waltz> [PATH]` | `Ticket Sidekick: Open import board` |
+| Import (Veracode or OSS report) | "create tickets from this Veracode report", with the file's path or the file dragged into the chat | `/ts-jira create from <veracode or waltz> [PATH]` (or `/ts-jira import <kind>`) | `Ticket Sidekick: Open Jira Import Board` |
 | Pull request review | "review this pull request", with the link | `/ts-bitbucket review <link> [question]` | `Ticket Sidekick: Review a pull request` |
 
 ## What you need
@@ -17,7 +17,7 @@ A **board** is a page Ticket Sidekick opens in its own editor tab: a large table
 - **For the Command Palette: nothing else.** The board commands work without Copilot.
 - **For asking Copilot: Agent mode.** Copilot opens a board through the `jira_open_board` tool; see [Jira Tools for Copilot Chats](copilot-tools.md).
 
-`Ticket Sidekick: Open import board` opens the import's start screen; see [Import board](#import-board). `Ticket Sidekick: Review a pull request` asks for the pull request link; see [Pull request review](#pull-request-review).
+`Ticket Sidekick: Open Jira Import Board` opens the import's start screen; see [Jira Import Board](#jira-import-board). `Ticket Sidekick: Review a pull request` asks for the pull request link; see [Pull request review](#pull-request-review).
 
 `Ticket Sidekick: Open ticket list` asks for a JQL query; type `filter:` and a saved filter's id or name to open a filter instead. `Ticket Sidekick: Run a cleanup rule` lets you pick a rule from `.jira-templates.json` and, optionally, a fix version.
 
@@ -27,7 +27,7 @@ The report lists a project's unresolved Veracode and Waltz tickets by Fix Versio
 
 - **Project.** Without a project the report uses `ticketSidekick.jira.defaultProject`. A text that is not a project key is refused, never replaced by the default project.
 - **Filters and sort.** Filter by release, flag and tool, and click a column title to sort; a second click turns the order around, a third takes it off. **Clear filters** resets both.
-- **Save.** **Save full report as CSV** and **Save full report as Excel** always write the whole report of the reading shown, through VS Code's save dialog, in the same format as the import board's overview export. The CSV separator is `ticketSidekick.jira.overviewCsvDelimiter`.
+- **Save.** **Save full report as CSV** and **Save full report as Excel** always write the whole report of the reading shown, through VS Code's save dialog, in the same format as the Jira Import Board's overview export. The CSV separator is `ticketSidekick.jira.overviewCsvDelimiter`.
 - **Refresh** reads Jira again. Filters and sort stay.
 
 ## Ticket list
@@ -66,18 +66,18 @@ A cleanup is the ticket list loaded from a rule in the `cleanupRules` of `.jira-
 - **Applying.** A cleanup applies the selected tickets **of the page in view**. The moved tickets leave the list, so the next ones move up onto the same page, still selected: check them and apply again for the rest. Subtasks move before their ticket. When a subtask is not moved, its ticket stays as it is and its result names the subtask.
 - **The rule is read again** on every load and Refresh, so an edit to `.jira-templates.json` shows on the next Refresh. A cleanup asked for again with the same rule and fix version continues its board.
 
-## Import board
+## Jira Import Board
 
-The import board turns a Veracode Detailed Report (`.xml`), a Waltz OSS Report (`.xlsx`) or one or more `.eml` emails into Jira tickets. It replaces the `@jira` imports and their Command Palette commands. The import rules are the same as before: which findings fold into one ticket, the labels, the Due Dates, rewrite, the ticket merge, the accepted list, and for emails the boilerplate cleanup with its consent. They are described in [Report Imports](report-imports.md).
+The Jira Import Board turns a Veracode Detailed Report (`.xml`), a Waltz OSS Report (`.xlsx`) or one or more `.eml` emails into Jira tickets. It replaces the `@jira` imports and their Command Palette commands. The import rules are the same as before: which findings fold into one ticket, the labels, the Due Dates, rewrite, the ticket merge, the accepted list, and for emails the boilerplate cleanup with its consent. They are described in [Report Imports](report-imports.md).
 
 ### Opening an import
 
-- **Command Palette.** `Ticket Sidekick: Open import board` opens the start screen. Pick **Veracode**, **Waltz OSS** or **Email**, then **Choose file…** (for emails, **Choose emails…**, which takes several `.eml` files). The start screen reads the report at once and says how many items pass your filter settings. A file that is too large, cannot be read or has no matching item is named with the reason, and the import cannot be opened.
+- **Command Palette.** `Ticket Sidekick: Open Jira Import Board` opens the start screen. Pick **Veracode**, **Waltz OSS** or **Email**, then **Choose file…** (for emails, **Choose emails…**, which takes several `.eml` files). The start screen reads the report at once and says how many items pass your filter settings. A file that is too large, cannot be read or has no matching item is named with the reason, and the import cannot be opened.
 - **Template.** The template comes from `ticketSidekick.veracode.template`, `ticketSidekick.waltz.template` or `ticketSidekick.email.template`. When the setting is empty, or names a template that is no longer in `.jira-templates.json`, the start screen asks for a template and saves your choice to the setting. The next import of that kind does not ask again. The issue type comes from the template. When the template names none, pick one of the project's issue types; when Jira cannot list them, type it.
 - **Project.** The project is `ticketSidekick.jira.defaultProject`. When it is empty, is not a project key, or Jira does not know it, the start screen asks for it: type the project key, or start typing and choose from the projects Jira shows you. A typed key is checked with Jira, so it works even when the list is long or cut short. The project is saved to the setting, so the next import does not ask, and the tools and other boards use it too. When Jira's project list cannot be read, the start screen says so and you type the key; **Open Setting** is always there too.
 - **Jira not set up.** The start screen shows how to set up Jira instead of **Open**.
 - **Email: the model of the check.** For an email import the start screen shows the model the boilerplate check uses, lets you pick one (saved to `ticketSidekick.email.checkModel`) and confirms with one short call, without email text, that the model answers.
-- **From Copilot.** In Agent mode, ask for the import with the report's path, or drag the file into the chat ("import this Veracode report"), or type `/ts-jira import veracode reports/scan.xml` (for emails, `/ts-jira import email` with the `.eml` paths or the emails attached; attaching them counts as agreeing to the model check). The board opens with the report loaded when the file reads and the template and project settings are complete. Otherwise the start screen opens with the kind and the file filled in. Copilot learns only whether the board opened.
+- **From Copilot.** In Agent mode, ask for the import with the report's path, or drag the file into the chat ("import this Veracode report"), or type `/ts-jira create from veracode reports/scan.xml` (for emails, `/ts-jira create from email` with the `.eml` paths or the emails attached; attaching them counts as agreeing to the model check). The board opens with the report loaded when the file reads and the template and project settings are complete. Otherwise the start screen opens with the kind and the file filled in. Copilot learns only whether the board opened.
 - **The same file again.** The same report file in the same project opens the stored import, with the template it was started with. The start screen then offers **Open stored import** and **Start over**. Start over discards the stored import and starts again with the template now in the setting. When a new scan was saved over that file, the stored import reads it and asks again for a decision on every row, also on tickets it wrote for the earlier scan.
 
 ### The tabs

@@ -28,7 +28,7 @@ import {
 // dialog, the setting writes and the board opening are supplied by the host.
 
 export const IMPORT_START_BOARD = 'import-start';
-export const IMPORT_START_TITLE = 'Open import';
+export const IMPORT_START_TITLE = 'Jira Import Board';
 
 const DEFAULT_PROJECT_SETTING = 'ticketSidekick.jira.defaultProject';
 /** The settings the page may ask to open, by a name of its own; the page never names a setting key. */
