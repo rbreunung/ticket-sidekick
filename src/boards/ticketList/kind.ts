@@ -171,6 +171,8 @@ export type ViewRow = TicketRow & { url: string | null; selected: boolean; resul
 export interface TicketListView {
   title: string;
   jql: string;
+  /** Jira's issue search for the board's query, for "View in Jira"; null without a base URL or a query. */
+  jiraUrl: string | null;
   truncated: boolean;
   /** The rows of the page in view. */
   rows: ViewRow[];
@@ -700,8 +702,9 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     const view = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
       .map(row => toView(row, selectable(row) && isSelected(working.selection, row.key)));
     const source = session.recipe.source;
+    const jql = data.jql ?? (source.type === 'rule' ? '' : source.jql);
     return {
-      title: sourceTitle(source), jql: data.jql ?? (source.type === 'rule' ? '' : source.jql), truncated: data.truncated, rows: view,
+      title: sourceTitle(source), jql, jiraUrl: jiraSearchUrl(baseUrl, jql), truncated: data.truncated, rows: view,
       columns: data.columns?.[working.columns] ?? [],
       cleanup: data.cleanup ? { ...data.cleanup, resolution: working.resolution } : null,
       pageOnly: isCleanup(session),
@@ -711,6 +714,11 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     };
   },
 };
+
+/** Jira's issue search page for a query: the whole result, not only the rows the board read. */
+export function jiraSearchUrl(baseUrl: string | undefined, jql: string): string | null {
+  return baseUrl && jql.trim() ? `${baseUrl}/issues/?jql=${encodeURIComponent(jql)}` : null;
+}
 
 function resultView(result: RowResult | undefined): ViewRow['result'] {
   if (!result) return null;

@@ -142,7 +142,9 @@ function render(view, board, busy, state) {
     h('tbody', {}, view.rows.map(row => [ticketRow(view, board, row, locked, false), (row.subtasks ?? []).map(sub => ticketRow(view, board, sub, locked, true))])));
 
   return h('div', {},
-    h('p', { class: 'muted' }, view.jql),
+    h('div', { class: 'bar' },
+      h('span', { class: 'muted' }, view.jql),
+      view.jiraUrl ? h('a', { id: 'view-in-jira', class: 'button-link', href: view.jiraUrl, target: '_blank', rel: 'noreferrer' }, 'View in Jira') : null),
     outOfDateBanner(view),
     view.truncated ? h('p', { class: 'banner' }, `More tickets match than are listed; showing the first ${view.totalRows}. Narrow the query to see the rest.`) : null,
     view.cleanup ? cleanupPanel(view, board, locked) : changeForm(view, board, locked),

@@ -86,6 +86,18 @@ describe('asking for a ticket list', () => {
     expect(view).toMatchObject({ selectedCount: 0, change: null, proposed: false, jql: 'project = PROJ' });
   });
 
+  it('offers to view the whole query in Jira', async () => {
+    const view = ticketListKind.view(await open(fake(), { jql: 'project = PROJ AND status = "In Progress"' }));
+    expect(view.jiraUrl).toBe('https://jira.example.com/issues/?jql=project%20%3D%20PROJ%20AND%20status%20%3D%20%22In%20Progress%22');
+    const filtered = ticketListKind.view(await open(fake(), { filter: 'mine' }));
+    expect(filtered.jiraUrl).toBe(`https://jira.example.com/issues/?jql=${encodeURIComponent('assignee = currentUser()')}`);
+  });
+
+  it('offers no Jira link when the Jira base URL is unknown', async () => {
+    const view = ticketListKind.view(await open({ ...fake(), baseUrl: async () => undefined }));
+    expect(view.jiraUrl).toBeNull();
+  });
+
   it('opens for a saved filter by name and is titled after it', async () => {
     const session = await open(fake(), { filter: 'mine' });
     expect(ticketListKind.title(session.recipe)).toBe('Tickets: filter "My open tickets"');

@@ -18,6 +18,17 @@ h1 { font-size: 1.5em; font-weight: 600; margin: 0 0 4px; }
 h2 { font-size: 1.15em; font-weight: 600; margin: 24px 0 8px; }
 p { margin: 4px 0; }
 a { color: var(--vscode-textLink-foreground); }
+/* A link that opens a page outside VS Code, drawn like a secondary button. */
+a.button-link {
+  display: inline-block;
+  padding: 2px 10px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 2px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  text-decoration: none;
+}
+a.button-link:hover { background: var(--vscode-button-secondaryHoverBackground); }
 :focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 .muted { color: var(--vscode-descriptionForeground); }
 .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }

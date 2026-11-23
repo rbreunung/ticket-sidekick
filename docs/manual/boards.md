@@ -37,6 +37,7 @@ The ticket list shows the tickets of a JQL query or of a saved filter (by id or 
 Copilot opens this board whenever you ask to see a list of tickets or to change more than one ticket. It does not list the tickets in chat, and it does not get them: the answer says only that the board opened. Ask a question about tickets ("how many open bugs do I have?") and Copilot answers in chat from its own search instead.
 
 - **Narrowing.** Ask for a fix version, a sprint, an assignee ("me" for yourself) or your team ("my team's open bugs", using `ticketSidekick.jira.myTeamJql`), and Copilot opens the board on the narrowed query; the query is shown under the title. A name that matches more than one version or sprint is named back in chat, and nothing opens.
+- **View in Jira.** The **View in Jira** button next to the query opens Jira's issue search on the same query in your browser, with every matching ticket, also those beyond the board's 300. A cleanup opens the rule's query, fix version included.
 - **Extra columns.** A list shows one more column for each field id in `ticketSidekick.jira.searchFields`. A list opened with a proposed move, and a cleanup, shows `ticketSidekick.jira.cleanupFields` instead.
 
 **Changing several tickets**
