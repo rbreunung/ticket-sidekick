@@ -463,3 +463,67 @@ describe('a stored ticket list of an older format', () => {
     expect(await ticketListKind.revalidate!({ query: 'project = PROJ' }, deps)).toMatchObject({ ok: false });
   });
 });
+
+describe('a saved filter whose query changes in Jira', () => {
+  /** A Jira with one saved filter, id 42, whose query and name the test changes; a search lists the tickets its query names. */
+  function filterJira() {
+    const filter = { id: '42', name: 'My open tickets', jql: 'key in (PROJ-1, PROJ-2)' };
+    const all = [row(1), row(2), row(3), row(4)];
+    const searched: string[] = [];
+    const deps: Fake = {
+      ...fake(all),
+      resolveFilter: async name => (name === '42' || name === 'mine' ? { ...filter } : `no saved filter matches "${name}".`),
+      search: async jql => {
+        searched.push(jql);
+        const keys = /key in \(([^)]*)\)/.exec(jql)?.[1].split(',').map(k => k.trim()) ?? [];
+        return { rows: all.filter(r => keys.includes(r.key)), truncated: false };
+      },
+    };
+    return { deps, filter, searched };
+  }
+
+  it('lists the filter\'s current tickets after Refresh', async () => {
+    const { deps, filter } = filterJira();
+    const s = await open(deps, { filter: 'mine' });
+    filter.jql = 'key in (PROJ-3, PROJ-4)';
+    filter.name = 'My tickets';
+
+    const background = ticketListKind.reconcile(s, await ticketListKind.read(s.recipe, deps), 'background');
+    expect(background.working.outOfDate).toMatchObject({ gone: ['PROJ-1', 'PROJ-2'], added: 2, queryChanged: true });
+
+    const refreshed = ticketListKind.reconcile(s, await ticketListKind.read(s.recipe, deps), 'refresh');
+    const view = ticketListKind.view({ ...s, derived: refreshed.derived, working: refreshed.working });
+    expect(view.rows.map(r => r.key)).toEqual(['PROJ-3', 'PROJ-4']);
+    expect(view).toMatchObject({ jql: 'key in (PROJ-3, PROJ-4)', title: 'Tickets: filter "My tickets"', outOfDate: null });
+    expect(view.jiraUrl).toContain(encodeURIComponent('key in (PROJ-3, PROJ-4)'));
+  });
+
+  it('says the list is out of date when the filter is asked for again with a new query', async () => {
+    const { deps, filter } = filterJira();
+    const s = await open(deps, { filter: 'mine' });
+    filter.jql = 'key in (PROJ-1, PROJ-2, PROJ-3)';
+    const again = await ticketListKind.validate({ filter: 'mine' }, deps);
+    const working = ticketListKind.reopen!(s, (again as { recipe: TicketListRecipe }).recipe);
+    expect(working.outOfDate).toEqual({ changed: [], gone: [], added: 0, queryChanged: true });
+    expect(ticketListKind.reduce({ ...s, working }, { type: 'select-all' })).toMatchObject({ ok: false });
+
+    const refreshed = ticketListKind.reconcile({ ...s, working }, await ticketListKind.read(s.recipe, deps), 'refresh');
+    expect(refreshed.derived.data.rows.map(r => r.key)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+    expect(refreshed.working.outOfDate).toBeNull();
+  });
+
+  it('keeps the board as it is when the filter is asked for again unchanged', async () => {
+    const { deps } = filterJira();
+    const s = await open(deps, { filter: 'mine' });
+    const again = await ticketListKind.validate({ filter: 'mine' }, deps);
+    expect(ticketListKind.reopen!(s, (again as { recipe: TicketListRecipe }).recipe)).toBe(s.working);
+  });
+
+  it('fails the reading, instead of using the old query, when the filter cannot be read', async () => {
+    const { deps, searched } = filterJira();
+    const s = await open(deps, { filter: 'mine' });
+    const gone: Fake = { ...deps, resolveFilter: async () => 'the saved filter could not be read: Jira answered 404' };
+    await expect(ticketListKind.read(s.recipe, gone)).rejects.toThrow('The saved filter "My open tickets" cannot be read: the saved filter could not be read: Jira answered 404');
+    expect(searched).toEqual(['key in (PROJ-1, PROJ-2)']);
+  });
+});

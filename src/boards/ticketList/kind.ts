@@ -76,8 +76,10 @@ export interface TicketListData {
   /** More tickets match than were read. */
   truncated: boolean;
   baseUrl?: string;
-  /** The query that was run, when the source does not carry it (a cleanup rule). */
+  /** The query that was run: a cleanup rule's, or a saved filter's as Jira held it at this reading. */
   jql?: string;
+  /** A saved filter's name as Jira held it at this reading. */
+  filterName?: string;
   cleanup?: CleanupInfo;
 }
 
@@ -112,6 +114,8 @@ export interface OutOfDate {
   changed: string[];
   gone: string[];
   added: number;
+  /** The saved filter's query in Jira is no longer the one the list was read with. */
+  queryChanged?: boolean;
 }
 
 export interface TicketListWorking {
@@ -485,9 +489,14 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
   },
 
   // Asked for again with a new proposed change: the change replaces the old one and all rows are selected.
-  reopen: (session, recipe) => (recipe.proposed && recipe.source.type !== 'rule'
-    ? { ...session.working, selection: { mode: 'all', except: [] }, change: recipe.proposed, proposed: true, results: {}, columns: columnSetFor(recipe.proposed) }
-    : session.working),
+  // A saved filter asked for again whose query changed in Jira marks the list out of date, so Refresh reads it with the new query.
+  reopen: (session, recipe) => {
+    const working = recipe.proposed && recipe.source.type !== 'rule'
+      ? { ...session.working, selection: { mode: 'all', except: [] } as Selection, change: recipe.proposed, proposed: true, results: {}, columns: columnSetFor(recipe.proposed) }
+      : session.working;
+    if (recipe.source.type !== 'filter' || recipe.source.jql === listedJql(session)) return working;
+    return { ...working, outOfDate: { ...(working.outOfDate ?? { changed: [], gone: [], added: 0 }), queryChanged: true } };
+  },
 
   read: async (recipe, deps) => {
     const columns = await deps.extraColumns();
@@ -497,6 +506,13 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
       const cleanup = await readCleanup(recipe.source, deps, fieldIds);
       return { readAt: deps.now(), fingerprints: {}, data: { ...cleanup, columns, baseUrl } };
     }
+    if (recipe.source.type === 'filter') {
+      // A saved filter is read from Jira each time: its query may have changed since the board opened.
+      const filter = await deps.resolveFilter(recipe.source.id);
+      if (typeof filter === 'string') throw new Error(`The saved filter "${recipe.source.name}" cannot be read: ${filter}`);
+      const { rows, truncated } = await deps.search(filter.jql, MAX_LIST_ROWS, fieldIds);
+      return { readAt: deps.now(), fingerprints: {}, data: { rows, truncated, columns, baseUrl, jql: filter.jql, filterName: filter.name } };
+    }
     const { rows, truncated } = await deps.search(recipe.source.jql, MAX_LIST_ROWS, fieldIds);
     return { readAt: deps.now(), fingerprints: {}, data: { rows, truncated, columns, baseUrl } };
   },
@@ -505,7 +521,9 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
   // Refresh the fresh rows replace them, and the selection and the recorded results keep every
   // ticket still in the list.
   reconcile: (session, fresh, mode: CheckMode) => {
-    const found = differences(session.derived.data.rows, fresh.data.rows, session.working.results);
+    const differs = differences(session.derived.data.rows, fresh.data.rows, session.working.results);
+    const queryChanged = session.recipe.source.type === 'filter' && fresh.data.jql !== undefined && fresh.data.jql !== listedJql(session);
+    const found = differs && queryChanged ? { ...differs, queryChanged: true } : differs;
     if (mode === 'background') {
       return found
         ? { derived: session.derived, working: { ...session.working, outOfDate: found }, conflicts: [] }
@@ -702,9 +720,9 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     const view = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
       .map(row => toView(row, selectable(row) && isSelected(working.selection, row.key)));
     const source = session.recipe.source;
-    const jql = data.jql ?? (source.type === 'rule' ? '' : source.jql);
+    const jql = listedJql(session);
     return {
-      title: sourceTitle(source), jql, jiraUrl: jiraSearchUrl(baseUrl, jql), truncated: data.truncated, rows: view,
+      title: sourceTitle(source.type === 'filter' && data.filterName ? { ...source, name: data.filterName } : source), jql, jiraUrl: jiraSearchUrl(baseUrl, jql), truncated: data.truncated, rows: view,
       columns: data.columns?.[working.columns] ?? [],
       cleanup: data.cleanup ? { ...data.cleanup, resolution: working.resolution } : null,
       pageOnly: isCleanup(session),
@@ -714,6 +732,12 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     };
   },
 };
+
+/** The query the rows on show were read with. */
+function listedJql(session: ListSession): string {
+  const source = session.recipe.source;
+  return session.derived.data.jql ?? (source.type === 'rule' ? '' : source.jql);
+}
 
 /** Jira's issue search page for a query: the whole result, not only the rows the board read. */
 export function jiraSearchUrl(baseUrl: string | undefined, jql: string): string | null {

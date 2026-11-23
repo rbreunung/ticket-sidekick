@@ -93,8 +93,9 @@ function sortHeader(view, board, column, text, locked) {
 
 function outOfDateBanner(view) {
   if (!view.outOfDate) return null;
-  const { changed, gone, added } = view.outOfDate;
+  const { changed, gone, added, queryChanged } = view.outOfDate;
   const parts = [
+    queryChanged ? 'The saved filter\'s query changed in Jira' : null,
     changed.length ? `${changed.length} changed in Jira (${changed.slice(0, 5).join(', ')}${changed.length > 5 ? ', …' : ''})` : null,
     gone.length ? `${gone.length} no longer match the query` : null,
     added ? `${added} new ticket(s) match` : null,
