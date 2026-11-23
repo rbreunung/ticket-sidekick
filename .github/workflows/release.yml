@@ -171,6 +171,48 @@ jobs:
           } > CHANGELOG.md.new
           mv CHANGELOG.md.new CHANGELOG.md
 
+      # Record the version in git before anything is built or published: the bump commit, its
+      # tag and the bump on the branch. The .vsix is then built from exactly that tagged commit,
+      # and the Marketplace publish (the irreversible step) comes last. If anything here fails,
+      # nothing is published yet.
+      - name: Commit, tag and push the version
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          BRANCH="${{ github.ref_name }}"
+          # Guard: a version is recorded exactly once. If its tag already exists, stop.
+          if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1 \
+            || git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Tag ${VERSION} already exists. Choose a different bump or version."
+            exit 1
+          fi
+          git commit -am "${VERSION}"
+          git tag "${VERSION}"
+          git push origin "refs/tags/${VERSION}"
+          # Bring the bump onto the branch. It may have moved since checkout (2026-11-23: a PR
+          # merged 9 seconds before the push). Merge, not rebase, so the tag stays on the source
+          # the .vsix is built from; the branch is the first parent, so the green-CI check above
+          # (first-parent, bot commits skipped) still finds the newest PR.
+          PUSHED=""
+          for attempt in 1 2 3 4 5; do
+            git fetch -q origin "${BRANCH}"
+            git checkout -q --detach FETCH_HEAD
+            if git merge --no-ff --no-edit -m "Merge ${VERSION} into ${BRANCH}" "${VERSION}" \
+              && git push origin "HEAD:${BRANCH}"; then
+              PUSHED="yes"
+              break
+            fi
+            git merge --abort 2>/dev/null || true
+            echo "Push of ${VERSION} to ${BRANCH} failed (attempt ${attempt} of 5)."
+            sleep $((attempt * 5))
+          done
+          if [ -z "${PUSHED}" ]; then
+            echo "::error::Tag ${VERSION} is pushed, but the bump did not reach ${BRANCH}; nothing was published. Merge tag ${VERSION} into ${BRANCH} by hand, or delete the tag, then release again."
+            exit 1
+          fi
+          # Build from the tagged commit, not from the merge (which may hold newer PRs).
+          git checkout -q "refs/tags/${VERSION}"
+
       - name: Package VSIX
         id: pkg
         run: |
@@ -205,38 +247,12 @@ jobs:
             GH_PRERELEASE="--prerelease"
             TITLE="${VERSION} (preview)"
           fi
-          # Guard: a version is published exactly once. If its tag/release already exists, stop.
-          if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1 || gh release view "${VERSION}" >/dev/null 2>&1; then
-            echo "::error::Version ${VERSION} already exists. Choose a different bump or version."
+          if ! npx vsce publish ${VSCE_PRERELEASE} --packagePath "${VSIX}" --pat "${VSCE_PAT}"; then
+            echo "::error::Marketplace publish of ${VERSION} failed. Tag ${VERSION} and the bump on the branch stay; release the next version once the cause is fixed."
             exit 1
           fi
-          # Marketplace first (the irreversible step). Right after it, record the version where
-          # the guards look: the bump commit, its tag and the GitHub release. The tag is pushed on
-          # its own, so a branch that moved during the run cannot stop it.
-          npx vsce publish ${VSCE_PRERELEASE} --packagePath "${VSIX}" --pat "${VSCE_PAT}"
-          git commit -am "${VERSION}"
-          git tag "${VERSION}"
-          git push origin "refs/tags/${VERSION}"
           gh release create "${VERSION}" ${GH_PRERELEASE} \
             --verify-tag \
             --title "${TITLE}" \
             --notes-file release-notes.md \
             "${VSIX}"
-          # Bring the bump onto the branch. It may have moved while this run was building
-          # (2026-11-23: a PR merged 9 seconds before the push). Merge, not rebase, so the tag
-          # stays on the source the .vsix was built from; the branch is the first parent, so the
-          # green-CI check above (first-parent, bot commits skipped) still finds the newest PR.
-          BRANCH="${{ github.ref_name }}"
-          for attempt in 1 2 3 4 5; do
-            git fetch -q origin "${BRANCH}"
-            git checkout -q --detach FETCH_HEAD
-            if git merge --no-ff --no-edit -m "Merge ${VERSION} into ${BRANCH}" "${VERSION}" \
-              && git push origin "HEAD:${BRANCH}"; then
-              exit 0
-            fi
-            git merge --abort 2>/dev/null || true
-            echo "Push of ${VERSION} to ${BRANCH} failed (attempt ${attempt} of 5)."
-            sleep $((attempt * 5))
-          done
-          echo "::error::${VERSION} is published, tagged and released, but the bump did not reach ${BRANCH}. Merge tag ${VERSION} into ${BRANCH} by hand."
-          exit 1
