@@ -31,6 +31,11 @@ permissions:
   contents: write
   checks: read
 
+# Two release runs at once would race for the same version and for the push to the branch.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -95,6 +100,41 @@ jobs:
             npm version "${{ inputs.bump }}" --no-git-tag-version
           fi
           NEW_VERSION="$(node -p "require('./package.json').version")"
+          # A version is taken when the Marketplace has it or its tag exists. A run that
+          # published but could not record the bump (2026-11-23, 0.9.3) leaves the Marketplace
+          # ahead of git, so ask the Marketplace itself. A failed lookup fails the step.
+          EXT="$(node -p "const p = require('./package.json'); p.publisher + '.' + p.name")"
+          SHOWN="$(npx vsce show "$EXT" --json)"
+          PUBLISHED="$(printf '%s' "$SHOWN" | node -e '
+            let s = "";
+            process.stdin.on("data", d => s += d).on("end", () => {
+              for (const v of JSON.parse(s).versions || []) console.log(v.version);
+            });
+          ')"
+          git fetch -q --tags origin
+          taken() {
+            printf '%s\n' "$PUBLISHED" | grep -qxF "$1" || git rev-parse -q --verify "refs/tags/$1" >/dev/null
+          }
+          if [ -n "${{ inputs.version }}" ]; then
+            # An explicit version is what was asked for: never replace it with another one.
+            if taken "$NEW_VERSION"; then
+              echo "::error::Version ${NEW_VERSION} is already published or tagged. Choose a different version."
+              exit 1
+            fi
+          else
+            # A bump that lands on a taken version skips forward to the next free patch, so a
+            # Marketplace ahead of git heals itself. A skipped number is only a gap in the line.
+            for skip in $(seq 1 20); do
+              taken "$NEW_VERSION" || break
+              echo "::warning::Version ${NEW_VERSION} is already published or tagged; using the next patch version."
+              npm version patch --no-git-tag-version >/dev/null
+              NEW_VERSION="$(node -p "require('./package.json').version")"
+            done
+            if taken "$NEW_VERSION"; then
+              echo "::error::No free version found within 20 patch versions of the bump. Set an explicit version."
+              exit 1
+            fi
+          fi
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "Resolved version: $NEW_VERSION"
 
@@ -151,6 +191,48 @@ jobs:
           } > CHANGELOG.md.new
           mv CHANGELOG.md.new CHANGELOG.md
 
+      # Record the version in git before anything is built or published: the bump commit, its
+      # tag and the bump on the branch. The .vsix is then built from exactly that tagged commit,
+      # and the Marketplace publish (the irreversible step) comes last. If anything here fails,
+      # nothing is published yet.
+      - name: Commit, tag and push the version
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          BRANCH="${{ github.ref_name }}"
+          # Guard: a version is recorded exactly once. If its tag already exists, stop.
+          if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1 \
+            || git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Tag ${VERSION} already exists. Choose a different bump or version."
+            exit 1
+          fi
+          git commit -am "${VERSION}"
+          git tag "${VERSION}"
+          git push origin "refs/tags/${VERSION}"
+          # Bring the bump onto the branch. It may have moved since checkout (2026-11-23: a PR
+          # merged 9 seconds before the push). Merge, not rebase, so the tag stays on the source
+          # the .vsix is built from; the branch is the first parent, so the green-CI check above
+          # (first-parent, bot commits skipped) still finds the newest PR.
+          PUSHED=""
+          for attempt in 1 2 3 4 5; do
+            git fetch -q origin "${BRANCH}"
+            git checkout -q --detach FETCH_HEAD
+            if git merge --no-ff --no-edit -m "Merge ${VERSION} into ${BRANCH}" "${VERSION}" \
+              && git push origin "HEAD:${BRANCH}"; then
+              PUSHED="yes"
+              break
+            fi
+            git merge --abort 2>/dev/null || true
+            echo "Push of ${VERSION} to ${BRANCH} failed (attempt ${attempt} of 5)."
+            sleep $((attempt * 5))
+          done
+          if [ -z "${PUSHED}" ]; then
+            echo "::error::Tag ${VERSION} is pushed, but the bump did not reach ${BRANCH}; nothing was published. Merge tag ${VERSION} into ${BRANCH} by hand, or delete the tag, then release again."
+            exit 1
+          fi
+          # Build from the tagged commit, not from the merge (which may hold newer PRs).
+          git checkout -q "refs/tags/${VERSION}"
+
       - name: Package VSIX
         id: pkg
         run: |
@@ -185,18 +267,12 @@ jobs:
             GH_PRERELEASE="--prerelease"
             TITLE="${VERSION} (preview)"
           fi
-          # Guard: a version is published exactly once. If its tag/release already exists, stop.
-          if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1 || gh release view "${VERSION}" >/dev/null 2>&1; then
-            echo "::error::Version ${VERSION} already exists. Choose a different bump or version."
+          if ! npx vsce publish ${VSCE_PRERELEASE} --packagePath "${VSIX}" --pat "${VSCE_PAT}"; then
+            echo "::error::Marketplace publish of ${VERSION} failed. Tag ${VERSION} and the bump on the branch stay; release the next version once the cause is fixed."
             exit 1
           fi
-          # Marketplace first (the irreversible step). Only once it succeeds do we record the
-          # bump in the repo and create the GitHub release + bare tag at that commit.
-          npx vsce publish ${VSCE_PRERELEASE} --packagePath "${VSIX}" --pat "${VSCE_PAT}"
-          git commit -am "${VERSION}"
-          git push origin "HEAD:${{ github.ref_name }}"
           gh release create "${VERSION}" ${GH_PRERELEASE} \
-            --target "$(git rev-parse HEAD)" \
+            --verify-tag \
             --title "${TITLE}" \
             --notes-file release-notes.md \
             "${VSIX}"
