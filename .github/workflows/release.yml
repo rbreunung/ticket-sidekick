@@ -100,20 +100,40 @@ jobs:
             npm version "${{ inputs.bump }}" --no-git-tag-version
           fi
           NEW_VERSION="$(node -p "require('./package.json').version")"
-          # Guard: the Marketplace never takes a version twice. A run that published but could
-          # not record the bump (2026-11-23, 0.9.3) leaves no tag behind, so ask the Marketplace
-          # itself, before tests and packaging. A failed lookup fails the step.
+          # A version is taken when the Marketplace has it or its tag exists. A run that
+          # published but could not record the bump (2026-11-23, 0.9.3) leaves the Marketplace
+          # ahead of git, so ask the Marketplace itself. A failed lookup fails the step.
           EXT="$(node -p "const p = require('./package.json'); p.publisher + '.' + p.name")"
           SHOWN="$(npx vsce show "$EXT" --json)"
-          if printf '%s' "$SHOWN" | node -e '
+          PUBLISHED="$(printf '%s' "$SHOWN" | node -e '
             let s = "";
             process.stdin.on("data", d => s += d).on("end", () => {
-              const versions = (JSON.parse(s).versions || []).map(v => v.version);
-              process.exit(versions.includes(process.argv[1]) ? 0 : 1);
+              for (const v of JSON.parse(s).versions || []) console.log(v.version);
             });
-          ' "$NEW_VERSION"; then
-            echo "::error::Version ${NEW_VERSION} is already on the Marketplace. Choose a different bump or version."
-            exit 1
+          ')"
+          git fetch -q --tags origin
+          taken() {
+            printf '%s\n' "$PUBLISHED" | grep -qxF "$1" || git rev-parse -q --verify "refs/tags/$1" >/dev/null
+          }
+          if [ -n "${{ inputs.version }}" ]; then
+            # An explicit version is what was asked for: never replace it with another one.
+            if taken "$NEW_VERSION"; then
+              echo "::error::Version ${NEW_VERSION} is already published or tagged. Choose a different version."
+              exit 1
+            fi
+          else
+            # A bump that lands on a taken version skips forward to the next free patch, so a
+            # Marketplace ahead of git heals itself. A skipped number is only a gap in the line.
+            for skip in $(seq 1 20); do
+              taken "$NEW_VERSION" || break
+              echo "::warning::Version ${NEW_VERSION} is already published or tagged; using the next patch version."
+              npm version patch --no-git-tag-version >/dev/null
+              NEW_VERSION="$(node -p "require('./package.json').version")"
+            done
+            if taken "$NEW_VERSION"; then
+              echo "::error::No free version found within 20 patch versions of the bump. Set an explicit version."
+              exit 1
+            fi
           fi
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "Resolved version: $NEW_VERSION"
