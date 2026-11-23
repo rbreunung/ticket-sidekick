@@ -18,7 +18,7 @@ The code lives in:
 
 ## Import board (Veracode + Waltz)
 
-User manual: [`docs/manual/boards.md`](manual/boards.md#import-board). The board keeps every Veracode and Waltz rule this page describes. The [import board parity ledger](architecture/migration-status.md#import-board-parity-ledger) lists each chat command and descriptor capability with its board equivalent, and `src/test/importBoardParity.test.ts` maps each "Carry over" row to its board action or rule and its scenario test.
+User manual: [`docs/manual/boards.md`](manual/boards.md#jira-import-board). The board keeps every Veracode and Waltz rule this page describes. The [import board parity ledger](architecture/migration-status.md#import-board-parity-ledger) lists each chat command and descriptor capability with its board equivalent, and `src/test/importBoardParity.test.ts` maps each "Carry over" row to its board action or rule and its scenario test.
 
 **Modules** (all `vscode`-free; `src/boards/registerBoards.ts` and `boardPanels.ts` wire them to VS Code):
 

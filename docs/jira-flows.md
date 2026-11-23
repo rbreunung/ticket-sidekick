@@ -15,7 +15,7 @@ The removed participant's code (`src/participant/JiraParticipant.ts`, `src/parti
 | bulk transition, bulk field update | the ticket list board |
 | cleanup by `cleanupRules` | the ticket list board loaded from a rule (`src/boards/ticketList/cleanupSource.ts`) |
 | `/security-report` | the security report board |
-| Veracode and Waltz report imports, with their two Command Palette commands | the import board (`Ticket Sidekick: Open import board`, `jira_open_board` with board `import`); see [`docs/report-import.md`](report-import.md#import-board-veracode--waltz) |
+| Veracode and Waltz report imports, with their two Command Palette commands | the import board (`Ticket Sidekick: Open Jira Import Board`, `jira_open_board` with board `import`); see [`docs/report-import.md`](report-import.md#import-board-veracode--waltz) |
 | description and comment preview | dropped |
 
 The rules the cleanup board keeps from `@jira run cleanup` are below.

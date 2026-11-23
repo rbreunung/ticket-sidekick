@@ -47,7 +47,7 @@ Preparation: a test project; a `.jira-templates.json` with two templates (one wi
 
 **Start screen**
 
-- [ ] `Ticket Sidekick: Open import board` opens the start screen. With `ticketSidekick.waltz.template` empty, picking Waltz OSS asks for a template; after the pick, the setting holds the name, and the next Waltz import does not ask.
+- [ ] `Ticket Sidekick: Open Jira Import Board` opens the start screen. With `ticketSidekick.waltz.template` empty, picking Waltz OSS asks for a template; after the pick, the setting holds the name, and the next Waltz import does not ask.
 - [ ] A template setting that names a template no longer in `.jira-templates.json` asks again, saying the template is not there.
 - [ ] A template without an issue type lets you pick one of the project's issue types.
 - [ ] `ticketSidekick.jira.defaultProject` empty: the start screen asks for the project; typing a few letters suggests Jira's projects, and a chosen or fully typed key is saved to the setting, so the next import does not ask. A key Jira does not know and a value that is not a key ask the same way.
@@ -139,7 +139,7 @@ Run on the preview build on the managed machine, against Jira Data Center, with 
 
 **Start screen and model**
 
-- [ ] `Ticket Sidekick: Open import board`, kind **Email**, **Choose emails…** with three files: the screen says how many emails it will import; a file that is not an email is named and left out.
+- [ ] `Ticket Sidekick: Open Jira Import Board`, kind **Email**, **Choose emails…** with three files: the screen says how many emails it will import; a file that is not an email is named and left out.
 - [ ] With `ticketSidekick.email.template` empty, the start screen asks for a template once; the next email import does not ask.
 - [ ] "Model for the email check" lists your models; picking one saves it to `ticketSidekick.email.checkModel` and says "The model answered."
 - [ ] With the Local harness hidden (`chat.editor.localAgent.enabled: false`), the model still answers.

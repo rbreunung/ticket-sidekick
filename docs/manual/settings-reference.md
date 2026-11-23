@@ -122,7 +122,7 @@ A board (the security report, a ticket list, an import, and later reviews) keeps
 
 What the filter settings do is described with each import in [Report Imports](report-imports.md).
 
-The three template settings name the template in `.jira-templates.json` that an import on the import board (`Ticket Sidekick: Open import board`) uses; the issue type comes from that template. When a template setting is empty, or names a template that is no longer in `.jira-templates.json`, the import board's start screen asks for one and saves your choice to the setting. See [Boards](boards.md).
+The three template settings name the template in `.jira-templates.json` that an import on the Jira Import Board (`Ticket Sidekick: Open Jira Import Board`) uses; the issue type comes from that template. When a template setting is empty, or names a template that is no longer in `.jira-templates.json`, the Jira Import Board's start screen asks for one and saves your choice to the setting. See [Boards](boards.md).
 
 **Veracode SLA days**
 

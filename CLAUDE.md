@@ -298,7 +298,7 @@ Waltz OSS Report, or one or more `.eml` emails, into Jira tickets; all
 three share the import engine in `src/imports/` and its
 `ReportImportDescriptor` (email as a dedup-less third kind). Documented in
 [`docs/report-import.md`](docs/report-import.md), user manual in
-[`docs/manual/boards.md`](docs/manual/boards.md#import-board).
+[`docs/manual/boards.md`](docs/manual/boards.md#jira-import-board).
 Emails first pass through the board's boilerplate cleanup stage (patterns, the model check as a previewed plan, strip/keep), then each becomes a ticket or a comment, with likely repeats marked by subject.
 
 ## Tools, skills and boards

@@ -150,7 +150,7 @@ function paint() {
   ] : [h('p', { class: 'muted' }, 'Reading the settings…')];
   root.replaceChildren(
     h('header', {},
-      h('h1', {}, 'Open import'),
+      h('h1', {}, 'Jira Import Board'),
       h('p', { class: 'muted' }, 'Choose the report. The template, issue type and project come from the settings; check them before you open the import.')),
     message ? h('p', { class: 'banner error', role: 'alert' }, message) : '',
     ...content);

@@ -1,6 +1,6 @@
 # Report Imports (Email, Veracode, Waltz)
 
-> **Where each import runs.** All three imports run on the [import board](boards.md#import-board). Open it with **Ticket Sidekick: Open import board**, `/ts-jira import <veracode, waltz or email> [PATH ...]`, or by asking Copilot with the files' paths. The `@jira` chat participant and its import commands are gone.
+> **Where each import runs.** All three imports run on the [Jira Import Board](boards.md#jira-import-board). Open it with **Ticket Sidekick: Open Jira Import Board**, `/ts-jira create from <veracode, waltz or email> [PATH ...]` (`/ts-jira import <kind>` is the same command), or by asking Copilot with the files' paths. The `@jira` chat participant and its import commands are gone.
 
 Turns `.eml` emails, a Veracode Detailed Report, or a Waltz OSS Report into Jira tickets. See the main [README](../../README.md) for setup and core commands first.
 
@@ -8,7 +8,7 @@ Turns `.eml` emails, a Veracode Detailed Report, or a Waltz OSS Report into Jira
 
 Download the email from OWA using **More actions → Download message** to save a `.eml` file, then:
 
-1. Open the import board and pick **Email** as the kind, or type `/ts-jira import email` in a Copilot chat. You can also attach the `.eml` files to the message, or name them: `/ts-jira import email mails/escalation.eml`
+1. Open the Jira Import Board and pick **Email** as the kind, or type `/ts-jira create from email` in a Copilot chat. You can also attach the `.eml` files to the message, or name them: `/ts-jira create from email mails/escalation.eml`
 2. Choose one or more `.eml` files (at most 50, and at most `ticketSidekick.email.maxBatchSizeMB` in total). A file that is not an email is named and left out
 3. Check the project and the template. The template comes from `ticketSidekick.email.template`; when it is empty the start screen asks for one once and saves it. One template and issue type apply to all emails of the import
 4. **Open**. If boilerplate was found, or an email can be checked by the model, the [cleanup step](#removing-confidentiality-headers-footers-and-signatures) comes first
@@ -70,12 +70,12 @@ A check that fails is marked *Check failed*, keeps what your patterns found, and
 
 ## Create Jira tickets from a Veracode report (.xml)
 
-Veracode reports are imported on the **import board**.
+Veracode reports are imported on the **Jira Import Board**.
 
 Export a Detailed Report XML from Veracode, then:
 
-1. Run **Command Palette → Ticket Sidekick: Open import board**, or ask Copilot in Agent mode with the file's path (or drag the file into the chat), or type `/ts-jira import veracode <path>`
-2. On the start screen, pick **Veracode** and the `.xml` file. The template comes from `ticketSidekick.veracode.template`; when that setting is empty, the start screen asks for one once and saves it (see [Boards → Import board](boards.md#import-board))
+1. Run **Command Palette → Ticket Sidekick: Open Jira Import Board**, or ask Copilot in Agent mode with the file's path (or drag the file into the chat), or type `/ts-jira create from veracode <path>`
+2. On the start screen, pick **Veracode** and the `.xml` file. The template comes from `ticketSidekick.veracode.template`; when that setting is empty, the start screen asks for one once and saves it (see [Boards → Jira Import Board](boards.md#jira-import-board))
 3. Review the results on the board's tabs (see [Reviewing an import](#reviewing-an-import) below): new flaws, flaws that already have a ticket, and stale tickets each have their own tab, with their own Preview and Apply
 4. Tickets are created one per group of related flaws (flaws in the same file with the same CWE, or on the same line, fold into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with severity, CWE (linked to the public CWE definition), file/line location, each flaw's own description, and the category's remediation recommendation
 
@@ -104,7 +104,7 @@ Each flaw's due date is the date Veracode first found it plus the number of days
 
 ### Reviewing an import
 
-The import board shows each group as a tab with its count. Its controls are described in [Boards → Import board](boards.md#import-board); this section says what each group means.
+The Jira Import Board shows each group as a tab with its count. Its controls are described in [Boards → Jira Import Board](boards.md#jira-import-board); this section says what each group means.
 
 - **New** — findings without a ticket yet. Include or leave out rows, fold rows together or add them to an existing ticket (see [Folding findings into one ticket](#folding-findings-into-one-ticket)), accept CVEs or components (OSS reports only — see [Accepting CVEs](#accepting-cves-you-have-decided-to-live-with)), and create the included rows.
 - **Already ticketed** — findings that already have a ticket. Each row shows its ticket, the ticket's status, what changed since the ticket was made (for example a new CVE, a higher rating or a new flaw), and a proposed action. The tab opens on the rows that changed or have no Due Date; the others are under **Unchanged** and **All**. Veracode and OSS reports offer the same three actions:
@@ -182,11 +182,11 @@ After a merge the tabs show the new reading from Jira, except a tab where you ha
 
 ## Create Jira tickets from an OSS report (.xlsx)
 
-OSS reports are imported on the **import board**.
+OSS reports are imported on the **Jira Import Board**.
 
 Export an "OSS Report" from Waltz (or a compatible SCA tool) as `.xlsx`, then:
 
-1. Run **Command Palette → Ticket Sidekick: Open import board**, or ask Copilot in Agent mode with the file's path (or drag the file into the chat), or type `/ts-jira import waltz <path>`
+1. Run **Command Palette → Ticket Sidekick: Open Jira Import Board**, or ask Copilot in Agent mode with the file's path (or drag the file into the chat), or type `/ts-jira create from waltz <path>`
 2. On the start screen, pick **Waltz OSS** and the `.xlsx` file. The template comes from `ticketSidekick.waltz.template`; when that setting is empty, the start screen asks for one once and saves it
 3. Review the results on the board's tabs (see [Reviewing an import](#reviewing-an-import) above), the same way as a Veracode import, plus an **Accepted** tab
 4. Tickets are created one per component (use **Merge selected** to fold related components such as a family of `netty-*` artifacts into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with the max vulnerability rating, the dates by which the component must be fixed, the single most critical CVE up front, affected artifact paths, and a table of known vulnerabilities
@@ -294,7 +294,7 @@ The **Accepted** tab shows component entries as "Whole component, version …" w
 The unresolved Veracode and Waltz tickets of a project can be listed by the release they are planned for, with each ticket's Due Date, so you can see what blocks a release and which tickets have no release yet. There are two ways to start it.
 
 - **The security report board** (`/ts-jira security-report PROJ`, "show the security report for PROJ", or `Ticket Sidekick: Open security report`) searches Jira for the project's unresolved Veracode (`veracode` label) and Waltz (`oss-dependency` label) tickets, with both tools in the same tables, and saves them as CSV or Excel; see [Boards](boards.md#security-report). The `@jira /security-report` command it replaces is gone.
-- **Save overview as CSV…** and **Save overview as Excel…** on the [import board](boards.md#search-and-export) do the same for that one report and compare it with Jira, as the board read it: the board reads nothing new when you save, and a stale ticket the board closed is left out. Each row also gets a **Report match**: *tracked* (an open ticket for an item of the report), *stale* (an open ticket whose item is no longer in the report) or *in report, no ticket* (a New row, or an item whose tickets are all resolved).
+- **Save overview as CSV…** and **Save overview as Excel…** on the [Jira Import Board](boards.md#search-and-export) do the same for that one report and compare it with Jira, as the board read it: the board reads nothing new when you save, and a stale ticket the board closed is left out. Each row also gets a **Report match**: *tracked* (an open ticket for an item of the report), *stale* (an open ticket whose item is no longer in the report) or *in report, no ticket* (a New row, or an item whose tickets are all resolved).
 
 The result is one table per Jira **Fix Version**, ordered by release date, and a last table **Not assigned to a release** for tickets without a Fix Version and, in an import, for report items without a ticket. Each table has a count line and a link to the matching list in Jira. An import's links list the tickets by key, so stale tickets are included; items without a ticket cannot be in a Jira list, and the table says how many there are.
 
@@ -308,7 +308,7 @@ The result is one table per Jira **Fix Version**, ordered by release date, and a
 
 A ticket with several Fix Versions appears once, under the earliest release, and names the others. Release dates come from the project's version list in Jira.
 
-The import board saves the overview through a save dialog; the security report board saves the same files with **Save full report as CSV** and **Save full report as Excel**. An import overview with no rows is saved with the header row only. Both files have the same rows and columns: Veracode tickets give one row per finding (issue id, CWE, module, path, file, line, function), Waltz tickets one row per ticket with its components in the **Members** column and the earliest of their dates. The columns run Fix Version, Release Date, Due Date, Policy date, Planned date and Attestation date side by side, with **Members** as the last column. Every row has a **Detail source** column: *report* (the loaded report), *table* (the ticket's findings or components table), *legacy* (an older ticket layout) or *title and labels* (only the ticket's title and labels could be read). Text from tickets is shown as the ticket holds it, which can differ slightly from the report for unusual characters.
+The Jira Import Board saves the overview through a save dialog; the security report board saves the same files with **Save full report as CSV** and **Save full report as Excel**. An import overview with no rows is saved with the header row only. Both files have the same rows and columns: Veracode tickets give one row per finding (issue id, CWE, module, path, file, line, function), Waltz tickets one row per ticket with its components in the **Members** column and the earliest of their dates. The columns run Fix Version, Release Date, Due Date, Policy date, Planned date and Attestation date side by side, with **Members** as the last column. Every row has a **Detail source** column: *report* (the loaded report), *table* (the ticket's findings or components table), *legacy* (an older ticket layout) or *title and labels* (only the ticket's title and labels could be read). Text from tickets is shown as the ticket holds it, which can differ slightly from the report for unusual characters.
 
 The Excel file is one sheet with real date cells (they sort and filter as dates), a frozen header row and a filter on every column. Rows flagged **⚠ overdue** are filled orange and rows flagged **⚠ due before release** yellow; the Flag column carries the same words. The CSV has no colours. If a spreadsheet opens the CSV in one column, set `ticketSidekick.jira.overviewCsvDelimiter` to `semicolon`; the setting does not affect the Excel file. The column order changed from earlier versions (the dates moved next to Due Date and Members moved to the end), so a script that reads the CSV by column position needs to read it by header name instead.
 

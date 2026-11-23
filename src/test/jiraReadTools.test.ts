@@ -1031,8 +1031,8 @@ describe('opening the import board', () => {
 
   it('tells the agent when only the start screen opened, so it does not claim the report is ready', async () => {
     const opened: Array<{ kind: string; input: unknown }> = [];
-    const text = await callTool(OPEN_BOARD_TOOL, { board: 'import', kind: 'waltz', path: 'oss.xlsx' }, { opened, openedTitle: 'Open import' });
-    expect(text).toBe('Opened in an editor tab: Open import. The report was not loaded: the user finishes the choices on the start screen.');
+    const text = await callTool(OPEN_BOARD_TOOL, { board: 'import', kind: 'waltz', path: 'oss.xlsx' }, { opened, openedTitle: 'Jira Import Board' });
+    expect(text).toBe('Opened in an editor tab: Jira Import Board. The report was not loaded: the user finishes the choices on the start screen.');
   });
 
   it('opens the start screen without a file when the path cannot be placed or no kind is given', async () => {
