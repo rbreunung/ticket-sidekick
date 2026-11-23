@@ -127,6 +127,12 @@ describe('opening a cleanup', () => {
     expect(ticketListKind.sourceKey(s.recipe)).toBe('rule:close released bugs|');
   });
 
+  it('offers to view the rule\'s query in Jira', async () => {
+    const view = ticketListKind.view(await open({ ...fake(), baseUrl: async () => 'https://jira.example.com/' }));
+    expect(view.jiraUrl).toBe(`https://jira.example.com/issues/?jql=${encodeURIComponent(view.jql)}`);
+    expect(decodeURIComponent(view.jiraUrl!)).toContain('fixVersion in releasedVersions()');
+  });
+
   it('is a separate board per requested fix version, and finds the rule in any case', async () => {
     const s = await open(fake(), { cleanupRule: 'close RELEASED bugs', fixVersion: '3.2' });
     expect(ticketListKind.title(s.recipe)).toBe('Cleanup: Close released bugs in 3.2');

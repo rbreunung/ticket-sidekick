@@ -93,8 +93,9 @@ function sortHeader(view, board, column, text, locked) {
 
 function outOfDateBanner(view) {
   if (!view.outOfDate) return null;
-  const { changed, gone, added } = view.outOfDate;
+  const { changed, gone, added, queryChanged } = view.outOfDate;
   const parts = [
+    queryChanged ? 'The saved filter\'s query changed in Jira' : null,
     changed.length ? `${changed.length} changed in Jira (${changed.slice(0, 5).join(', ')}${changed.length > 5 ? ', …' : ''})` : null,
     gone.length ? `${gone.length} no longer match the query` : null,
     added ? `${added} new ticket(s) match` : null,
@@ -142,7 +143,10 @@ function render(view, board, busy, state) {
     h('tbody', {}, view.rows.map(row => [ticketRow(view, board, row, locked, false), (row.subtasks ?? []).map(sub => ticketRow(view, board, sub, locked, true))])));
 
   return h('div', {},
-    h('p', { class: 'muted' }, view.jql),
+    h('div', { class: 'bar' },
+      h('span', { class: 'muted' }, view.jql),
+      view.queryUnread ? h('span', { class: 'muted' }, '(the query the board opened with: the filter\'s current query could not be read; the tickets are the filter\'s current ones)') : null,
+      view.jiraUrl ? h('a', { id: 'view-in-jira', class: 'button-link', href: view.jiraUrl, target: '_blank', rel: 'noreferrer' }, 'View in Jira') : null),
     outOfDateBanner(view),
     view.truncated ? h('p', { class: 'banner' }, `More tickets match than are listed; showing the first ${view.totalRows}. Narrow the query to see the rest.`) : null,
     view.cleanup ? cleanupPanel(view, board, locked) : changeForm(view, board, locked),

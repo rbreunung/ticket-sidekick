@@ -32,11 +32,12 @@ The report lists a project's unresolved Veracode and Waltz tickets by Fix Versio
 
 ## Ticket list
 
-The ticket list shows the tickets of a JQL query or of a saved filter (by id or name), up to 300, 50 to a page, with ticket, summary, status, type, assignee and priority. Click a column title to sort. When more than 300 tickets match, the board says so: narrow the query to see the rest.
+The ticket list shows the tickets of a JQL query or of a saved filter (by id or name, or one of [Jira's built-in filters](copilot-tools.md#jiras-built-in-filters) such as `-1`), up to 300, 50 to a page, with ticket, summary, status, type, assignee and priority. Click a column title to sort. When more than 300 tickets match, the board says so: narrow the query to see the rest.
 
 Copilot opens this board whenever you ask to see a list of tickets or to change more than one ticket. It does not list the tickets in chat, and it does not get them: the answer says only that the board opened. Ask a question about tickets ("how many open bugs do I have?") and Copilot answers in chat from its own search instead.
 
 - **Narrowing.** Ask for a fix version, a sprint, an assignee ("me" for yourself) or your team ("my team's open bugs", using `ticketSidekick.jira.myTeamJql`), and Copilot opens the board on the narrowed query; the query is shown under the title. A name that matches more than one version or sprint is named back in chat, and nothing opens.
+- **View in Jira.** The **View in Jira** button next to the query opens Jira's issue search on the same query in your browser, with every matching ticket, also those beyond the board's 300. A saved filter opens the filter itself in Jira. A cleanup opens the rule's query, fix version included.
 - **Extra columns.** A list shows one more column for each field id in `ticketSidekick.jira.searchFields`. A list opened with a proposed move, and a cleanup, shows `ticketSidekick.jira.cleanupFields` instead.
 
 **Changing several tickets**
@@ -49,7 +50,7 @@ Copilot opens this board whenever you ask to see a list of tickets or to change 
 After Apply the board reads the list again and shows a result per ticket: **Done**, **Failed** with Jira's reason, or **Not written**.
 
 - **A change Copilot proposed.** When you asked for a change in chat ("move my done tickets to Closed"), the board opens with that change filled in, marked "Proposed by Copilot", and every row selected. Check it, deselect rows, then preview and apply. Copilot cannot apply it. A list opened with a proposed move applies the selected tickets **of the page in view** only, like a cleanup.
-- **Out of date.** When the board finds that tickets changed in Jira, left the query or newly match it, it says it is out of date and you can only page until you press **Refresh**. Refresh shows the tickets as they are now and keeps your selection of every ticket still listed.
+- **Out of date.** When the board finds that tickets changed in Jira, left the query or newly match it, it says it is out of date and you can only page until you press **Refresh**. Refresh shows the tickets as they are now and keeps your selection of every ticket still listed. A saved filter's tickets are asked of Jira as `filter = <id>`, so they always follow the filter as it is in Jira, in the order its query sorts by: when the filter was edited in Jira, **Refresh** lists its new tickets, and the query under the title shows its new text. Asking for the same filter again marks the board out of date when the filter's query changed; press **Refresh**. When only the filter's query cannot be read, the tickets are still the current ones and the board says the query shown is the one it opened with. When the filter itself is gone (for example, deleted), the check fails and the board keeps the old list, with nothing writable.
 - **Jira is the truth.** Before writing, the board reads each ticket again. A ticket that changed in Jira since the board read it is not written to; it is listed under the title with its stored and its current status, until you press **Drop**.
 - **Moves** use a direct transition when there is one, else the workflow path Ticket Sidekick has cached for the project and issue type, discovering it once if needed.
 - **Fields** are set as the `jira_update_field` tool sets them: any field by its display name or id, a sprint by its name, a list field from comma-separated values.

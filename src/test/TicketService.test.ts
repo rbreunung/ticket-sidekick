@@ -659,6 +659,14 @@ describe('TicketService filter methods', () => {
     it('propagates errors for unknown filter ids', async () => {
       await expect(service.getFilterById('99999')).rejects.toThrow();
     });
+
+    it('answers a built-in Jira filter from its own table, without asking Jira', async () => {
+      client.getFilterById = async () => { throw new Error('Jira cannot read a system filter'); };
+      expect(await service.getFilterById('-1')).toEqual({
+        id: '-1', name: 'My open issues', jql: 'assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC', system: true,
+      });
+      await expect(service.getFilterById('-42')).rejects.toThrow("-42 is not one of Jira's built-in filters");
+    });
   });
 
   describe('searchFiltersByName', () => {
@@ -672,6 +680,12 @@ describe('TicketService filter methods', () => {
     it('returns empty array when no filters match', async () => {
       const filters = await service.searchFiltersByName('nonexistent-xyzzy');
       expect(filters).toEqual([]);
+    });
+
+    it('puts a built-in filter called exactly that name before the saved ones', async () => {
+      client.searchFiltersByName = async () => [{ id: '10001', name: 'My open issues', jql: 'assignee = currentUser()' }];
+      expect((await service.searchFiltersByName('my open issues')).map(f => f.id)).toEqual(['-1', '10001']);
+      expect((await service.searchFiltersByName('open')).map(f => f.id)).toEqual(['10001']);
     });
   });
 

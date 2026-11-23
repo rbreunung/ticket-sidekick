@@ -11,6 +11,8 @@ import {
   type PendingSearchConstraints,
 } from '../../utils/searchConstraints';
 import { formatBulletList } from '../../utils/chatPrimitives';
+import { FILTER_ID_PATTERN } from '../../utils/jiraSystemFilters';
+import { splitOrderBy } from '../../utils/jqlOrderBy';
 import { defineTool } from '../toolDefinition';
 import type { JiraToolDeps } from './jiraAccess';
 import { runJiraTool } from './runJiraTool';
@@ -23,33 +25,6 @@ export const FIND_PAGE_SIZE = 50;
 
 const NO_TEAM_JQL =
   'No team JQL configured. Set `ticketSidekick.jira.myTeamJql` in your VS Code settings (e.g. `project = BACKEND AND assignee in membersOf("backend-team")`).';
-
-/**
- * Splits a trailing `ORDER BY` off a query, so narrowing clauses can be ANDed onto the condition
- * while the saved ordering stays at the end, where JQL requires it. A query that only sorts has
- * an empty condition.
- */
-export function splitOrderBy(jql: string): { where: string; orderBy: string } {
-  // Scanned so that words inside a quoted value, such as summary ~ "slow ORDER BY query", are
-  // never taken for the sort clause; a backslash escapes the next character inside quotes.
-  let quote: string | undefined;
-  for (let i = 0; i < jql.length; i++) {
-    const ch = jql[i];
-    if (quote) {
-      if (ch === '\\') i++;
-      else if (ch === quote) quote = undefined;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      continue;
-    }
-    if ((i === 0 || /[\s)]/.test(jql[i - 1])) && /^ORDER\s+BY\s/i.test(jql.slice(i))) {
-      return { where: jql.slice(0, i).trim(), orderBy: jql.slice(i).trim() };
-    }
-  }
-  return { where: jql, orderBy: '' };
-}
 
 export interface Narrowing {
   fixVersion?: string;
@@ -105,7 +80,7 @@ export async function narrowQuery(
 }
 
 export async function resolveFilter(filter: string, ticketService: TicketService): Promise<JiraFilter | string> {
-  if (/^\d+$/.test(filter)) return ticketService.getFilterById(filter);
+  if (FILTER_ID_PATTERN.test(filter)) return ticketService.getFilterById(filter);
   const filters = await ticketService.searchFiltersByName(filter);
   if (filters.length === 0) return `No saved filters found matching "${filter}". Call ${LIST_MY_FILTERS_TOOL} to see your saved filters.`;
   if (filters.length > 1) {
@@ -116,7 +91,7 @@ export async function resolveFilter(filter: string, ticketService: TicketService
 
 const findShape = {
   jql: z.string().optional().describe('A JQL query. Give either jql or filter.'),
-  filter: z.string().optional().describe('A saved filter, by its id or its name. Give either jql or filter.'),
+  filter: z.string().optional().describe('A saved filter, by its id or its name, or one of Jira\'s built-in filters by its negative id or name, such as -1 (My open issues). Give either jql or filter.'),
   fixVersion: z.string().optional().describe('Narrow to a fix version, by name; resolved in the single project the query scopes to.'),
   sprint: z.string().optional().describe('Narrow to a sprint, by name; resolved in the single project the query scopes to.'),
   assignee: z.string().optional().describe('Narrow to an assignee: a user name, or "me" for the signed-in user.'),
@@ -155,7 +130,9 @@ export const findTicketsTool = defineTool<JiraToolDeps, typeof findShape>({
         const resolved = await resolveFilter(filter, ticketService);
         if (typeof resolved === 'string') return resolved;
         base = resolved.jql;
-        label = `_Using filter: **${resolved.name}**_\n\n`;
+        label = resolved.system
+          ? `_Using Jira's built-in filter **${resolved.name}** (${resolved.id}), as \`${resolved.jql}\`_\n\n`
+          : `_Using filter: **${resolved.name}**_\n\n`;
       }
 
       const narrowed = await narrowQuery(base, args, { client: access.client, myTeamJql: config.myTeamJql }, FIND_TICKETS_TOOL);

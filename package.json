@@ -343,7 +343,7 @@
               "type": "string"
             },
             "filter": {
-              "description": "A saved filter, by its id or its name. Give either jql or filter.",
+              "description": "A saved filter, by its id or its name, or one of Jira's built-in filters by its negative id or name, such as -1 (My open issues). Give either jql or filter.",
               "type": "string"
             },
             "fixVersion": {
@@ -820,7 +820,7 @@
               "type": "string"
             },
             "filter": {
-              "description": "ticket-list: a saved filter's id or name, in place of jql.",
+              "description": "ticket-list: a saved filter's id or name, or one of Jira's built-in filters such as -1 (My open issues), in place of jql.",
               "type": "string"
             },
             "cleanupRule": {

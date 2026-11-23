@@ -1,3 +1,4 @@
+import { isSystemFilterId, SYSTEM_FILTERS, systemFilterById, systemFilterByName } from '../utils/jiraSystemFilters';
 import type { IJiraClient, JiraAttachment, JiraComment, JiraFieldMeta, JiraFilter, JiraIssue, JiraIssueLink, JiraIssueType, JiraMyFiltersResult, JiraRemoteLink, JiraSearchResult, JiraSprintCandidate } from '../jira/IJiraClient';
 import type { DiagLogger } from '../utils/diagTypes';
 import { formatJiraBody } from '../utils/markdownFormatter';
@@ -920,12 +921,21 @@ export class TicketService {
     return { texts, failed };
   }
 
+  /** A saved filter from Jira, or one of Jira's built-in system filters (negative id) from Ticket Sidekick's table. */
   async getFilterById(id: string): Promise<JiraFilter> {
+    if (isSystemFilterId(id)) {
+      const system = systemFilterById(id);
+      if (!system) throw new Error(`${id} is not one of Jira's built-in filters Ticket Sidekick knows (${SYSTEM_FILTERS.map(f => f.id).join(', ')}).`);
+      return { ...system };
+    }
     return this.client.getFilterById(id);
   }
 
+  /** Saved filters whose name contains the text, after a built-in system filter called exactly that. */
   async searchFiltersByName(name: string): Promise<JiraFilter[]> {
-    return this.client.searchFiltersByName(name);
+    const system = systemFilterByName(name);
+    const saved = await this.client.searchFiltersByName(name);
+    return system ? [{ ...system }, ...saved] : saved;
   }
 
   async getMyFilters(): Promise<JiraMyFiltersResult> {
