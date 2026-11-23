@@ -554,3 +554,18 @@ describe('a saved filter whose query changes in Jira', () => {
     expect(searched).toEqual(['filter = 42', 'filter = 42']);
   });
 });
+
+describe('a board on one of Jira\'s built-in filters', () => {
+  it('opens filter -1 on its JQL, titled after it, with View in Jira on the filter', async () => {
+    const searched: string[] = [];
+    const base = fake();
+    const deps: Fake = {
+      ...base,
+      resolveFilter: async name => (name === '-1' ? { id: '-1', name: 'My open issues', jql: 'assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC', system: true } : 'unknown'),
+      search: async (jql, limit, ids) => { searched.push(jql); return base.search(jql, limit, ids); },
+    };
+    const view = ticketListKind.view(await open(deps, { filter: '-1' }));
+    expect(searched).toEqual(['assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC']);
+    expect(view).toMatchObject({ title: 'Tickets: filter "My open issues"', jiraUrl: 'https://jira.example.com/issues/?filter=-1', queryUnread: false });
+  });
+});

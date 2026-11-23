@@ -138,6 +138,8 @@ export interface JiraFilter {
   id: string;
   name: string;
   jql: string;
+  /** One of Jira's built-in filters (negative id), run from Ticket Sidekick's own JQL for it (`src/utils/jiraSystemFilters.ts`). */
+  system?: boolean;
 }
 
 export interface JiraFieldMeta {

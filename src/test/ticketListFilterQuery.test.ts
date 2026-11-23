@@ -7,6 +7,10 @@ describe('the search for a saved filter\'s tickets', () => {
     expect(filterSearchJql('42', 'summary ~ "slow ORDER BY query"')).toBe('filter = 42');
   });
 
+  it('runs a built-in system filter\'s own query, since JQL cannot name it', () => {
+    expect(filterSearchJql('-1', 'assignee = currentUser() ORDER BY updated DESC')).toBe('assignee = currentUser() ORDER BY updated DESC');
+  });
+
   it('refuses an id that is not a number', () => {
     expect(() => filterSearchJql('42 OR project = X', 'x')).toThrow('is not a saved filter id');
   });

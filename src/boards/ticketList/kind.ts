@@ -1,3 +1,4 @@
+import { isSystemFilterId } from '../../utils/jiraSystemFilters';
 import { splitOrderBy } from '../../utils/jqlOrderBy';
 import type { BoardKind, CheckMode } from '../../sessions/boardKind';
 import type { Conflict, Session } from '../../sessions/sessionTypes';
@@ -749,8 +750,12 @@ function listedJql(session: ListSession): string {
   return session.derived.data.jql ?? (source.type === 'rule' ? '' : source.jql);
 }
 
-/** The search for a saved filter's tickets: Jira's own filter, with the sort order of its query. */
+/**
+ * The search for a saved filter's tickets: Jira's own filter, with the sort order of its query.
+ * A built-in system filter (negative id) cannot be named in JQL, so its own query is run.
+ */
 export function filterSearchJql(id: string, filterJql: string): string {
+  if (isSystemFilterId(id)) return filterJql;
   if (!/^\d+$/.test(id)) throw new Error(`"${id}" is not a saved filter id.`);
   const { orderBy } = splitOrderBy(filterJql);
   return orderBy ? `filter = ${id} ${orderBy}` : `filter = ${id}`;

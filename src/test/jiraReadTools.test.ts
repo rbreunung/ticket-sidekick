@@ -493,8 +493,32 @@ describe('jira_list_my_filters', () => {
       'Your filters:\n\n'
       + '- **My open bugs** (id: 10001)\n'
       + '- **Sprint Backlog** (id: 10003)\n'
-      + '- **My Created Tickets** (id: 10004)',
+      + '- **My Created Tickets** (id: 10004)\n\n'
+      + "Jira's built-in filters, by id or name: My open issues (-1), Reported by me (-2), Viewed recently (-3), All issues (-4), "
+      + 'Open issues (-5), Created recently (-6), Resolved recently (-7), Updated recently (-8), Done issues (-9).',
     );
+  });
+});
+
+describe('jira_find_tickets with a built-in Jira filter', () => {
+  it('runs Ticket Sidekick\'s JQL for filter -1, without asking Jira for the filter, and says so', async () => {
+    const client = new RecordingSearchClient();
+    client.getFilterById = async () => { throw new Error('a system filter must not be read from Jira'); };
+
+    const text = await callTool(FIND_TICKETS_TOOL, { filter: '-1' }, { client });
+
+    expect(client.searches.map(s => s.jql)).toEqual(['assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC']);
+    expect(text).toContain("_Using Jira's built-in filter **My open issues** (-1), as `assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC`_");
+  });
+
+  it('finds a built-in filter by its exact name, and refuses an unknown negative id', async () => {
+    const client = new RecordingSearchClient();
+    client.searchFiltersByName = async () => [];
+
+    await callTool(FIND_TICKETS_TOOL, { filter: 'reported by ME' }, { client });
+    expect(client.searches.map(s => s.jql)).toEqual(['reporter = currentUser() ORDER BY created DESC']);
+
+    expect(await callTool(FIND_TICKETS_TOOL, { filter: '-42' }, { client })).toContain("-42 is not one of Jira's built-in filters");
   });
 });
 

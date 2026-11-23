@@ -1,3 +1,4 @@
+import { FILTER_ID_PATTERN } from '../../utils/jiraSystemFilters';
 import type { JiraAccess } from '../../tools/jiraTools/jiraAccess';
 import { TicketService } from '../../services/TicketService';
 import { discoverAndCacheWorkflow, loadWorkflowCache, resolveAndApplyTransition } from '../../services/WorkflowService';
@@ -84,7 +85,7 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
     resolveFilter: async filter => {
       try {
         const { ticketService } = await jira();
-        if (/^\d+$/.test(filter)) {
+        if (FILTER_ID_PATTERN.test(filter)) {
           const found = await ticketService.getFilterById(filter);
           return { id: String(found.id), name: found.name, jql: found.jql };
         }

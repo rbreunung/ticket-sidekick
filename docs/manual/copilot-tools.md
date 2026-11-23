@@ -20,7 +20,7 @@ These change nothing in Jira. `jira_workflow`, `jira_load_ticket` and `jira_crea
 | --- | --- | --- |
 | `jira_check_connection` | Checks the Jira connection: base URL, auth type, whether a token is stored, and the signed-in user, or what is missing or wrong. | none |
 | `jira_view_ticket` | Shows one ticket in full: the fields your display settings choose (`ticketSidekick.jira.additionalDisplayFields`, `ticketSidekick.jira.hiddenDisplayFields`), the whole description, the attachments with name, size and type, and the comments, newest first, up to 100 | `ticketKey` (optional: without it, the key in the current git branch of the first workspace folder is used, and the answer names that folder and branch) |
-| `jira_find_tickets` | Finds tickets by JQL or by a saved filter, 50 per page, with the columns from `ticketSidekick.jira.searchFields`. "My team" means the team JQL in `ticketSidekick.jira.myTeamJql` | `jql` or `filter` (a saved filter's id or name); optional `fixVersion`, `sprint`, `assignee` (`me` for you), `myTeam`, and `page` to read the next page |
+| `jira_find_tickets` | Finds tickets by JQL or by a saved filter, 50 per page, with the columns from `ticketSidekick.jira.searchFields`. "My team" means the team JQL in `ticketSidekick.jira.myTeamJql` | `jql` or `filter` (a saved filter's id or name, or one of Jira's [built-in filters](#jiras-built-in-filters) such as `-1`); optional `fixVersion`, `sprint`, `assignee` (`me` for you), `myTeam`, and `page` to read the next page |
 | `jira_list_my_filters` | Lists your favourite and own saved filters, each once, with name and id | none |
 | `jira_workflow` | Lists the statuses a ticket can be moved to from its current status, with the transitions that lead there. When no workflow is cached for the ticket's project and issue type, it learns it from Jira and saves it to `.jira-workflow-cache.json`, shared by every Ticket Sidekick feature | `ticketKey`; optional `refresh` to learn the workflow again |
 | `jira_list_fields` | Lists every field of a ticket with its name, id and current value, custom fields included. Without a ticket, for a project and an issue type, lists the fields that type can take when a ticket is created, with name, id and whether Jira requires each. Use it to find a field id for `ticketSidekick.jira.additionalDisplayFields` or a template | `ticketKey`, or `projectKey` and `issueType` |
@@ -90,3 +90,21 @@ Use this after installing a new build, in a Copilot chat in Agent mode, with Jir
 15. Type `/ts-jira`: it lists the commands. Type `/ts-jira load PROJ-123`: it loads the ticket with `jira_load_ticket`, without asking which skill to use.
 16. Open the chat's tool list: every Jira tool is listed once, under Ticket Sidekick.
 17. Ask "show my open tickets": `jira_open_board` opens a ticket list in an editor tab, and the chat says only that it opened.
+
+## Jira's built-in filters
+
+Jira has built-in filters with negative ids, such as `-1` for "My open issues" (`<your Jira>/issues/?filter=-1`). They are not saved filters: Jira's REST API cannot read them, and JQL cannot name them. So Ticket Sidekick runs its own JQL for each one. Use the id or the exact name wherever a saved filter goes: `/ts-jira search -1`, `/ts-jira search My open issues`, or "run the filter -1". `jira_list_my_filters` lists them after your own filters, and `jira_find_tickets` shows the JQL it ran. On a ticket list, **View in Jira** opens Jira's own filter.
+
+| Id | Name | JQL Ticket Sidekick runs |
+| --- | --- | --- |
+| -1 | My open issues | `assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC` |
+| -2 | Reported by me | `reporter = currentUser() ORDER BY created DESC` |
+| -3 | Viewed recently | `issuekey in issueHistory() ORDER BY lastViewed DESC` |
+| -4 | All issues | `ORDER BY created DESC` |
+| -5 | Open issues | `resolution = Unresolved ORDER BY priority DESC, updated DESC` |
+| -6 | Created recently | `created >= -1w ORDER BY created DESC` |
+| -7 | Resolved recently | `resolutiondate >= -1w ORDER BY updated DESC` |
+| -8 | Updated recently | `updated >= -1w ORDER BY updated DESC` |
+| -9 | Done issues | `statusCategory = Done ORDER BY updated DESC` |
+
+When one of your saved filters has the same name, both are offered and you choose by id.

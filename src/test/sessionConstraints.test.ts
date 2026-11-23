@@ -168,6 +168,6 @@ describe('formatMyFiltersList (U7)', () => {
 
   it('reports a clear "none found" message for zero filters', () => {
     const text = formatMyFiltersList([], []);
-    expect(text).toBe('No favourite or owned filters found.');
+    expect(text).toMatch(/^No favourite or owned filters found\.\n\nJira's built-in filters, by id or name: My open issues \(-1\), /);
   });
 });

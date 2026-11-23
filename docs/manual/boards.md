@@ -32,7 +32,7 @@ The report lists a project's unresolved Veracode and Waltz tickets by Fix Versio
 
 ## Ticket list
 
-The ticket list shows the tickets of a JQL query or of a saved filter (by id or name), up to 300, 50 to a page, with ticket, summary, status, type, assignee and priority. Click a column title to sort. When more than 300 tickets match, the board says so: narrow the query to see the rest.
+The ticket list shows the tickets of a JQL query or of a saved filter (by id or name, or one of [Jira's built-in filters](copilot-tools.md#jiras-built-in-filters) such as `-1`), up to 300, 50 to a page, with ticket, summary, status, type, assignee and priority. Click a column title to sort. When more than 300 tickets match, the board says so: narrow the query to see the rest.
 
 Copilot opens this board whenever you ask to see a list of tickets or to change more than one ticket. It does not list the tickets in chat, and it does not get them: the answer says only that the board opened. Ask a question about tickets ("how many open bugs do I have?") and Copilot answers in chat from its own search instead.
 

@@ -1,5 +1,6 @@
 // JQL constraint building and resolution, filter listings. Pure (vscode-free).
 
+import { SYSTEM_FILTERS } from './jiraSystemFilters';
 import type { IJiraClient, JiraFilter, JiraFilterSource } from '../jira/IJiraClient';
 import { formatBulletList } from './chatPrimitives';
 
@@ -239,8 +240,9 @@ export function formatFilterCandidateList(filters: JiraFilter[]): string {
  */
 export function formatMyFiltersList(filters: JiraFilter[], failedSources: JiraFilterSource[]): string {
   const failureNote = buildFilterFailureNote(failedSources);
+  const builtIn = `Jira's built-in filters, by id or name: ${SYSTEM_FILTERS.map(f => `${f.name} (${f.id})`).join(', ')}.`;
   if (filters.length === 0) {
-    return `${failureNote}No favourite or owned filters found.`;
+    return `${failureNote}No favourite or owned filters found.\n\n${builtIn}`;
   }
-  return `${failureNote}Your filters:\n\n${formatFilterCandidateList(filters)}`;
+  return `${failureNote}Your filters:\n\n${formatFilterCandidateList(filters)}\n\n${builtIn}`;
 }

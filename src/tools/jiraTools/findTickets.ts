@@ -11,6 +11,7 @@ import {
   type PendingSearchConstraints,
 } from '../../utils/searchConstraints';
 import { formatBulletList } from '../../utils/chatPrimitives';
+import { FILTER_ID_PATTERN } from '../../utils/jiraSystemFilters';
 import { splitOrderBy } from '../../utils/jqlOrderBy';
 import { defineTool } from '../toolDefinition';
 import type { JiraToolDeps } from './jiraAccess';
@@ -79,7 +80,7 @@ export async function narrowQuery(
 }
 
 export async function resolveFilter(filter: string, ticketService: TicketService): Promise<JiraFilter | string> {
-  if (/^\d+$/.test(filter)) return ticketService.getFilterById(filter);
+  if (FILTER_ID_PATTERN.test(filter)) return ticketService.getFilterById(filter);
   const filters = await ticketService.searchFiltersByName(filter);
   if (filters.length === 0) return `No saved filters found matching "${filter}". Call ${LIST_MY_FILTERS_TOOL} to see your saved filters.`;
   if (filters.length > 1) {
@@ -90,7 +91,7 @@ export async function resolveFilter(filter: string, ticketService: TicketService
 
 const findShape = {
   jql: z.string().optional().describe('A JQL query. Give either jql or filter.'),
-  filter: z.string().optional().describe('A saved filter, by its id or its name. Give either jql or filter.'),
+  filter: z.string().optional().describe('A saved filter, by its id or its name, or one of Jira\'s built-in filters by its negative id or name, such as -1 (My open issues). Give either jql or filter.'),
   fixVersion: z.string().optional().describe('Narrow to a fix version, by name; resolved in the single project the query scopes to.'),
   sprint: z.string().optional().describe('Narrow to a sprint, by name; resolved in the single project the query scopes to.'),
   assignee: z.string().optional().describe('Narrow to an assignee: a user name, or "me" for the signed-in user.'),
@@ -129,7 +130,9 @@ export const findTicketsTool = defineTool<JiraToolDeps, typeof findShape>({
         const resolved = await resolveFilter(filter, ticketService);
         if (typeof resolved === 'string') return resolved;
         base = resolved.jql;
-        label = `_Using filter: **${resolved.name}**_\n\n`;
+        label = resolved.system
+          ? `_Using Jira's built-in filter **${resolved.name}** (${resolved.id}), as \`${resolved.jql}\`_\n\n`
+          : `_Using filter: **${resolved.name}**_\n\n`;
       }
 
       const narrowed = await narrowQuery(base, args, { client: access.client, myTeamJql: config.myTeamJql }, FIND_TICKETS_TOOL);
