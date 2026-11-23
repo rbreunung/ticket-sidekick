@@ -62,7 +62,15 @@ export function boardTests(extensionId: string): E2eTest[] {
         // The page asks for the stored sessions as soon as its scripts ran, so an answered request
         // proves the document, its content policy, the scripts and the message channel all work.
         const before = stats().requestsAnswered;
-        await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+        const tab = boardTab('Stored sessions');
+        assert.ok(tab, 'the stored sessions tab from the test before is not open');
+        const tabsBefore = stats().openTabs;
+        await vscode.window.tabGroups.close(tab);
+        // The close resolves before the extension hears the tab was disposed. Opening the board in
+        // that gap reveals the closed tab instead of making a new one, and no page ever loads.
+        const closeDeadline = Date.now() + LOAD_TIMEOUT_MS;
+        while (stats().openTabs >= tabsBefore && Date.now() < closeDeadline) await sleep(50);
+        assert.ok(stats().openTabs < tabsBefore, 'the stored sessions tab was closed, but the extension still counts it as open');
         await vscode.commands.executeCommand('ticket-sidekick.boards.sessions');
         const deadline = Date.now() + LOAD_TIMEOUT_MS;
         while (stats().requestsAnswered === before && Date.now() < deadline) await sleep(250);
