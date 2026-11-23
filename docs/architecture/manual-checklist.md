@@ -170,3 +170,45 @@ Run on the preview build on the managed machine, against Jira Data Center, with 
 - [ ] The Command Palette has no "Create Jira ticket from email (.eml)" command.
 - [ ] `ticketSidekick.jira.showConnectionInfo` is no longer in the Settings screen; `/ts-jira check` shows the connection.
 - [ ] `@bitbucket` still reviews a pull request.
+
+## Step 3: PR review board
+
+Run on the preview build of the review board on the managed machine, against Bitbucket Data Center and Jira Data Center, with a real pull request whose title names a Jira ticket, and if you can one large enough that the Data Center server cuts its diff. `@bitbucket` is still installed for this part; the plan removes it only after this part passes.
+
+**Opening the board**
+
+- [ ] `Ticket Sidekick: Review a pull request` opens "Review a pull request"; pasting the PR link and **Open** opens the board on its first step.
+- [ ] `/ts-bitbucket review <link>` opens the same board; the chat answers only with the status the tool returns.
+- [ ] In Agent mode, "review this pull request <link>" opens the board; Copilot says it opened and does not review the PR itself.
+- [ ] Asking again for the same PR opens the stored review, not a new first step.
+
+**First step**
+
+- [ ] With `ticketSidekick.bitbucket.reviewModel` empty, **Review model** lists your models; picking one saves it to the setting.
+- [ ] With the Local harness hidden (`chat.editor.localAgent.enabled: false`), the review still runs.
+- [ ] Requirements source **Jira ticket**: the key from the PR title is offered with **Use KEY**; a typed key wins over it.
+- [ ] Requirements source **A goal**: **Reword** shows the reworded goal as points you can correct before Start; no model call runs before you press it.
+- [ ] Requirements source **None** and an optional question: Start runs without a ticket read.
+
+**Running the review**
+
+- [ ] **Start** shows live steps ("Reading the pull request…", then the regular pass) and then the findings with the extra passes it suggests, or says that none is suggested.
+- [ ] **Stop** during a pass keeps the findings found so far.
+- [ ] **Run selected** with two extra passes adds their findings; existing finding numbers do not change. The critic checks only findings it has not checked yet.
+- [ ] A cut Data Center diff: the cut files are fetched one by one, and **Not reviewed and dropped** lists any file still not reviewed.
+- [ ] **Requirements coverage** is shown above the findings; editing the goal and **Re-check** replaces only the coverage.
+- [ ] **Token usage per pass** is shown, and `/ts-bitbucket usage` counts the same calls for the month.
+
+**Findings**
+
+- [ ] **Explain** on a finding answers under it; explaining again replaces the answer.
+- [ ] Edit a draft comment by hand, then **Rewrite** with an instruction; **Undo** brings back your text.
+- [ ] Select two findings and **Post 2 comment(s)**: the VS Code confirmation names them; in Bitbucket, a finding with a verified line is an inline comment and one without is on the activity feed.
+- [ ] **Copy … for Teams** pastes as readable plain text in Teams; **Copy … as Markdown** pastes as Markdown.
+- [ ] Close and reopen VS Code with the board open: the findings, explanations, drafts and coverage are still there.
+
+**From chat**
+
+- [ ] After a review, asking Copilot "explain finding 2" answers from `bitbucket_read_findings` with the same finding.
+- [ ] `/ts-bitbucket check` reports the connection; `/ts-bitbucket help review` explains the staged review.
+- [ ] `@bitbucket` still reviews a pull request.
