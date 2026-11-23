@@ -31,6 +31,11 @@ permissions:
   contents: write
   checks: read
 
+# Two release runs at once would race for the same version and for the push to the branch.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -95,6 +100,21 @@ jobs:
             npm version "${{ inputs.bump }}" --no-git-tag-version
           fi
           NEW_VERSION="$(node -p "require('./package.json').version")"
+          # Guard: the Marketplace never takes a version twice. A run that published but could
+          # not record the bump (2026-11-23, 0.9.3) leaves no tag behind, so ask the Marketplace
+          # itself, before tests and packaging. A failed lookup fails the step.
+          EXT="$(node -p "const p = require('./package.json'); p.publisher + '.' + p.name")"
+          SHOWN="$(npx vsce show "$EXT" --json)"
+          if printf '%s' "$SHOWN" | node -e '
+            let s = "";
+            process.stdin.on("data", d => s += d).on("end", () => {
+              const versions = (JSON.parse(s).versions || []).map(v => v.version);
+              process.exit(versions.includes(process.argv[1]) ? 0 : 1);
+            });
+          ' "$NEW_VERSION"; then
+            echo "::error::Version ${NEW_VERSION} is already on the Marketplace. Choose a different bump or version."
+            exit 1
+          fi
           echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "Resolved version: $NEW_VERSION"
 
@@ -190,13 +210,33 @@ jobs:
             echo "::error::Version ${VERSION} already exists. Choose a different bump or version."
             exit 1
           fi
-          # Marketplace first (the irreversible step). Only once it succeeds do we record the
-          # bump in the repo and create the GitHub release + bare tag at that commit.
+          # Marketplace first (the irreversible step). Right after it, record the version where
+          # the guards look: the bump commit, its tag and the GitHub release. The tag is pushed on
+          # its own, so a branch that moved during the run cannot stop it.
           npx vsce publish ${VSCE_PRERELEASE} --packagePath "${VSIX}" --pat "${VSCE_PAT}"
           git commit -am "${VERSION}"
-          git push origin "HEAD:${{ github.ref_name }}"
+          git tag "${VERSION}"
+          git push origin "refs/tags/${VERSION}"
           gh release create "${VERSION}" ${GH_PRERELEASE} \
-            --target "$(git rev-parse HEAD)" \
+            --verify-tag \
             --title "${TITLE}" \
             --notes-file release-notes.md \
             "${VSIX}"
+          # Bring the bump onto the branch. It may have moved while this run was building
+          # (2026-11-23: a PR merged 9 seconds before the push). Merge, not rebase, so the tag
+          # stays on the source the .vsix was built from; the branch is the first parent, so the
+          # green-CI check above (first-parent, bot commits skipped) still finds the newest PR.
+          BRANCH="${{ github.ref_name }}"
+          for attempt in 1 2 3 4 5; do
+            git fetch -q origin "${BRANCH}"
+            git checkout -q --detach FETCH_HEAD
+            if git merge --no-ff --no-edit -m "Merge ${VERSION} into ${BRANCH}" "${VERSION}" \
+              && git push origin "HEAD:${BRANCH}"; then
+              exit 0
+            fi
+            git merge --abort 2>/dev/null || true
+            echo "Push of ${VERSION} to ${BRANCH} failed (attempt ${attempt} of 5)."
+            sleep $((attempt * 5))
+          done
+          echo "::error::${VERSION} is published, tagged and released, but the bump did not reach ${BRANCH}. Merge tag ${VERSION} into ${BRANCH} by hand."
+          exit 1
