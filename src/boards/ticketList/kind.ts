@@ -1,3 +1,4 @@
+import { splitOrderBy } from '../../utils/jqlOrderBy';
 import type { BoardKind, CheckMode } from '../../sessions/boardKind';
 import type { Conflict, Session } from '../../sessions/sessionTypes';
 import type { WorkflowGraph } from '../../services/WorkflowService';
@@ -80,6 +81,8 @@ export interface TicketListData {
   jql?: string;
   /** A saved filter's name as Jira held it at this reading. */
   filterName?: string;
+  /** A saved filter's query and name could not be read at this reading; its rows were. */
+  queryUnread?: true;
   cleanup?: CleanupInfo;
 }
 
@@ -175,8 +178,10 @@ export type ViewRow = TicketRow & { url: string | null; selected: boolean; resul
 export interface TicketListView {
   title: string;
   jql: string;
-  /** Jira's issue search for the board's query, for "View in Jira"; null without a base URL or a query. */
+  /** Jira's issue search for the board's query, or the saved filter itself, for "View in Jira"; null without a base URL or a query. */
   jiraUrl: string | null;
+  /** The query shown is the saved filter's as the board opened with it: its current one could not be read. */
+  queryUnread: boolean;
   truncated: boolean;
   /** The rows of the page in view. */
   rows: ViewRow[];
@@ -507,11 +512,14 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
       return { readAt: deps.now(), fingerprints: {}, data: { ...cleanup, columns, baseUrl } };
     }
     if (recipe.source.type === 'filter') {
-      // A saved filter is read from Jira each time: its query may have changed since the board opened.
+      // The rows come from Jira's filter itself (`filter = <id>`), never from a copy of its query.
+      // Its query and name are read only to show them and to keep its sort order; when that read
+      // fails, the list is still current and says that the query shown is the one it opened with.
       const filter = await deps.resolveFilter(recipe.source.id);
-      if (typeof filter === 'string') throw new Error(`The saved filter "${recipe.source.name}" cannot be read: ${filter}`);
-      const { rows, truncated } = await deps.search(filter.jql, MAX_LIST_ROWS, fieldIds);
-      return { readAt: deps.now(), fingerprints: {}, data: { rows, truncated, columns, baseUrl, jql: filter.jql, filterName: filter.name } };
+      const known = typeof filter === 'string' ? undefined : filter;
+      const { rows, truncated } = await deps.search(filterSearchJql(recipe.source.id, known?.jql ?? recipe.source.jql), MAX_LIST_ROWS, fieldIds);
+      const query = known ? { jql: known.jql, filterName: known.name } : { queryUnread: true as const };
+      return { readAt: deps.now(), fingerprints: {}, data: { rows, truncated, columns, baseUrl, ...query } };
     }
     const { rows, truncated } = await deps.search(recipe.source.jql, MAX_LIST_ROWS, fieldIds);
     return { readAt: deps.now(), fingerprints: {}, data: { rows, truncated, columns, baseUrl } };
@@ -722,7 +730,9 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     const source = session.recipe.source;
     const jql = listedJql(session);
     return {
-      title: sourceTitle(source.type === 'filter' && data.filterName ? { ...source, name: data.filterName } : source), jql, jiraUrl: jiraSearchUrl(baseUrl, jql), truncated: data.truncated, rows: view,
+      title: sourceTitle(source.type === 'filter' && data.filterName ? { ...source, name: data.filterName } : source), jql,
+      jiraUrl: source.type === 'filter' ? jiraFilterUrl(baseUrl, source.id) : jiraSearchUrl(baseUrl, jql),
+      queryUnread: data.queryUnread === true, truncated: data.truncated, rows: view,
       columns: data.columns?.[working.columns] ?? [],
       cleanup: data.cleanup ? { ...data.cleanup, resolution: working.resolution } : null,
       pageOnly: isCleanup(session),
@@ -737,6 +747,18 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
 function listedJql(session: ListSession): string {
   const source = session.recipe.source;
   return session.derived.data.jql ?? (source.type === 'rule' ? '' : source.jql);
+}
+
+/** The search for a saved filter's tickets: Jira's own filter, with the sort order of its query. */
+export function filterSearchJql(id: string, filterJql: string): string {
+  if (!/^\d+$/.test(id)) throw new Error(`"${id}" is not a saved filter id.`);
+  const { orderBy } = splitOrderBy(filterJql);
+  return orderBy ? `filter = ${id} ${orderBy}` : `filter = ${id}`;
+}
+
+/** Jira's page for a saved filter: its current tickets, and the filter to edit. */
+export function jiraFilterUrl(baseUrl: string | undefined, id: string): string | null {
+  return baseUrl ? `${baseUrl}/issues/?filter=${encodeURIComponent(id)}` : null;
 }
 
 /** Jira's issue search page for a query: the whole result, not only the rows the board read. */

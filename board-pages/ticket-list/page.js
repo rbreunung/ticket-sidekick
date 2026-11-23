@@ -145,6 +145,7 @@ function render(view, board, busy, state) {
   return h('div', {},
     h('div', { class: 'bar' },
       h('span', { class: 'muted' }, view.jql),
+      view.queryUnread ? h('span', { class: 'muted' }, '(the query the board opened with: the filter\'s current query could not be read; the tickets are the filter\'s current ones)') : null,
       view.jiraUrl ? h('a', { id: 'view-in-jira', class: 'button-link', href: view.jiraUrl, target: '_blank', rel: 'noreferrer' }, 'View in Jira') : null),
     outOfDateBanner(view),
     view.truncated ? h('p', { class: 'banner' }, `More tickets match than are listed; showing the first ${view.totalRows}. Narrow the query to see the rest.`) : null,
