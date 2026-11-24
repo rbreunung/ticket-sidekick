@@ -1411,7 +1411,7 @@
   "dependencies": {
     "exceljs": "^4.4.0",
     "fast-xml-parser": "^5.12.1",
-    "minimatch": "^11.0.8",
+    "minimatch": "^11.0.9",
     "postal-mime": "^4.2.1",
     "zod": "^4.6.7"
   },
