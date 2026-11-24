@@ -1,6 +1,6 @@
 # Migration status: from chat participants to tools and boards
 
-Last updated: 2026-11-23.
+Last updated: 2026-11-24.
 
 This page says where the migration stands and what is still open. It is the working list; the other documents hold the detail:
 
@@ -10,7 +10,7 @@ This page says where the migration stands and what is still open. It is the work
 
 Update this page in every change that closes or adds an open point.
 
-**Where it stands (2026-11-23).** The code side of the migration is done: `@bitbucket` is removed, and no chat participant is left. What is open is manual: the checklist runs on the managed machine (O6, O21, O22), the keyboard and screen reader check (O17), the remaining Jira flow prose (O20) and the not-verified points in section 5. The stable release waits for those.
+**Where it stands (2026-11-23).** The code side of the migration is done: `@bitbucket` is removed, and no chat participant is left. What is open is manual: the checklist runs on the managed machine (O6, O21, O22), the keyboard and screen reader check (O17), the remaining Jira flow prose (O20) and the one not-verified point left in section 5 (V1, a restart with a board open). The stable release waits for those.
 
 **Release rule for the whole migration.** Every release made while the migration runs is a **preview** (`channel: preview`). The stable channel stays on its current version, with no hotfix release, until the whole migration is done and tested, so colleagues are not interrupted and work in the middle of a branch never has to stop for a release. Each step adds its part to the [manual checklist](manual-checklist.md) and runs it on the preview build; the one normal release at the end reruns the whole checklist. This replaces "each step is a preview release first" in the boards plan (R35, AE9).
 
@@ -249,12 +249,14 @@ O18 (no deprecation mark in the chat UI) and O19 (participant steps in the `CLAU
 
 ## 5. Not verified
 
-| # | What | Why it is open |
+V2 to V4 were verified by the maintainer on 2026-11-24. Only V1 is open.
+
+| # | What | State |
 | --- | --- | --- |
-| V1 | A VS Code restart with a board open, in a real VS Code | The restore path is unit-tested against a stubbed VS Code only |
-| V2 | Copilot choosing the tools and opening a board in a live chat, with this build | Confirmed by the maintainer on an earlier build of this branch; the smoke suite calls the tools directly |
-| V3 | Boards against real Jira Data Center data | Needs real credentials (KL26) |
-| V4 | The organisation's Copilot policy keeps allowing extension tools | Held on the managed machine in November 2026; if it changes, only the Command Palette boards remain |
+| V1 | A VS Code restart with a board open, in a real VS Code | **Open.** The restore path is unit-tested against a stubbed VS Code only |
+| V2 | Copilot choosing the tools and opening a board in a live chat, with this build | Verified 2026-11-24 |
+| V3 | Boards against real Jira Data Center data | Verified 2026-11-24 (KL26 covered the missing credentials) |
+| V4 | The organisation's Copilot policy keeps allowing extension tools | Verified 2026-11-24. If the policy changes, only the Command Palette boards remain |
 
 ## 6. Removal checklist for the end of the migration
 
