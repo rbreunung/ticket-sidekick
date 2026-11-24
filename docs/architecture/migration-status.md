@@ -10,7 +10,7 @@ This page says where the migration stands and what is still open. It is the work
 
 Update this page in every change that closes or adds an open point.
 
-**Where it stands (2026-11-23).** The code side of the migration is done: `@bitbucket` is removed, and no chat participant is left. What is open is manual: the checklist runs on the managed machine (O6, O21, O22), the keyboard and screen reader check (O17), the remaining Jira flow prose (O20) and the one not-verified point left in section 5 (V1, a restart with a board open). The stable release waits for those.
+**Where it stands (2026-11-23).** The code side of the migration is done: `@bitbucket` is removed, and no chat participant is left. What is open is manual: the checklist runs on the managed machine (O6, O21, O22), the keyboard and screen reader check (O17), the Agents window check (O23), the remaining Jira flow prose (O20) and the one not-verified point left in section 5 (V1, a restart with a board open). The stable release waits for those.
 
 **Release rule for the whole migration.** Every release made while the migration runs is a **preview** (`channel: preview`). The stable channel stays on its current version, with no hotfix release, until the whole migration is done and tested, so colleagues are not interrupted and work in the middle of a branch never has to stop for a release. Each step adds its part to the [manual checklist](manual-checklist.md) and runs it on the preview build; the one normal release at the end reruns the whole checklist. This replaces "each step is a preview release first" in the boards plan (R35, AE9).
 
@@ -235,6 +235,7 @@ O18 (no deprecation mark in the chat UI) and O19 (participant steps in the `CLAU
 | # | Open point | Note |
 | --- | --- | --- |
 | O17 | Keyboard and screen reader check of every board control | R46. The built boards use VS Code Elements and plain tables; not yet checked with a screen reader |
+| O23 | Tools and `/ts-` skills in sessions started from VS Code's Agents window | Reported 2026-11-24: there the extension's tools were missing and `/ts-bitbucket` was not found, while the Editor Chat panel had both. The Agents window starts an extension only when `package.json` declares `capabilities.agentsWindow.supported`, which was missing; added on 2026-11-24 with a guard in `bundleSmoke.test.ts`. Verify on the preview build with the Agents window part of the [manual checklist](manual-checklist.md); if skills are still missing while tools work, the Copilot CLI agent host's skill loading is the next suspect |
 | O20 | `docs/jira-flows.md` and `docs/report-import.md` still describe the removed `@jira` flows | Each marks the removed flows as removed and keeps their rules as the reference the boards and tools follow. The Bitbucket part (`docs/onboarding.md`, `docs/review-process.md`) was rewritten with the `@bitbucket` removal. Rewrite or trim the Jira prose when it next changes |
 
 ## 4. Open decisions
@@ -254,7 +255,7 @@ V2 to V4 were verified by the maintainer on 2026-11-24. Only V1 is open.
 | # | What | State |
 | --- | --- | --- |
 | V1 | A VS Code restart with a board open, in a real VS Code | **Open.** The restore path is unit-tested against a stubbed VS Code only |
-| V2 | Copilot choosing the tools and opening a board in a live chat, with this build | Verified 2026-11-24 |
+| V2 | Copilot choosing the tools and opening a board in a live chat, with this build | Verified 2026-11-24 in the Editor Chat panel. The Agents window is open point O23 |
 | V3 | Boards against real Jira Data Center data | Verified 2026-11-24 (KL26 covered the missing credentials) |
 | V4 | The organisation's Copilot policy keeps allowing extension tools | Verified 2026-11-24. If the policy changes, only the Command Palette boards remain |
 

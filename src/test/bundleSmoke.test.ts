@@ -14,6 +14,7 @@ import { JIRA_TOOLS } from '../tools/jiraTools/catalog';
 
 const root = path.resolve(__dirname, '..', '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as {
+  capabilities?: { agentsWindow?: { supported?: boolean } };
   contributes: {
     commands?: { command: string }[];
     chatParticipants?: { id: string }[];
@@ -141,6 +142,12 @@ describe('bundled extension (out/extension.js)', () => {
   it('declares and creates no chat participant, since @jira and @bitbucket are removed', () => {
     expect(manifest.contributes.chatParticipants).toBeUndefined();
     expect(registered.participants).toEqual([]);
+  });
+
+  it('declares Agents window support, so the tools and skills reach sessions started there', () => {
+    // VS Code activates an extension in the Agents window only when it opts in; without it the
+    // tools and skills exist only in the editor's chat.
+    expect(manifest.capabilities?.agentsWindow?.supported).toBe(true);
   });
 
   it('registers exactly the language model tools package.json declares', () => {

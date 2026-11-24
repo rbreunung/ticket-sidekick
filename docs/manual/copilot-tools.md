@@ -65,6 +65,7 @@ A change to several tickets at once is never done by a tool. Copilot opens a tic
 ## Troubleshooting
 
 - **The tools do not show up.** Switch the chat to **Agent** mode and open its tool list: the Jira tools are listed under Ticket Sidekick and can be switched off there. An organisation can also restrict which extension tools Copilot may use.
+- **The tools or the `/ts-` commands are missing in a session started from the Agents window.** Ticket Sidekick declares that it supports the Agents window, so VS Code starts it there too. Check that the extension is installed in your default profile and enabled in the Agents window, then reload that window. Until it works there, use the Chat view of an editor window, where the tools and skills are always available.
 - **Something fails.** Open **View → Output** and choose **Ticket Sidekick**: every tool call is logged there with how it ended.
 - **Load answers that `.jira-context/<KEY>` or its `attachments` folder is a link.** Load never writes through a link inside a ticket's folder, since a link planted there (for example by a cloned repository) could redirect its writes outside the workspace. Delete that link and load again. `.jira-context` itself may be a link, for example to another disk.
 - **A tool answers with a setup step.** Jira is not configured yet, or the token is missing: follow the step, then ask "check my Jira connection" or type `/ts-jira check`.

@@ -214,3 +214,13 @@ Run on the preview build of the review board on the managed machine, against Bit
 - [ ] Typing `@bitbucket` in a chat offers no participant.
 - [ ] `ticketSidekick.bitbucket.reviewMode`, `showTokenUsage` and `showConnectionInfo` are no longer in the Settings screen.
 - [ ] The Bitbucket walkthrough's last step opens the review board and completes after a finished review.
+
+## Agents window
+
+Run on the preview build that declares `capabilities.agentsWindow.supported`, on the managed machine. Start each session from the Agents window, not from the editor's Chat view. Open point O23 in [`migration-status.md`](migration-status.md).
+
+- [ ] The extension is listed as enabled in the Agents window, and **View → Output → Ticket Sidekick** shows it activated there.
+- [ ] The session's tool list shows the Ticket Sidekick Jira and Bitbucket tools.
+- [ ] "show me PROJ-1" runs `jira_view_ticket`; a writing tool asks first, as in the editor.
+- [ ] `/ts-jira check` and `/ts-bitbucket check` are found and answer.
+- [ ] `/ts-bitbucket review <link>` and "open the security report for PROJ" open their boards (note where the tab opens).

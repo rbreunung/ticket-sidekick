@@ -8,6 +8,11 @@
   "engines": {
     "vscode": "^1.95.0"
   },
+  "capabilities": {
+    "agentsWindow": {
+      "supported": true
+    }
+  },
   "repository": {
     "type": "GitHub",
     "url": "https://github.com/rbreunung/ticket-sidekick.git"
