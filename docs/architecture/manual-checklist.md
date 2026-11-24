@@ -33,11 +33,9 @@ Preparation: a test project with a few open bugs in two fix versions, one of the
 - [ ] Apply on page 1 changes only page 1's tickets.
 - [ ] `/ts-jira cleanup "<rule>" in <version>` uses that version in place of the rule's.
 
-**`@jira`** (removed in the email step; see "Step 2: Email import" below)
-
 **Stable channel**
 
-- [ ] A VS Code on the stable channel still has the current stable version with every `@jira` flow.
+- [ ] A VS Code on the stable channel still has the last stable version (the release rule of [`migration-status.md`](migration-status.md) holds the stable channel until the migration is done); that version still has `@jira` and `@bitbucket`.
 
 ## Step 2: Import board (Veracode and Waltz)
 
@@ -169,7 +167,6 @@ Run on the preview build on the managed machine, against Jira Data Center, with 
 - [ ] Typing `@jira` in a chat offers no participant.
 - [ ] The Command Palette has no "Create Jira ticket from email (.eml)" command.
 - [ ] `ticketSidekick.jira.showConnectionInfo` is no longer in the Settings screen; `/ts-jira check` shows the connection.
-- [ ] `@bitbucket` still reviews a pull request (only on builds before its removal on 2026-11-23).
 
 ## Step 3: PR review board
 

@@ -1,5 +1,7 @@
 # Issue: `@jira create from mail` — reply to the template/issue-type picker is not recognized, ticket is never created
 
+> **Historical (2026-11-24).** This issue concerned the `@jira` chat flow, removed on 2026-11-16 with the email import's move to the import board. Kept as a record.
+
 ## Summary
 
 After `@jira create from mail` (or `create from email`) parses one or more `.eml`

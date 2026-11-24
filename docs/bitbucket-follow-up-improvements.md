@@ -1,5 +1,8 @@
 # Bitbucket Follow-up Improvements
 
+> **Superseded history (2026-11-24).** This page describes follow-up changes to the `@bitbucket` chat participant, removed on 2026-11-23. Their successors on the review board: failed Explain and Rewrite calls keep what was there and show an error line; the token usage is shown per pass on the board (`ticketSidekick.bitbucket.showTokenUsage` is removed); a general question about a PR is answered by Copilot's agent through `bitbucket_read_findings` and `bitbucket_getPullRequestDiff`; the board is left by closing its tab. See [`review-process.md`](review-process.md) and the review board parity ledger in [`architecture/migration-status.md`](architecture/migration-status.md). `src/utils/lmRetry.ts` still cites this page for the retry rules.
+
+
 ## Motivation
 
 Several gaps surfaced during daily use of the `@bitbucket` review participant:

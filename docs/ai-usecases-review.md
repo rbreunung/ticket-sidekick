@@ -1,5 +1,14 @@
 # AI Use-Case Review
 
+> **Superseded history (2026-11-24).** This review was written for the `@jira` and `@bitbucket` chat participants, which were removed on 2026-11-16 and 2026-11-23. Most of it describes code that no longer exists: the thirteen calls in section 1 (intent parsing, content generation, comment synthesis, section coverage, finding matching) are gone, the onboarding ideas in section 3 (a `/` menu, a welcome card) concern the chat entry point, and the Jira-side token budget in 4b has no call left to budget. Read [`ai-usage.md`](../ai-usage.md) for where the model is used now. What still applies:
+>
+> - Section 2, "What already works well": anchor verification, the untrusted-content fence and the fail-open critic are kept by the review board (see [`review-process.md`](review-process.md)).
+> - 4a, retry once when the reply cannot be parsed: done (`UnparseableReplyError` is retried like a provider error).
+> - 5b, document the review focus setting with examples: `ticketSidekick.bitbucket.reviewInstructions` is in [`manual/settings-reference.md`](manual/settings-reference.md).
+> - 5d, severity labels are fixed on purpose: still true.
+> - Section 6, a local git-diff review: still parked, not planned.
+
+
 A plain-language review of how `@jira` and `@bitbucket` use the AI model, written to surface
 concrete, picked-up-later improvements. Scope of this review: onboarding/first-contact
 experience, reliability, and prompt wording. Out of scope for now: other-language support,

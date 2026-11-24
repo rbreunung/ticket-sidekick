@@ -248,6 +248,8 @@ already tracked there.
 
 ## Where documentation belongs
 
+[`docs/README.md`](docs/README.md) is the index: which documents are current and which are history (dated plans and specs, which still name the removed chat participants).
+
 New multi-step feature-flow detail belongs in the relevant domain doc —
 [`docs/jira-flows.md`](docs/jira-flows.md), [`docs/report-import.md`](docs/report-import.md),
 [`docs/review-process.md`](docs/review-process.md), or a new domain doc when
