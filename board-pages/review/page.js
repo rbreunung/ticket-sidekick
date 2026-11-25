@@ -8,7 +8,8 @@ import { announce, api, h, startBoard } from '../shared/board.js';
 // passes did not review and the findings they dropped. Each finding shows its line, provenance, confidence and source, its description and
 // recommendation, and has Explain, a checkbox that selects it for Post and Copy
 // (and drafts its comment under it), the draft with Rewrite, Undo and Regenerate; after the list,
-// Post and Copy for Teams or as Markdown. Copy names only the format and the selected numbers: the
+// Post and Copy for Teams or as Markdown. Discuss in chat under each finding opens Copilot Chat with
+// a prompt the extension builds (or copies it when the chat cannot be opened). Copy names only the format and the selected numbers: the
 // extension builds the text. While a pass runs, the live region reads its progress, e.g.
 // "Security pass: 2 of 5 batches"; while the regular pass runs, the results list the findings of
 // its finished batches.
@@ -195,6 +196,8 @@ function passPicker(picker, board, off) {
 
 /** The last Copy's result line, shown after the Copy buttons and read out by the live region. */
 let copyLine;
+/** The last Discuss in chat's result line, under its finding: `{ number, text, error }`. */
+let discussLine;
 
 /** Every draft box's text in the session, so a typed draft is saved before a run, a selection or Post. */
 function draftFields(r) {
@@ -270,13 +273,33 @@ function findingItem(f, r, board, off) {
       id: `explain-${n}`, secondary: true, disabled: off || explaining,
       onClick: () => afterSaving(board, draftFields(r), () => board.run({ type: 'explain', number: n })),
     }, explaining ? 'Explaining…' : 'Explain')],
+    ' ', h('vscode-button', {
+      id: `discuss-${n}`, secondary: true, disabled: off,
+      onClick: () => afterSaving(board, draftFields(r), () => discuss(board, n)),
+    }, 'Discuss in chat'),
+    discussLine?.number === n ? h('p', { id: `discuss-result-${n}`, class: discussLine.error ? 'banner error' : 'muted', role: discussLine.error ? 'alert' : null }, discussLine.text) : null,
     f.threadError ? h('p', { id: `thread-error-${n}`, class: 'banner error', role: 'alert' }, f.threadError) : null,
     f.draft ? draftBlock(f, r, board, off) : null);
+}
+
+/** Discuss in chat names the finding only; the extension builds the prompt and opens Copilot Chat. */
+async function discuss(board, n) {
+  copyLine = undefined;
+  try {
+    const reply = await api('discuss', { number: n });
+    discussLine = reply.outcome === 'opened' ? { number: n, text: `Copilot Chat is open with a prompt about #${n}. Add your question and send it.` }
+      : reply.outcome === 'copied' ? { number: n, text: `Copilot Chat could not be opened, so the prompt about #${n} was copied. Paste it into Copilot Chat in Agent mode and add your question.` }
+        : { number: n, text: `Not opened: ${reply.reason}`, error: true };
+  } catch (err) {
+    discussLine = { number: n, text: `Not opened: ${err.message}`, error: true };
+  }
+  board.repaint();
 }
 
 /** Copy names the format and the selected numbers; the extension builds the text from the session. */
 async function copy(board, r, format) {
   const numbers = r.findings.filter(f => f.selected).map(f => f.number);
+  discussLine = undefined;
   try {
     const reply = await api('copy', { format, numbers });
     copyLine = reply.outcome === 'copied'
@@ -343,7 +366,7 @@ startBoard({
   root: document.getElementById('root'),
   loading: () => h('p', { class: 'muted' }, 'Reading the pull request…'),
   render: (view, board, locked) => {
-    announce(view.progress ?? copyLine?.text ?? '');
+    announce(view.progress ?? discussLine?.text ?? copyLine?.text ?? '');
     return h('div', {},
       headerLine(view),
       view.stage === 'first-step' ? [view.progress ? h('p', { id: 'progress-text', class: 'muted' }, view.progress) : null, firstStep(view, board, locked)]

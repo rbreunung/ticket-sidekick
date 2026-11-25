@@ -3,7 +3,7 @@ import type { SessionManager } from '../sessions/sessionManager';
 import { SessionError } from '../sessions/sessionTypes';
 import { IMPORT_KIND, withReportPath, type ImportRecipe, type ReportKind } from './import/recipe';
 import { IMPORT_START_BOARD, type ImportStartScreen } from './import/startScreen';
-import { reviewCopyText } from './review/findings';
+import { discussPrompt, reviewCopyText } from './review/findings';
 import type { ReviewSession } from './review/kind';
 import { REVIEW_KIND } from './review/recipe';
 import { REVIEW_START_BOARD, type ReviewStartScreen } from './review/startScreen';
@@ -51,6 +51,11 @@ export interface BoardHost {
   closeSession?(kind: string, id: string): void;
   /** Puts text on the system clipboard; the text is always built by the extension. */
   copyText?(text: string): Promise<void>;
+  /**
+   * Opens Copilot Chat in agent mode with this prompt typed in and not sent; throws when the chat
+   * cannot be opened. The prompt is always built by the extension.
+   */
+  openChat?(prompt: string): Promise<void>;
   /** Opens a web link in the browser; VS Code asks the user first. Only ever called with an http or https URL. */
   openExternal?(url: string): Promise<void>;
 }
@@ -146,6 +151,34 @@ async function copyFindings(manager: SessionManager, { kind, id }: BoardTarget, 
   return { outcome: 'copied', count: built.count };
 }
 
+/**
+ * Discuss in chat on the review board: the page names the finding number, the extension builds the
+ * prompt and opens Copilot Chat with it. When the chat cannot be opened, the prompt goes to the
+ * clipboard and the answer says so, so the page can tell the developer to paste it.
+ */
+async function discussFinding(manager: SessionManager, { kind, id }: BoardTarget, body: Record<string, unknown>, host: BoardHost): Promise<unknown> {
+  if (kind !== REVIEW_KIND || !host.openChat) throw new BoardRequestError(404, 'Unknown request.');
+  const number = body.number;
+  if (typeof number !== 'number' || !Number.isInteger(number)) throw new BoardRequestError(400, 'Invalid finding.');
+  const session = await manager.read(kind, id) as ReviewSession | undefined;
+  if (!session) throw new BoardRequestError(409, 'The board is still loading.');
+  const built = discussPrompt(session, number);
+  if (!built.ok) throw new BoardRequestError(400, built.reason);
+  try {
+    await host.openChat(built.prompt);
+    return { outcome: 'opened' };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    if (!host.copyText) return { outcome: 'failed', reason };
+    try {
+      await host.copyText(built.prompt);
+    } catch (copyErr) {
+      return { outcome: 'failed', reason: copyErr instanceof Error ? copyErr.message : String(copyErr) };
+    }
+    return { outcome: 'copied' };
+  }
+}
+
 /** The longest link a page may ask to open. */
 const MAX_LINK_CHARS = 4_000;
 
@@ -207,6 +240,8 @@ async function sessionBoard(manager: SessionManager, target: BoardTarget, op: st
       return copyFindings(manager, target, body, host);
     case 'open-link':
       return openLink(body, host);
+    case 'discuss':
+      return discussFinding(manager, target, body, host);
     default:
       throw new BoardRequestError(404, 'Unknown request.');
   }

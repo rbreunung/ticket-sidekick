@@ -4,6 +4,7 @@ import { tokenBudgetOf } from '../../review/engine/plumbing';
 import { askAboutFinding, regenerateComment, rewriteComment, type CallResult, type ThreadCallInput } from '../../review/findingCalls';
 import { formatShare, type ShareFormat, type SharedText } from '../../review/shareFormat';
 import { PrReviewService } from '../../services/PrReviewService';
+import { READ_FINDINGS_REFERENCE, READ_FINDINGS_TOOL } from '../../tools/bitbucketTools/toolNames';
 import type { Applied, ApplyProgress, Planned, Reduced, RunBegun, RunFinished } from '../../sessions/boardKind';
 import type { ApplyLineResult, WritePlan } from '../../sessions/sessionTypes';
 import { DEFAULT_CONFIDENCE_THRESHOLD, type ReviewBoardDeps } from './deps';
@@ -348,6 +349,27 @@ export async function applyPost(
     await progress?.({ working, done: i + 1, total: items.length });
   }
   return { results, derived: session.derived, working };
+}
+
+/**
+ * The prompt Discuss in chat starts Copilot Chat with: the pull request link, the finding number,
+ * the reviewed commit and the tool that reads the finding. It carries no finding text: the agent
+ * reads that through the tool, which marks it as data.
+ */
+export function discussPrompt(session: ReviewSession, number: number): { ok: true; prompt: string } | { ok: false; reason: string } {
+  const review = session.working.review;
+  if (!review) return { ok: false, reason: 'There is no review to discuss.' };
+  if (!review.store.findings.some(f => f.id === number)) return { ok: false, reason: `This review has no finding #${number}.` };
+  const { url } = session.recipe;
+  return {
+    ok: true,
+    prompt: [
+      `Pull request: ${url}`,
+      `Finding #${number} of its review on the Ticket Sidekick review board, which read commit ${shortCommit(review.snapshot.reviewedCommit)}.`,
+      `First read finding #${number} with #${READ_FINDINGS_REFERENCE} (${READ_FINDINGS_TOOL}, url: ${url}, finding: ${number}), then answer my question about it.`,
+      'My question: ',
+    ].join('\n'),
+  };
 }
 
 /**

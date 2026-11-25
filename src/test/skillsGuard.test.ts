@@ -360,8 +360,8 @@ const ROUTERS = [
     prefix: 'bitbucket_',
     tools: bitbucketNames,
     // The pull request tools are for Copilot's own reading and commenting; the review runs on the board,
-    // which reads its findings with the read-findings tool.
-    left: new Set(['bitbucket_getPullRequest', 'bitbucket_getPullRequestDiff', 'bitbucket_postComment', 'bitbucket_read_findings']),
+    // which reads its findings with the read-findings tool and the reviewed files with the file tool.
+    left: new Set(['bitbucket_getPullRequest', 'bitbucket_getPullRequestDiff', 'bitbucket_postComment', 'bitbucket_read_findings', 'bitbucket_read_file']),
     case2: 'read `help-review.md` in this skill\'s folder and reply with its text exactly; read no other file and call no other tool.',
     helpEnd: ['How a review works: help review'],
   },

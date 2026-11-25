@@ -18,6 +18,8 @@ let state: BoardState;
 let waiting: Array<() => void> = [];
 /** What the extension answers the page's Copy and Post preview. */
 let copyAnswer: unknown = { outcome: 'copied', count: 2 };
+/** What the extension answers the page's Discuss in chat. */
+let discussAnswer: unknown = { outcome: 'opened' };
 let previewAnswer: unknown = { planId: 'p'.repeat(48), title: 'Post 1 comment(s)', lines: [{ target: '#2', change: 'Post inline' }], risky: true };
 /** A refusal the extension gives an action, when set; `undefined` lets the action through. */
 let refuseAction: ((action: Record<string, unknown>) => { status: number; message: string } | undefined) | undefined;
@@ -128,6 +130,7 @@ async function loadBoard(initial: BoardState): Promise<void> {
     }
     if (op === 'run') return state;
     if (op === 'copy') return copyAnswer;
+    if (op === 'discuss') return discussAnswer;
     if (op === 'preview') return previewAnswer;
     throw { status: 404, message: 'Unknown request.' };
   });
@@ -223,8 +226,8 @@ describe('the review board page: results', () => {
     await loadBoard(boardState(view({ stage: 'review', results: results() })));
     expect(must('pr-line').textContent).toBe('PROJ/app#482 Add export by Jane Smith');
     expect(must('review-header').textContent).toBe('Model: GPT (copilot) · Passes run: Regular');
-    expect(must('finding-2').textContent.trim()).toBe('#2 Critical src/a.ts:4 SQL built from input Explain');
-    expect(must('finding-1').textContent.trim()).toBe('#1 Suggestion src/b.ts Maybe a race (location unverified) Explain');
+    expect(must('finding-2').textContent.trim()).toBe('#2 Critical src/a.ts:4 SQL built from input Explain Discuss in chat');
+    expect(must('finding-1').textContent.trim()).toBe('#1 Suggestion src/b.ts Maybe a race (location unverified) Explain Discuss in chat');
     const order = page.root.elements().map(el => el.id).filter(id => ['review-header', 'findings'].includes(id));
     expect(order).toEqual(['review-header', 'findings']);
     for (const id of ['coverage', 'recheck', 'requirements-source', 'requirements-failure', 'reword']) expect(byId(id), id).toBeNull();
@@ -473,6 +476,20 @@ describe('the review board page: findings, drafts, Post and Copy', () => {
     await click(must('copy-markdown'));
     expect(posted('copy').at(-1)).toEqual({ format: 'markdown', numbers: [2] });
     expect(must('copy-result').textContent).toBe('Not copied: clipboard unavailable');
+  });
+
+  it('Discuss in chat names only the finding number, and says when the prompt was copied because the chat could not open', async () => {
+    discussAnswer = { outcome: 'opened' };
+    await loadBoard(boardState(view({ stage, results: results() })));
+    await click(must('discuss-2'));
+    expect(posted('discuss')).toEqual([{ number: 2 }]);
+    expect(must('discuss-result-2').textContent).toBe('Copilot Chat is open with a prompt about #2. Add your question and send it.');
+    discussAnswer = { outcome: 'copied' };
+    await click(must('discuss-1'));
+    expect(posted('discuss').at(-1)).toEqual({ number: 1 });
+    expect(byId('discuss-result-2')).toBeNull();
+    expect(must('discuss-result-1').textContent).toMatch(/^Copilot Chat could not be opened, so the prompt about #1 was copied\./);
+    expect(page.document.getElementById('board-live')?.textContent).toMatch(/prompt about #1 was copied/);
   });
 
   it('Copy with nothing selected sends no numbers, for every finding', async () => {

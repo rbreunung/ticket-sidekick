@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { answerBoardRequest, asBoardRequest, type BoardHost } from '../boards/boardMessages';
 import { ImportStartScreen } from '../boards/import/startScreen';
 import { ReviewStartScreen } from '../boards/review/startScreen';
+import { reviewKind } from '../boards/review/kind';
+import { emptyFirstStep } from '../boards/review/firstStep';
+import type { ReviewBoardDeps } from '../boards/review/deps';
+import { REVIEW_KIND, reviewSessionId } from '../boards/review/recipe';
+import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 import { importKind } from '../boards/import/kind';
 import { securityReportKind, type SecurityReportDeps } from '../boards/securityReport/kind';
 import { registerKind, type BoardKind } from '../sessions/boardKind';
@@ -343,6 +348,110 @@ describe('the import start screen', () => {
     expect((await askStart(boardHost, 'state')).status).toBe(404);
     expect((await askStart(boardHost, 'apply', { planId: 'x' })).status).toBe(404);
     expect(await askStart(host, 'view')).toEqual({ status: 404, body: { error: 'There is no import start screen here.' } });
+  });
+});
+
+describe('Discuss in chat on the review board', () => {
+  const PR_URL = 'https://bitbucket.example.com/projects/PROJ/repos/app/pull-requests/482';
+  const REVIEWED = '4f2a91c0d1e24f2a91c0d1e24f2a91c0d1e24f2a';
+  const SECRET_TITLE = 'Transfer amount is never checked';
+  let reviewManager: SessionManager;
+  let chats: string[];
+  let copied: string[];
+  let chatFails: boolean;
+  let reviewHost: BoardHost;
+
+  /** A stored review of the pull request with finding #12, as the board leaves it after a regular pass. */
+  async function storedReview(): Promise<string> {
+    const id = reviewSessionId({ url: PR_URL });
+    const store = new SessionStore(path.join(dir, 'review-sessions'));
+    await store.save({
+      id, kind: REVIEW_KIND, formatVersion: reviewKind.formatVersion, revision: 3, createdAt: 1, lastUsedAt: 1, conflicts: [],
+      recipe: { url: PR_URL, host: 'bitbucket.example.com', project: 'PROJ', repo: 'app', prId: 482 },
+      derived: { readAt: 1, fingerprints: { head: REVIEWED }, data: { pr: { title: 'Add transfers', author: 'Jane', headCommit: REVIEWED }, jiraConfigured: false, models: { options: [] } } },
+      working: {
+        stage: 'review', firstStep: emptyFirstStep(), passes: [], threads: {}, drafts: {},
+        review: {
+          snapshot: { target: { project: 'PROJ', repo: 'app', prId: 482 }, pr: {}, reviewedCommit: REVIEWED, batches: [] },
+          store: {
+            findings: [{ id: 12, file: 'src/TransferController.java', line: 40, severity: 'critical', title: SECRET_TITLE, description: 'The amount goes straight to the ledger.', recommendation: 'Check it.' }],
+            nextNumber: 13, stepsRun: ['regular'], criticChecked: [],
+          },
+          suggestion: { kind: 'none-suggested' },
+        },
+      },
+    } as never);
+    return id;
+  }
+
+  async function askReview(id: string, op: string, body: Record<string, unknown>): Promise<{ status: number; body: any }> {
+    const reply = await answerBoardRequest(reviewManager, { kind: REVIEW_KIND, id }, { id: nextId++, op, body }, reviewHost, message => errors.push(message));
+    return reply.ok ? { status: 200, body: reply.data } : { status: reply.status, body: { error: reply.error } };
+  }
+
+  beforeEach(() => {
+    chats = [];
+    copied = [];
+    chatFails = false;
+    const client = new MockBitbucketClient();
+    client.prOverride = { fromCommitHash: REVIEWED };
+    const reviewDeps = { bitbucket: async () => ({ configured: true, client }), jira: async () => undefined, models: { list: async () => [], handle: async () => undefined } } as unknown as ReviewBoardDeps;
+    reviewManager = new SessionManager({
+      store: new SessionStore(path.join(dir, 'review-sessions')),
+      kinds: [registerKind(reviewKind, () => reviewDeps)],
+      now: () => Date.now(), confirm: async () => true, saveFile: async () => true,
+    });
+    reviewHost = {
+      ...host,
+      openChat: async query => {
+        if (chatFails) throw new Error('command workbench.action.chat.open not found');
+        chats.push(query);
+      },
+      copyText: async text => { copied.push(text); },
+    };
+  });
+
+  it('opens Copilot Chat with a prompt naming the pull request link, the finding number and the reviewed commit, and no finding text', async () => {
+    const id = await storedReview();
+
+    const reply = await askReview(id, 'discuss', { number: 12 });
+
+    expect(reply).toEqual({ status: 200, body: { outcome: 'opened' } });
+    expect(chats).toHaveLength(1);
+    const prompt = chats[0];
+    expect(prompt).toContain(PR_URL);
+    expect(prompt).toContain('#12');
+    expect(prompt).toContain('4f2a91c0d1e2');
+    expect(prompt).toContain('#bitbucketReadFindings');
+    expect(prompt).not.toContain(SECRET_TITLE);
+    expect(prompt).not.toContain('ledger');
+    expect(copied).toEqual([]);
+  });
+
+  it('copies the prompt to the clipboard and says so when the chat cannot be opened', async () => {
+    const id = await storedReview();
+    chatFails = true;
+
+    const reply = await askReview(id, 'discuss', { number: 12 });
+
+    expect(reply).toEqual({ status: 200, body: { outcome: 'copied' } });
+    expect(copied).toHaveLength(1);
+    expect(copied[0]).toContain(PR_URL);
+    expect(copied[0]).toContain('#12');
+  });
+
+  it('refuses a finding the review does not have, and is not offered on another board', async () => {
+    const id = await storedReview();
+    expect((await askReview(id, 'discuss', { number: 99 })).status).toBe(400);
+    expect((await askReview(id, 'discuss', { number: 'x' })).status).toBe(400);
+    const state = await openReady();
+    host.openChat = async query => { chats.push(query); };
+    try {
+      expect((await ask(report(state.id), 'discuss', { number: 12 })).status).toBe(404);
+    } finally {
+      delete host.openChat;
+    }
+    expect(chats).toEqual([]);
   });
 });
 

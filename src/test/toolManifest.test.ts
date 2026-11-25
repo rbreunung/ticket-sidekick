@@ -2,7 +2,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { BITBUCKET_TOOLS } from '../tools/bitbucketTools/catalog';
+import { BITBUCKET_TOOLS, READ_FINDINGS_REFERENCE } from '../tools/bitbucketTools/catalog';
 import { JIRA_TOOLS } from '../tools/jiraTools/catalog';
 import { callTool, defineTool, ToolFailure } from '../tools/toolDefinition';
 import { confirmationFor, confirmationWithPreview, needsConfirmation } from '../tools/jiraToolConfirmation';
@@ -44,7 +44,16 @@ describe('the tools in package.json', () => {
       bitbucket_getPullRequestDiff: 'bitbucketGetPullRequestDiff',
       bitbucket_postComment: 'bitbucketPostComment',
       bitbucket_read_findings: 'bitbucketReadFindings',
+      bitbucket_read_file: 'bitbucketReadFile',
     });
+    // Discuss in chat names the read-findings tool by its reference name in the prompt it builds.
+    expect(names.bitbucket_read_findings).toBe(READ_FINDINGS_REFERENCE);
+  });
+
+  it('offers the file tool as read-only, so it never asks before reading', () => {
+    const readFile = BITBUCKET_TOOLS.find(t => t.name === 'bitbucket_read_file')!;
+    expect(readFile.annotations.readOnlyHint).toBe(true);
+    expect(Object.keys(readFile.inputSchema).sort()).toEqual(['path', 'url']);
   });
 
   it('carry required inputs and descriptions the model can read', () => {
