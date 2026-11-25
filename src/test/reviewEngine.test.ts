@@ -780,7 +780,7 @@ describe('regular pass: the rules every review pass keeps', () => {
     expect(result.review!.store.findings.map((f) => f.title)).toEqual(['Found on retry']);
   });
 
-  it('gives the review instructions and the upfront question to every review call, the persona passes and the critic', async () => {
+  it('gives the review instructions and the own-text background to every review call, the persona passes and the critic', async () => {
     const t = setup({
       files: 1,
       respond: (c) => {

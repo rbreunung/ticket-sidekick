@@ -1111,7 +1111,7 @@
             "type": "string",
             "scope": "application",
             "default": "",
-            "description": "The id of the language model the pull request review board uses for every call: the passes, Explain, Rewrite, the goal rewording and the requirements check. When it is empty or the model is not available, the review board asks for one on its first step and saves the pick here. The email boilerplate check falls back to it when ticketSidekick.email.checkModel is empty."
+            "description": "The id of the language model the pull request review board uses for every call: the passes, the discussion of a finding, Regenerate and Rewrite. When it is empty or the model is not available, the review board asks for one on its first step and saves the pick here. The email boilerplate check falls back to it when ticketSidekick.email.checkModel is empty."
           }
         }
       },

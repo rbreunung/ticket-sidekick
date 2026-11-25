@@ -132,13 +132,13 @@ Type the PR link — the review opens as a **board in an editor tab**:
 /ts-bitbucket review https://bitbucket.company.com/projects/PROJ/repos/backend/pull-requests/42
 ```
 
-First step: pick the review model and what to check against (a Jira ticket, a goal, or nothing). Then the staged review runs with live steps and **Stop**:
+First step: pick the review model and a background for the reviewer (a Jira ticket, your own text, or nothing). Then the staged review runs, with a summary band and **Stop**:
 
-- the regular pass, then the persona passes (security, performance, reliability, maintainability) and the critic
-- findings numbered once, with severity, verified line and confidence
-- the requirements coverage against the ticket
+- the regular pass, then the persona passes you pick (security, performance, reliability, maintainability) at the same time, and the critic last
+- findings appear as each batch finishes, numbered once, with severity, verified line and confidence
+- changes that go against the background are marked *against goal*
 
-Per finding: **Explain** answers a question about it.
+Per finding: a discussion that starts with **Explain** and takes follow-ups, or **Discuss in chat** to hand it to Copilot.
 
 ---
 

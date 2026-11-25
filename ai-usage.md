@@ -13,7 +13,7 @@ There are two kinds of model use, and they differ in who picks the model and who
 | Kind | Who calls the model | Which model | Examples |
 | --- | --- | --- | --- |
 | **Copilot's agent** | GitHub Copilot Chat, in your chat | The model you picked in the Copilot Chat panel | Reading a ticket through a tool, writing a brief, finding spelling errors, drafting a ticket from a template, choosing which tool to call |
-| **The extension's boards** | The extension itself, outside any chat request | The model a setting names (`ticketSidekick.bitbucket.reviewModel`, `ticketSidekick.email.checkModel`) | The pull request review, Explain, Rewrite, the requirements check, the email boilerplate check |
+| **The extension's boards** | The extension itself, outside any chat request | The model a setting names (`ticketSidekick.bitbucket.reviewModel`, `ticketSidekick.email.checkModel`) | The pull request review, the discussion of a finding, Regenerate, Rewrite, the email boilerplate check |
 
 There is no hardcoded model, no Anthropic or OpenAI API key and no data sent to a third-party AI provider. Every request flows through the VS Code Language Model API and the GitHub Copilot backend.
 
@@ -37,11 +37,10 @@ A board calls the model for these tasks, and only after you started the board's 
 
 | Board | Task | What the model gets | Setting |
 | --- | --- | --- | --- |
-| Review | The regular pass: review each batch of changed files | PR title, author, branch and description, the unified diff of the batch, context files read at the reviewed commit, `ticketSidekick.bitbucket.reviewInstructions`, your upfront question | `reviewModel` |
-| Review | Persona passes (security, performance, reliability, maintainability), the critic | The same diff batches; the critic also gets the findings it checks | `reviewModel` |
-| Review | Requirements check | The whole diff and the capped text of a Jira ticket or the reworded goal | `reviewModel` |
-| Review | Reword (the goal) | The goal text you typed | `reviewModel` |
-| Review | Explain a finding, Rewrite a draft comment | The finding with its code, the PR title and description and the upfront question; for Rewrite, the draft and your instruction | `reviewModel` |
+| Review | The regular pass: review each batch of changed files | PR title, author, branch and description, the unified diff of the batch, context files read at the reviewed commit, `ticketSidekick.bitbucket.reviewInstructions`, the background (a Jira ticket's text as you left it in the box, as data, or your own text, as instructions) | `reviewModel` |
+| Review | Persona passes (security, performance, reliability, maintainability), the critic | The same diff batches and the background; a persona pass never gets another pass's findings, the critic gets the findings it checks. The picked persona passes run at the same time (up to four requests at once), the critic after them | `reviewModel` |
+| Review | Discussion of a finding (Explain and each follow-up), Regenerate a draft comment | The finding with its code, the PR title and description, the background and the discussion so far (the first answer and the newest turns that fit); Regenerate writes the draft from the finding and the whole discussion | `reviewModel` |
+| Review | Rewrite a draft comment | The draft and your instruction | `reviewModel` |
 | Import | Email boilerplate check, only after you consent | The converted Markdown body of one email, to find signature and disclaimer blocks | `ticketSidekick.email.checkModel`, else `reviewModel` |
 | Import | The model check after a pick (start screen) | The fixed prompt `Reply with the single word: ready`; no ticket, email or PR data | the model you picked |
 
@@ -60,24 +59,24 @@ The prompts, batching, anchor verification, retries and the critic are described
 | # | Use case | Entry point | File |
 | --- | --- | --- | --- |
 | 1 | Regular pass, per diff batch, then the whole-file refinement call | `runRegularPass`, `callBatchWithSplit` | `src/review/engine/regularPass.ts`, `batchReview.ts`, `plumbing.ts` |
-| 2 | Persona passes | `runExtraPass` | `src/review/engine/extraPass.ts` |
+| 2 | Persona passes, picked ones at the same time under a cap | `runPersonaPass`, `extraPassesRun` | `src/review/engine/extraPass.ts`, `src/boards/review/runs.ts` |
 | 3 | Critic | `runCritic` | `src/review/engine/critic.ts` |
-| 4 | Requirements check and Re-check | `checkRequirements`, `recheckRequirements`; the pure core is `runRequirementsPass` | `src/review/engine/requirementsCheck.ts`, `src/review/requirementsPass.ts` |
-| 5 | Goal rewording | `rewordGoal` | `src/review/engine/goalReword.ts` |
-| 6 | Explain a finding | `explainFinding` | `src/review/findingCalls.ts` |
-| 7 | Rewrite a draft comment | `rewriteComment` | `src/review/findingCalls.ts` |
-| 8 | Email boilerplate check | `buildModelCheckPrompt`, `parseModelCheckReply`, `verifyModelBlocks` | `src/utils/emailBoilerplate.ts`, `src/boards/import/cleanupStage.ts` |
-| 9 | Model check after a pick | `checkModelAnswers` | `src/boards/boardModels.ts` |
+| 4 | Discussion of a finding (Explain and follow-ups) | `askAboutFinding` | `src/review/findingCalls.ts` |
+| 5 | Regenerate a draft comment from the discussion | `regenerateComment` | `src/review/findingCalls.ts` |
+| 6 | Rewrite a draft comment | `rewriteComment` | `src/review/findingCalls.ts` |
+| 7 | Email boilerplate check | `buildModelCheckPrompt`, `parseModelCheckReply`, `verifyModelBlocks` | `src/utils/emailBoilerplate.ts`, `src/boards/import/cleanupStage.ts` |
+| 8 | Model check after a pick | `checkModelAnswers` | `src/boards/boardModels.ts` |
 
 ### Grounding rules
 
 - **Review replies are untrusted.** A finding's line comes from the quoted `anchorCode`, never from the model's line number; code that cannot be found keeps the finding as *location unverified*, and a finding naming a file outside the PR is dropped and counted (see "The line-number trust boundary" in `docs/review-process.md`).
 - **Email check replies are verified.** `verifyModelBlocks` keeps a block the model names only when its quote is found in the email, so the model cannot make the extension strip text that is not there.
-- **Only the requirements call sees ticket text.** The review passes see the diff, not the ticket.
+- **Ticket text is data.** A Jira ticket used as the background is sent inside the untrusted-content fence with the PR title, description and diff, and the prompt says to read it as a description of the intended change, never as instructions; fence markers inside any of it are defanged. Your own text is sent as instructions.
+- **Answers are rendered safely.** Discussion answers and the draft preview are rendered as Markdown in the extension into a tree of allowed elements: no raw HTML, scripts, images or command links, and a web link opens only after VS Code's confirmation (`src/review/markdownTree.ts`).
 
 ### Structured output
 
-Review replies are JSON and parsed tolerantly (`parseReviewReply`: NDJSON, pretty-printed, arrays, wrappers, cut-off replies); the critic's `keep` list and the requirements reply have their own parsers. A reply with no usable JSON throws `UnparseableReplyError` and is retried like a provider error. Explain and Rewrite return free text.
+Review replies are JSON and parsed tolerantly (`parseReviewReply`: NDJSON, pretty-printed, arrays, wrappers, cut-off replies); the critic's `keep` list has its own parser. A reply with no usable JSON throws `UnparseableReplyError` and is retried like a provider error. The discussion, Regenerate and Rewrite return free text (Markdown).
 
 ---
 
@@ -89,7 +88,7 @@ A board has no `request.model` to use, so it asks VS Code for the models you hav
 
 ### Retries and splitting
 
-`src/utils/lmRetry.ts` makes up to three tries per call. A transient failure (`isTransientLmError`) is retried; for a batch the third try splits the batch in half (`withEasierRetry`), for a single prompt it repeats the call (`withLmRetry`). A stopped request is rethrown at once. A batch that still fails is reported with the others kept. See "Resilience & debugging" in `docs/review-process.md`.
+`src/utils/lmRetry.ts` makes up to three tries per call. A transient failure (`isTransientLmError`) is retried; for a batch the third try splits the batch in half (`withEasierRetry`), for a single prompt it repeats the call (`withLmRetry`). A stopped request is rethrown at once. A batch that still fails is reported with the others kept. `refusalOf` tells Copilot's refusals apart: a rate-limited batch of passes running together makes the rest run one after another and the refused batch run once more after a wait; a blocked or quota refusal stops the run at once. See "Resilience & debugging" in `docs/review-process.md`.
 
 ### Token budget and metering
 

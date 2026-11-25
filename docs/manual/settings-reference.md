@@ -181,7 +181,7 @@ Known confidentiality headers, legal footers and signatures to remove from impor
 "ticketSidekick.bitbucket.reviewModel": "claude-sonnet-4.5"
 ```
 
-The id of the language model every call of the review board uses: the passes, Explain, Rewrite, the goal rewording and the requirements check. When it is empty or the model is not available, the board asks for one on its first step and saves your pick here. The email boilerplate check falls back to it when `ticketSidekick.email.checkModel` is empty.
+The id of the language model every call of the review board uses: the passes, the discussion of a finding, Regenerate and Rewrite. When it is empty or the model is not available, the board asks for one on its first step and saves your pick here. The email boilerplate check falls back to it when `ticketSidekick.email.checkModel` is empty.
 
 **Optional: custom review instructions**
 

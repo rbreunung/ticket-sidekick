@@ -130,7 +130,7 @@ const SKIPPED_FILES: BoardEquivalent = {
 };
 const INSTRUCTIONS: BoardEquivalent = {
   actions: ['start', 'passes'],
-  tests: [[ENGINE, 'gives the review instructions and the upfront question to every review call, the persona passes and the critic']],
+  tests: [[ENGINE, 'gives the review instructions and the own-text background to every review call, the persona passes and the critic']],
 };
 const PERSONAS: BoardEquivalent = {
   actions: ['pick-pass', 'passes'],
@@ -190,10 +190,11 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     ],
   },
   'diff-question': {
-    tools: ['bitbucket_read_findings', 'bitbucket_getPullRequestDiff'],
+    tools: ['bitbucket_read_findings', 'bitbucket_getPullRequestDiff', 'bitbucket_read_file'],
     tests: [
       [TOOLS, 'lists every finding by severity, and leaves a finding labelled probably a false alarm out of the verdict'],
       [TOOLS, 'bitbucket_getPullRequestDiff asks for the configured context lines when the call gives none'],
+      [TOOLS, 'returns a file of the repository at the reviewed commit'],
     ],
   },
   'follow-up-failure': {

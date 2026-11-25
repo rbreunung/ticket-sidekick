@@ -27,7 +27,7 @@ Which documents describe the product as it is, and which are history. Last revie
 | [`architecture/manual-checklist.md`](architecture/manual-checklist.md) | What to run by hand on the managed machine before the stable release |
 | [`jira-flows.md`](jira-flows.md) | Where the removed `@jira` flows went; the cleanup rules the ticket list board keeps |
 | [`report-import.md`](report-import.md) | The import board and the rules of the Veracode, Waltz and email importers |
-| [`review-process.md`](review-process.md) | The staged pull request review: batching, anchors, passes, critic, requirements check |
+| [`review-process.md`](review-process.md) | The staged pull request review: batching, anchors, the background, passes, critic, the discussion of a finding, the agent's tools |
 | [`../ai-usage.md`](../ai-usage.md) | Every place the extension calls a language model |
 | [`known-limitations.md`](known-limitations.md) | Consciously deferred limitations, checked periodically |
 | [`solutions/`](solutions/) | Solved problems, by category (reference, not superseded) |

@@ -6,7 +6,7 @@ Jira and Bitbucket inside GitHub Copilot Chat in VS Code:
 
 - **Jira tools for Copilot** — Copilot's agent views, finds, creates, comments on, moves and updates Jira tickets through Ticket Sidekick's tools, or you type a command such as `/ts-jira view PROJ-123`
 - **Boards** — ticket lists, the security report and the imports of Veracode reports, OSS reports and emails open in an editor tab, where you select, preview and apply changes; a board comes back after a restart
-- **Pull request review** — a Bitbucket pull request is reviewed on its own board: a regular pass first, then the extra passes you pick, with Explain, editable comments posted to Bitbucket, and Copy for Teams
+- **Pull request review** — a Bitbucket pull request is reviewed on its own board: a regular pass first, then the extra passes you pick, with a discussion per finding, editable comments posted to Bitbucket, and Copy for Teams
 
 > **`@jira` and `@bitbucket` are gone.** Every task runs from a Copilot chat with the Jira and Bitbucket tools and the `/ts-jira` and `/ts-bitbucket` commands, or on a board. Start with [Copilot tools and boards](#copilot-tools-and-boards).
 
@@ -26,7 +26,7 @@ See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md) for every tool 
 
 ### Bitbucket tools
 
-Copilot's agent reads a pull request and its diff, posts a general comment after a confirmation, opens the review board and reads a review's findings through the Bitbucket tools. `/ts-bitbucket <command>` runs one Bitbucket command you type: `review <link> [question]`, `check`, `usage` and `help`. Set up the Bitbucket connection first ([Bitbucket setup](#bitbucket-setup)).
+Copilot's agent reads a pull request and its diff, posts a general comment after a confirmation, opens the review board and reads a review's findings through the Bitbucket tools. `/ts-bitbucket <command>` runs one Bitbucket command you type: `review <link> [PROJ-123] [text]`, `check`, `usage` and `help`. Set up the Bitbucket connection first ([Bitbucket setup](#bitbucket-setup)).
 
 ### Boards
 
@@ -167,12 +167,12 @@ Run `/ts-bitbucket check` after setup to confirm the connection and see which ac
 | How | What happens |
 | --- | --- |
 | `Ticket Sidekick: Review a pull request` | Asks for the pull request link and opens its review board |
-| `/ts-bitbucket review <pr-url> [PROJ-123] [question]` | Opens the review board; a Jira key becomes the ticket to check against, the rest the question |
+| `/ts-bitbucket review <pr-url> [PROJ-123] [text]` | Opens the review board; a Jira key and the rest of the text become the background for the reviewer |
 | Paste the link in Agent mode and ask for a review | Copilot opens the same board |
 | `/ts-bitbucket check` | Tests the connection and shows the active configuration |
 | `/ts-bitbucket usage` | Shows input and output tokens per model for the current month and the two before it |
 
-The board stops on its first step: the review model, the requirements source (a Jira ticket, a goal or none) and an optional question. **Start** runs the regular pass; you then keep the findings, run the suggested extra passes or pick any of them, now or later. Each finding can be explained, drafted as a comment, posted to Bitbucket after a confirmation, or copied for Teams or as Markdown. Ask Copilot about a finished review ("explain finding 2") and it reads the findings with `bitbucket_read_findings`. See [Pull Request Review](docs/manual/bitbucket-pr-review.md) for the whole review, including token-usage tuning for large pull requests.
+The board stops on its first step: the review model and one background for the reviewer (a Jira ticket, your own text or none). **Start** runs the regular pass, and findings appear as each batch finishes; you then keep the findings, run the suggested extra passes or pick any of them, now or later, and the picked passes run at the same time. Each finding can be discussed on the board or in Copilot Chat, drafted as a comment, posted to Bitbucket after a confirmation, or copied for Teams or as Markdown. Ask Copilot about a finished review ("explain finding 2") and it reads the findings with `bitbucket_read_findings`. See [Pull Request Review](docs/manual/bitbucket-pr-review.md) for the whole review, including token-usage tuning for large pull requests.
 
 ### Settings reference
 

@@ -170,7 +170,7 @@ Run on the preview build on the managed machine, against Jira Data Center, with 
 
 ## Step 3: PR review board
 
-Run on the preview build of the review board on the managed machine, against Bitbucket Data Center and Jira Data Center, with a real pull request whose title names a Jira ticket, and if you can one large enough that the Data Center server cuts its diff. `@bitbucket` is already removed in this build, so the review board is the only way to review.
+Run on the preview build of the review board on the managed machine, against Bitbucket Data Center and Jira Data Center, with a real pull request whose title names a Jira ticket, one small pull request (at most four batches) and, if you can, one large enough that the Data Center server cuts its diff. `@bitbucket` is already removed in this build, so the review board is the only way to review.
 
 **Opening the board**
 
@@ -179,34 +179,53 @@ Run on the preview build of the review board on the managed machine, against Bit
 - [ ] In Agent mode, "review this pull request <link>" opens the board; Copilot says it opened and does not review the PR itself.
 - [ ] Asking again for the same PR opens the stored review, not a new first step.
 
+**Managed-machine probe** (run first; stop and report if it fails)
+
+- [ ] Four concurrent model requests succeed: on a review of at most four batches, pick all four persona passes and **Run selected**; all four lines of the band move at the same time, and no more than two are refused as rate-limited.
+- [ ] **Discuss in chat** opens Copilot Chat in Agent mode with the prompt typed in and not sent.
+
 **First step**
 
 - [ ] With `ticketSidekick.bitbucket.reviewModel` empty, **Review model** lists your models; picking one saves it to the setting.
 - [ ] With the Local harness hidden (`chat.editor.localAgent.enabled: false`), the review still runs.
-- [ ] Requirements source **Jira ticket**: the key from the PR title is offered with **Use KEY**; a typed key wins over it.
-- [ ] Requirements source **A goal**: **Reword** shows the reworded goal as points you can correct before Start; no model call runs before you press it.
-- [ ] Requirements source **None** and an optional question: Start runs without a ticket read.
+- [ ] Background **Jira ticket**: the key from the PR title is filled in, and a typed key replaces it; the box fills with the ticket's summary, description and newest comments, and what you leave in the box after trimming is what the review gets.
+- [ ] A ticket key that does not exist: the box says it was not found, **Start** stays available, and the review then runs with no background; the band says why.
+- [ ] `/ts-bitbucket review <link> PROJ-123 watch thread safety`: the first step opens with your text picked and the key kept in the ticket field; nothing runs before **Start**.
+- [ ] Background **Your text** and **None**: Start runs without a ticket read; with your text, findings that go against it are marked *against goal*.
+- [ ] A review stored by the build before this one: the board opens on the first step for the same PR with a notice that it was rebuilt, and nothing runs until **Start**.
 
 **Running the review**
 
-- [ ] **Start** shows live steps ("Reading the pull request…", then the regular pass) and then the findings with the extra passes it suggests, or says that none is suggested.
+- [ ] While the regular pass runs, the band shows the progress by batch, **Stop**, the background and the tokens so far; findings appear in the list as each batch finishes, sorted by severity.
+- [ ] During the pass, open a finding: it stays open and selected while new findings arrive; Explain, Rewrite and Post wait until the pass ends. With nothing opened, the detail pane shows the review so far (counts, files, batches, the reviewed commit).
+- [ ] When the regular pass ends, the band opens with the counts by severity and against goal, the next passes (the suggested ones preselected) with **Run selected** and **Not now**, the background, **Not reviewed and dropped** and the token usage per pass.
+- [ ] Opening a finding folds the band to one line with the counts, passes, background, not-reviewed count, tokens, **More passes** and **Run again**; **More passes** opens it again.
 - [ ] **Stop** during a pass keeps the findings found so far.
-- [ ] **Run selected** with two extra passes adds their findings; existing finding numbers do not change. The critic checks only findings it has not checked yet.
+- [ ] **Run selected** with two persona passes runs them at the same time, one band line each; existing finding numbers do not change. With the critic picked too, it starts only after both ended and checks only findings it has not checked yet.
+- [ ] On a review of more than four batches, pick three or four persona passes: at most two run at once, and the next starts when one ends.
+- [ ] **Stop** while passes run together ends all of them, keeps what each found, and offers the passes not finished again; a picked critic does not run.
 - [ ] A cut Data Center diff: the cut files are fetched one by one, and **Not reviewed and dropped** lists any file still not reviewed.
-- [ ] **Requirements coverage** is shown above the findings; editing the goal and **Re-check** replaces only the coverage.
-- [ ] **Token usage per pass** is shown, and `/ts-bitbucket usage` counts the same calls for the month.
+- [ ] `/ts-bitbucket usage` counts the same calls for the month as the band shows.
 
 **Findings**
 
-- [ ] **Explain** on a finding answers under it; explaining again replaces the answer.
+- [ ] On a wide tab the list is on the left and the opened finding on the right, with its code from the reviewed commit and its line marked.
+- [ ] Narrow the tab until the columns no longer fit: the list fills the tab, a finding opens over it, **← Back to the findings** and Escape return the focus to the same list entry, and the footer with Post and one **Copy** menu stays visible.
+- [ ] Every control can be reached with the keyboard, and the markers are words, not colour alone.
+- [ ] **Explain** on a finding answers in its discussion; a follow-up with **Ask** adds below the first answer instead of replacing it. Answers show headings, lists and highlighted code.
+- [ ] After a follow-up, the draft says the discussion changed; **Regenerate** writes it again from the finding and the whole discussion, and **Undo** brings your edited text back.
 - [ ] Edit a draft comment by hand, then **Rewrite** with an instruction; **Undo** brings back your text.
-- [ ] Select two findings and **Post 2 comment(s)**: the VS Code confirmation names them; in Bitbucket, a finding with a verified line is an inline comment and one without is on the activity feed.
-- [ ] **Copy … for Teams** pastes as readable plain text in Teams; **Copy … as Markdown** pastes as Markdown.
-- [ ] Close and reopen VS Code with the board open: the findings, explanations, drafts and coverage are still there.
+- [ ] **Preview** shows the draft as Markdown, as Bitbucket shows it after Post; **Edit** returns to the text box. A link in an answer or the preview opens only after VS Code asks.
+- [ ] Select two findings and **Post 2 comments**: the VS Code confirmation names them; in Bitbucket, a finding with a verified line is an inline comment and one without is on the activity feed, and it renders as the preview did.
+- [ ] **Copy for Teams** pastes as readable plain text in Teams; **Copy as Markdown** pastes as Markdown; neither has a requirements section.
+- [ ] Close and reopen VS Code with the board open: the findings, discussions and drafts are still there.
 
 **From chat**
 
-- [ ] After a review, asking Copilot "explain finding 2" answers from `bitbucket_read_findings` with the same finding.
+- [ ] **Discuss in chat** on a finding opens Copilot Chat in Agent mode with a prompt naming the PR link and the finding number, not sent; add a question and send it: Copilot reads the finding with `bitbucket_read_findings` first, and the board's draft does not change.
+- [ ] With the chat unable to open (for example Copilot Chat disabled), **Discuss in chat** copies the prompt and the board says to paste it.
+- [ ] In that chat, ask Copilot to read a whole file around the finding: it uses `bitbucket_read_file` and gets the file at the reviewed commit; a path with `..` is refused.
+- [ ] After a review, asking Copilot "explain finding 2" answers from `bitbucket_read_findings` with the same finding and its discussion; after a new commit on the PR, it says the review read an older commit.
 - [ ] `/ts-bitbucket check` reports the connection; `/ts-bitbucket help review` explains the staged review.
 
 **`@bitbucket` is gone**
