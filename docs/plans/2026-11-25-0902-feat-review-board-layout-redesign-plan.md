@@ -41,7 +41,7 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 - **The ticket's text is shown for trimming before it is sent.** (session-settled: user-directed — chosen over sending only the summary and description, and over sending the full capped text untouched: the developer controls what goes into every call.) Governs R11.
 - **A request with both a ticket key and text preselects the text.** (session-settled: user-directed — chosen over preselecting the ticket and over preselecting neither; the first step always waits for Start, so the developer can still switch.) Governs R12.
 - **Picked persona passes run at the same time, not one after another.** Faster on a large pull request; the critic still runs last because it checks the other passes' findings. Governs R20, R21, R22, R23, R25.
-- **A finding can be discussed on the board and in Copilot Chat.** A short thread in the detail pane for quick follow-ups, and a hand-off to Copilot Chat for a longer investigation. (session-settled: user-directed — chosen over a board thread only and over a Copilot hand-off only.) Governs R26, R27, R28, R29, R30, R34, R35, R36.
+- **A finding can be discussed on the board and in Copilot Chat.** A short thread in the detail pane for quick follow-ups, and a hand-off to Copilot Chat for a longer investigation. (session-settled: user-directed — chosen over a board thread only and over a Copilot hand-off only.) Governs R26, R27, R28, R29, R30, R34, R35, R36. R36's limits keep the agent from reaching other endpoints with the developer's credentials.
 - **The board renders discussion answers and a draft preview as Markdown with highlighted code.** (session-settled: user-directed — chosen over rendering the thread only and over keeping plain text: the developer sees what they will post.) Governs R31, R32, R33.
 - **A narrow tab shows the finding as an overlay over the list.** (session-settled: user-directed — chosen over stacking the detail below the list and over a wide-only layout.) Governs R9.
 
@@ -50,7 +50,7 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 **Layout**
 
 - R1. The results stage shows the findings list in a left column and the selected finding in a right detail pane, side by side on a wide tab.
-- R2. Each list entry shows its number, severity, file and line, title, and markers for "against goal", a drafted comment and a posted comment; selecting an entry shows it in the detail pane.
+- R2. Each list entry shows its number, severity, file and line, title, and markers for "against goal", a drafted comment and a posted comment; the list is sorted by severity, then by confidence (highest first), and selecting an entry shows it in the detail pane.
 - R3. The detail pane shows the finding's description, recommendation, line facts (verified or not, new or existing code, confidence, source), the code around the finding, its discussion (R26 to R30), and the draft comment with Rewrite and Undo.
 - R4. A summary band sits above both columns for the whole review and changes with the stage, per R5 to R7.
 
@@ -62,16 +62,17 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 
 **Findings while a pass runs**
 
-- R8. Findings appear in the list as each batch finishes, and can be selected and read; Explain, Rewrite and Post wait until the pass ends.
+- R8. Findings appear in the list as each batch finishes, sorted into place per R2, and can be selected and read; the selected finding keeps the focus and stays selected when new findings arrive; Explain, Rewrite and Post wait until the pass ends.
 
-**Narrow tab**
+**Narrow tab and keyboard**
 
 - R9. On a tab too narrow for two columns, the list fills the tab and a selected finding opens as an overlay over it, with a way back to the list.
+- R37. Every control can be reached with the keyboard; Escape and Back close the overlay and return focus to the same list entry; markers are words, not colour alone.
 
 **First step: the background**
 
 - R10. The first step offers one background: a Jira ticket, the developer's own text, or none.
-- R11. Choosing a Jira ticket fills an editable box with its summary, description and newest comments, within the existing size caps; what the developer leaves in the box is what is sent.
+- R11. Choosing a Jira ticket fills an editable box with its summary, description and newest comments, within the existing size caps; what the developer leaves in the box is what is sent. When the ticket cannot be read (not found, no access, Jira not set up), the box shows the reason, the developer can switch to their own text or none, and Start stays available.
 - R12. When a request names both a ticket key and text, the first step opens with the text preselected and the key kept in the ticket field; nothing runs before Start.
 - R13. The background goes into every review call: the regular pass and its continuation and whole-file call, every persona pass, the critic and Explain.
 - R14. The reviewer is asked to flag changes that go against the background; such a finding is an ordinary finding with an "against goal" marker, which only appears when a background was given.
@@ -81,15 +82,15 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 **What goes**
 
 - R17. The board no longer shows Reword, Re-check, the requirements coverage block or the requirements source form after the review.
-- R18. Copy and `bitbucket_read_findings` no longer include requirements coverage; `bitbucket_read_findings` reports the background in use instead, and a finding's thread in place of its single explanation.
-- R19. A review stored before this change is rebuilt from its recipe or discarded under the existing stored-format rule; its coverage result is not kept.
+- R18. Copy and `bitbucket_read_findings` no longer include requirements coverage; `bitbucket_read_findings` reports the background instead, and returns a finding's thread (whose first answer is the former explanation) with no separate explanation field.
+- R19. A review stored before this change is discarded, and the board says so; it is not rebuilt from its recipe, so no tokens are spent on an old review.
 
 **Running the extra passes**
 
 - R20. The persona passes picked in one Run selected run at the same time, each over every batch one batch after another: all of them when the review has at most four batches, at most two at once when it has more, with the rest starting as one ends.
 - R21. When the critic is picked together with persona passes, it starts after they have all ended, so it checks their findings too.
 - R22. While passes run together, the band shows each pass's progress on its own line, and Stop ends all of them, keeping what each found so far.
-- R23. When a pass cannot run alongside the others (for example, the model refuses a parallel request as rate-limited), the remaining passes run one after another instead, and the band says so.
+- R23. When a pass cannot run alongside the others (for example, the model refuses a parallel request as rate-limited), the remaining passes run one after another instead, and the band says so. The trigger is a batch refused with a blocked or rate-limit error while more than one pass runs; that batch is run once more after the other passes end, and if the same error comes back, the run stops with the quota message.
 - R24. Each persona pass reviews the diff and context files on its own: its prompt never contains the regular pass's findings or another pass's, so running them at the same time or one after another gives the same kind of result.
 - R25. When a run of extra passes ends, the band opens again with the passes not run yet and the critic when there are unchecked findings, so the developer can pick a next run, any number of times.
 
@@ -109,9 +110,9 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 
 **The hand-off to Copilot Chat**
 
-- R34. For one finding, `bitbucket_read_findings` returns its thread and the review's background as full text, along with what it returns today.
+- R34. For one finding, `bitbucket_read_findings` returns its thread and the review's background as full text, along with the rest of what it returns today (per R18, the thread takes the place of the single explanation).
 - R35. `bitbucket_read_findings` names the commit the review read, and says so when the pull request has a newer commit, so the agent does not mix the reviewed code with the current one.
-- R36. A new read-only Bitbucket tool returns one file of the pull request at the reviewed commit, so the agent can read whole files as the review did, independent of the developer's local checkout.
+- R36. A new read-only Bitbucket tool returns one file of the pull request's repository at the reviewed commit, so the agent can read whole files as the review did, independent of the developer's local checkout. It sends requests only to the Bitbucket server configured in the settings, the one the credentials belong to; the pull request link only identifies the pull request on that server; project, repository and commit come from the stored review; and a path that is empty, absolute, or contains `.`, `..` or backslash segments is refused before any request is made.
 
 ### Key Flows
 
@@ -171,7 +172,6 @@ flowchart TB
 - The width at which R9's overlay takes over from two columns.
 - How much code around the finding the detail pane shows (R3), and whether it comes from the stored diff or the whole file.
 - Whether the coverage engine code is deleted or kept unused (R17, R18).
-- Whether a refused parallel request is retried before R23's fallback.
 - Whether "Copy for Teams" keeps stripping Markdown from drafts that now contain code blocks, or keeps code blocks as indented plain text.
 - How long a thread may grow before the oldest turns are left out of a call (R27), and how Discuss in chat behaves where Copilot Chat cannot be opened with a prompt.
 - Which documents change: the user manual pages on the review board, `docs/review-process.md` ("Upfront question", "Requirements check"), the `/ts-bitbucket` help, the review board parity ledger in `docs/architecture/migration-status.md`, and the manual checklist's Step 3.
