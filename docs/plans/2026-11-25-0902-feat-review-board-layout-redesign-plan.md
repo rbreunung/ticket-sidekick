@@ -27,11 +27,11 @@ execution: code
 
 ## Product Contract
 
-Product Contract preservation: changed R11, R19, R23, AE8 — planning research showed that a `Blocked` or quota refusal makes Copilot refuse every call for minutes, so only a rate-limited batch is rerun (R23); that an unreadable or emptied ticket box needs a defined Start (R11); and that reopening on the first step is how a discarded review avoids spending tokens (R19). Added R38 (the critic after a stopped or partly failed run) and AE15 to AE17. Meaning of every other R, F and AE unchanged. Planning resolved the deferred questions and removed them from Outstanding Questions.
+Product Contract preservation: changed R11, R19, R23, AE8 — planning research showed that a `Blocked` or quota refusal makes Copilot refuse every call for minutes, so only a rate-limited batch is rerun (R23); that an unreadable or emptied ticket box needs a defined Start (R11); and that reopening on the first step is how a discarded review avoids spending tokens (R19). Added R38 (the critic after a stopped or partly failed run) and AE15 to AE17. Changed at the plan review, user-directed: R2 gains the selection checkbox and the "probably a false alarm" marker, R39 places Post and Copy in a list footer with a Copy menu on a narrow tab, R8 and R40 never select a finding by themselves and define the empty state. Earlier review round: R2 and R8 sort by severity, then confidence; R37 kept to keyboard basics. Meaning of every other R, F and AE unchanged. Planning resolved the deferred questions and removed them from Outstanding Questions.
 
 ### Summary
 
-The review board becomes a two-column page: the findings list on the left, the selected finding in full on the right. A summary band above both columns shows the running pass, then the next passes to run, then folds to one line. The first step asks for one background, a Jira ticket or the developer's own text, which every review call receives. A change that goes against the background shows up as a finding marked "against goal". Picked extra passes run at the same time, capped on large reviews. Each finding has a discussion thread rendered as Markdown, a draft preview, and Discuss in chat, which hands the finding to Copilot with its thread, the background, the reviewed commit and its files.
+The review board becomes a two-column page: the findings list on the left, the selected finding in full on the right. A summary band above both columns shows the running pass, then the next passes to run, then folds to one line. The first step asks for one background, a Jira ticket or the developer's own text, which every review call receives. A change that goes against the background shows up as a finding marked "against goal". Picked extra passes run at the same time, capped on large reviews. Each finding has a discussion thread rendered as Markdown, a draft preview, and Discuss in chat, which opens Copilot with a short prompt naming the pull request link and the finding number; the agent reads the thread, background and reviewed commit through the read-findings tool and whole files through a new file tool.
 
 ### Problem Frame
 
@@ -51,6 +51,7 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 - **Picked persona passes run at the same time, not one after another.** Faster on a large pull request; the critic still runs last because it checks the other passes' findings. Governs R20, R21, R22, R23, R25, R38.
 - **A finding can be discussed on the board and in Copilot Chat.** A short thread in the detail pane for quick follow-ups, and a hand-off to Copilot Chat for a longer investigation. (session-settled: user-directed — chosen over a board thread only and over a Copilot hand-off only.) Governs R26, R27, R28, R29, R30, R34, R35, R36. R36's limits keep the agent from reaching other endpoints with the developer's credentials.
 - **The board renders discussion answers and a draft preview as Markdown with highlighted code.** (session-settled: user-directed — chosen over rendering the thread only and over keeping plain text: the developer sees what they will post.) Governs R31, R32, R33.
+- **Post and Copy are list actions in a footer; nothing is selected by itself.** (session-settled: user-directed — chosen over Post and Copy in the summary band or per finding in the detail pane, and over selecting the top finding automatically: they act on the selection, and an automatic pick would jump as findings arrive.) Governs R2, R8, R39, R40.
 - **A narrow tab shows the finding as an overlay over the list.** (session-settled: user-directed — chosen over stacking the detail below the list and over a wide-only layout.) Governs R9.
 
 ### Requirements
@@ -58,9 +59,10 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 **Layout**
 
 - R1. The results stage shows the findings list in a left column and the selected finding in a right detail pane, side by side on a wide tab.
-- R2. Each list entry shows its number, severity, file and line, title, and markers for "against goal", a drafted comment and a posted comment; the list is sorted by severity, then by confidence (highest first), and selecting an entry shows it in the detail pane.
+- R2. Each list entry shows a checkbox that selects it for Post and Copy, its number, severity, file and line, title, and markers for "against goal", "probably a false alarm", a drafted comment and a posted comment; the list is sorted by severity, then by confidence (highest first), and selecting an entry shows it in the detail pane.
 - R3. The detail pane shows the finding's description, recommendation, line facts (verified or not, new or existing code, confidence, source), the code around the finding, its discussion (R26 to R30), and the draft comment with Rewrite and Undo.
 - R4. A summary band sits above both columns for the whole review and changes with the stage, per R5 to R7.
+- R39. The list ends with a footer of list actions: Select all, Post N comments, Copy for Teams and Copy as Markdown. On a narrow tab the two Copy buttons collapse into one Copy menu with both formats, and the footer stays visible while a finding is open over the list.
 
 **The summary band through the flow**
 
@@ -70,7 +72,8 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 
 **Findings while a pass runs**
 
-- R8. Findings appear in the list as each batch finishes, sorted into place per R2, and can be selected and read; the selected finding keeps the focus and stays selected when new findings arrive; Explain, Rewrite and Post wait until the pass ends.
+- R8. Findings appear in the list as each batch finishes, sorted into place per R2, and can be selected and read; nothing is selected until the developer picks a finding, and until then the detail pane shows the review so far (counts by severity, what was reviewed: files, batches and the reviewed commit); a picked finding keeps the focus and stays selected when new findings arrive; Explain, Rewrite and Post wait until the pass ends.
+- R40. When a pass ends with no findings, the list says "No issues found" and the detail pane shows what was reviewed.
 
 **Narrow tab and keyboard**
 
@@ -163,6 +166,8 @@ flowchart TB
 - AE11. **Covers R30.** Given finding #12, when the developer presses Discuss in chat, then Copilot Chat opens with a prompt naming the review and #12, and the agent's first step is to read that finding with `bitbucket_read_findings`.
 - AE12. **Covers R31, R33.** Given a follow-up answer containing a fenced Java block and an HTML `<script>` tag, when it is shown, then the Java block is highlighted and the tag appears as text, not run.
 - AE13. **Covers R32.** Given a draft with a fenced diff block, when the developer turns on Preview, then the block is shown highlighted as it will look in Bitbucket, and turning Preview off returns to the text box with the same text.
+- AE18. **Covers R8.** Given a regular pass whose first batch produced two findings, when the list shows them, then neither is selected and the detail pane shows the counts and what was reviewed so far.
+- AE19. **Covers R39.** Given a narrow editor split with finding #3 open over the list, when the developer opens the Copy menu in the footer, then it offers Copy for Teams and Copy as Markdown for the selected findings.
 - AE14. **Covers R34, R35, R36.** Given a review at commit 4f2a91c and a pull request that has since moved to 7b10e02, when the agent reads finding #12, then the reply carries its thread, the background text and a note that the review read 4f2a91c and the pull request is now at 7b10e02, and the agent can read `TransferController.java` at 4f2a91c through the new tool.
 - AE15. **Covers R23.** Given Security and Performance running together, when a Performance batch is refused because the model is blocked, then no further batch starts, the run stops with the quota message, and the band offers Performance and the passes not started again.
 - AE16. **Covers R38.** Given Security failed on every batch and Performance finished, with the Critic picked, when the run ends, then the Critic has checked the findings that exist and the band offers Security again.
@@ -526,7 +531,7 @@ flowchart LR
 
 **Goal:** The review page shows the list and detail columns, the band through the stages, the overlay on a narrow tab, the thread, the draft preview and keyboard basics.
 
-**Requirements:** R1 to R9, R32, R37; KTD13.
+**Requirements:** R1 to R9, R32, R37, R39, R40; KTD13.
 
 **Dependencies:** U2, U4, U5, U6, U7.
 
@@ -551,6 +556,9 @@ flowchart LR
 - Covers AE13. Preview shows the draft's diff block highlighted; turning Preview off shows the same text in the box.
 - No rendered element in a thread answer or preview has an `href` attribute.
 - Every marker in the list has visible text.
+- Covers AE18. While findings arrive and none is picked, the detail pane shows the counts and what was reviewed, and no finding is selected.
+- A pass with no findings shows "No issues found" in the list and what was reviewed in the detail pane.
+- The footer holds Select all, Post N comments and both Copy buttons; below the width threshold the Copy buttons become one Copy menu with both formats, and the footer stays visible while a finding is open over the list (covers AE19).
 - The detail pane shows the code around the selected finding's line with its line numbers and the finding's line marked; a finding whose location is unverified shows no excerpt and says so.
 - The header shows no run line or Stop on the review board, and the band's Stop stops the run.
 
@@ -632,20 +640,3 @@ flowchart LR
 - The user manual, `docs/review-process.md`, the Agent Mode tools page, `CLAUDE.md`, the migration status ledger and the Step 3 checklist describe the new board.
 
 
----
-
-## Deferred / Open Questions
-
-These entries are review items left for the author. They do not block implementation.
-
-### From 2026-11-25 review
-
-- **Select, Post and Copy have no place in the new layout** — Product Contract, list entries (R2), detail pane (R3), narrow tab (R9) (P2, design-lens, confidence 75)
-  An implementer working from the requirements alone has to guess where the selection checkboxes, Select all, Post and Copy live, and whether they stay reachable when a finding is open as an overlay on a narrow tab. The "probably a false alarm" label the critic sets is also missing from the list's markers.
-  Change: R2 gives each list entry a checkbox for Post and Copy and ends the list with a footer holding Select all, Post N comments and both Copy buttons, adds "probably a false alarm" to the markers, and R9 keeps that footer reachable on a narrow tab, as mockup case 6 shows.
-- **The empty list and the first selection are undefined** — Product Contract, list and detail pane (R3, R8) (P2, design-lens, confidence 75)
-  On a wide tab the detail pane could stay blank while the first findings arrive, or jump when a higher-severity finding sorts above an auto-selected one, and nothing says what the pane shows when a pass finds nothing.
-  Change: R8 selects the top finding once when the list gets its first finding with nothing selected and never changes the selection by itself after that; R3 shows what was reviewed (files, batches, reviewed commit) when there are no findings, with "No issues found" in the list.
-- **The Summary says Discuss in chat hands Copilot the thread and files** — Product Contract, Summary (P2, coherence, confidence 75)
-  A reader expects the chat prompt to contain the thread, background and files, while the hand-off requirement (R30) and its decision (KTD9) send only the pull request link and the finding number and let the agent read the rest through the tools.
-  Change: the Summary says Discuss in chat opens Copilot with a short prompt naming the pull request link and finding number, and the agent reads the thread, background and commit through the read-findings tool and whole files through the new file tool.
