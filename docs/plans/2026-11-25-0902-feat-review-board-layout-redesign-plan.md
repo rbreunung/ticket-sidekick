@@ -41,6 +41,7 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 - **The ticket's text is shown for trimming before it is sent.** (session-settled: user-directed — chosen over sending only the summary and description, and over sending the full capped text untouched: the developer controls what goes into every call.) Governs R11.
 - **A request with both a ticket key and text preselects the text.** (session-settled: user-directed — chosen over preselecting the ticket and over preselecting neither; the first step always waits for Start, so the developer can still switch.) Governs R12.
 - **Picked persona passes run at the same time, not one after another.** Faster on a large pull request; the critic still runs last because it checks the other passes' findings. Governs R20, R21, R22, R23, R25.
+- **A finding can be discussed on the board and in Copilot Chat.** A short thread in the detail pane for quick follow-ups, and a hand-off to Copilot Chat for a longer investigation. (session-settled: user-directed — chosen over a board thread only and over a Copilot hand-off only.) Governs R26, R27, R28, R29, R30.
 - **A narrow tab shows the finding as an overlay over the list.** (session-settled: user-directed — chosen over stacking the detail below the list and over a wide-only layout.) Governs R9.
 
 ### Requirements
@@ -49,7 +50,7 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 
 - R1. The results stage shows the findings list in a left column and the selected finding in a right detail pane, side by side on a wide tab.
 - R2. Each list entry shows its number, severity, file and line, title, and markers for "against goal", a drafted comment and a posted comment; selecting an entry shows it in the detail pane.
-- R3. The detail pane shows the finding's description, recommendation, line facts (verified or not, new or existing code, confidence, source), the code around the finding, Explain with its answer, and the draft comment with Rewrite and Undo.
+- R3. The detail pane shows the finding's description, recommendation, line facts (verified or not, new or existing code, confidence, source), the code around the finding, its discussion (R26 to R30), and the draft comment with Rewrite and Undo.
 - R4. A summary band sits above both columns for the whole review and changes with the stage, per R5 to R7.
 
 **The summary band through the flow**
@@ -79,7 +80,7 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 **What goes**
 
 - R17. The board no longer shows Reword, Re-check, the requirements coverage block or the requirements source form after the review.
-- R18. Copy and `bitbucket_read_findings` no longer include requirements coverage; `bitbucket_read_findings` reports the background in use instead.
+- R18. Copy and `bitbucket_read_findings` no longer include requirements coverage; `bitbucket_read_findings` reports the background in use instead, and a finding's thread in place of its single explanation.
 - R19. A review stored before this change is rebuilt from its recipe or discarded under the existing stored-format rule; its coverage result is not kept.
 
 **Running the extra passes**
@@ -90,6 +91,14 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 - R23. When a pass cannot run alongside the others (for example, the model refuses a parallel request as rate-limited), the remaining passes run one after another instead, and the band says so.
 - R24. Each persona pass reviews the diff and context files on its own: its prompt never contains the regular pass's findings or another pass's, so running them at the same time or one after another gives the same kind of result.
 - R25. When a run of extra passes ends, the band opens again with the passes not run yet and the critic when there are unchecked findings, so the developer can pick a next run, any number of times.
+
+**Discussing a finding**
+
+- R26. Explain becomes a thread in the detail pane: the first question gets an answer, and each follow-up is added below it instead of replacing it.
+- R27. Each call of the thread receives the finding, its code, the pull request title and description, the background and the thread so far; it runs on the review model and counts toward the token usage.
+- R28. The thread is kept with the review and survives a restart; a finding with a thread counts as worked on, so the critic keeps it as a probable false alarm instead of removing it.
+- R29. When the thread has grown since the draft comment was made, the draft says so and Regenerate rebuilds it from the finding and the whole thread; the developer's edits are lost only on Regenerate.
+- R30. Discuss in chat opens Copilot Chat with a prompt that names the review and the finding number; the agent reads the finding, its thread and the diff through `bitbucket_read_findings` and `bitbucket_getPullRequestDiff`, and the conversation stays in Copilot without changing the board's draft.
 
 ### Key Flows
 
@@ -127,6 +136,8 @@ flowchart TB
 - AE7. **Covers R20, R21, R22.** Given the developer picks Security, Performance and the Critic, when they press Run selected, then Security and Performance run at the same time with a progress line each, and the Critic starts only after both have ended.
 - AE8. **Covers R23.** Given a parallel Performance request is refused as rate-limited, when Security is still running, then Performance waits and runs after Security, and the band says the passes now run one after another.
 - AE9. **Covers R25.** Given Security and Performance have run and the critic has not, when the run ends, then the band offers Reliability, Maintainability and the Critic; after the critic runs, it is offered again only once a later pass adds findings.
+- AE10. **Covers R26, R27, R29.** Given finding #1 has a draft and one answer, when the developer asks a follow-up, then the answer appears below the first one, the call receives both earlier messages, and the draft says the discussion changed since it was made.
+- AE11. **Covers R30.** Given finding #12, when the developer presses Discuss in chat, then Copilot Chat opens with a prompt naming the review and #12, and the agent's first step is to read that finding with `bitbucket_read_findings`.
 
 ### Scope Boundaries
 
@@ -145,6 +156,7 @@ flowchart TB
 - How much code around the finding the detail pane shows (R3), and whether it comes from the stored diff or the whole file.
 - Whether the coverage engine code is deleted or kept unused (R17, R18).
 - Whether a refused parallel request is retried before R23's fallback.
+- How long a thread may grow before the oldest turns are left out of a call (R27), and how Discuss in chat behaves where Copilot Chat cannot be opened with a prompt.
 - Which documents change: the user manual pages on the review board, `docs/review-process.md` ("Upfront question", "Requirements check"), the `/ts-bitbucket` help, the review board parity ledger in `docs/architecture/migration-status.md`, and the manual checklist's Step 3.
 
 ### Sources / Research
