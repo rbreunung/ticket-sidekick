@@ -17,7 +17,7 @@ execution: code
 - **Product authority:** The maintainer's decisions in Key Decisions below. Where this plan and [`2026-11-19-0828-feat-pr-review-board-and-bitbucket-removal-plan.md`](2026-11-19-0828-feat-pr-review-board-and-bitbucket-removal-plan.md) disagree on the review board's layout, first step or requirements check, this plan wins. The staged review itself (regular pass, persona passes, critic, Explain, Post, Copy) stays as that plan defined it.
 - **Open blockers:** None. The managed-machine probe in the Verification Contract is a check to run early, not a blocker.
 - **Stop conditions:**
-  - Stop and ask if the managed-machine probe shows that two concurrent model requests are refused, or that Copilot Chat cannot be opened with a prefilled prompt; R20 or R30 would then need a product decision.
+  - Stop and ask if the managed-machine probe shows that more than two of four concurrent model requests are refused, or that Copilot Chat cannot be opened with a prefilled prompt; R20 or R30 would then need a product decision.
   - Stop and ask if a "Carry over" row of the review board parity ledger has no board action or tool left that keeps it and no recorded reason to drop it (U10).
   - Stop and ask if `markdown-it` or `highlight.js` cannot be bundled by esbuild into `out/extension.js` without shipping `node_modules` (KTD7).
 - **Execution profile:** One pull request from the work branch, units in Unit Index order. `npm run compile` and `npm test` are green before every commit (`CLAUDE.md`). Workers do not commit or push on their own ([`docs/solutions/workflow-issues/ce-work-unit-subagent-pushes-directly-to-main-bypassing-pr-review.md`](../solutions/workflow-issues/ce-work-unit-subagent-pushes-directly-to-main-bypassing-pr-review.md)). Plan a code review focused on races in the parallel-pass fold (U5) before the PR is merged.
@@ -204,16 +204,16 @@ flowchart TB
 
 - KTD1. **Reading during a pass is page-local, and numbering grows batch by batch.** The session refuses every action while a pass runs (`requireNoPass`, `src/sessions/sessionManager.ts`), so the finding the developer reads in the detail pane is page state keyed by finding number, as `typed` is today in `board-pages/review/page.js`. The regular pass folds each finished batch's findings into the running store once instead of rebuilding the store on every progress report (`src/review/engine/regularPass.ts`), so a number never changes during a pass. Governs R8.
 - KTD2. **Parallel passes run inside the one `passes` run, with one fold point.** `extraPassesRun` (`src/boards/review/runs.ts`) becomes a scheduler: all picked persona passes at once when the review has at most four batches, else two, the next starting as one ends, and the critic after all of them per R21 and R38. Each pass returns its new findings and context paths per finished batch, and the scheduler folds them into the shared store in one synchronous step (`addFindings`, `src/review/engine/findingStore.ts`), so numbers, merges and `stepsRun` stay single-writer by construction ([`docs/solutions/logic-errors/concurrent-attachment-download-same-filename-race-silently-drops-one.md`](../solutions/logic-errors/concurrent-attachment-download-same-filename-race-silently-drops-one.md)). One `AbortController` still stops everything; a result arriving after Stop is dropped. `ActivePass` keeps a progress entry and a partial change per step, and `interruptedWorking` merges all of them after a restart. Governs R20, R21, R22, R24, R38.
-- KTD3. **Refusals are classified, not parsed from text.** `src/utils/lmRetry.ts` gains a classification of the three refusals Copilot sends: rate-limited (a plain error named `ChatRateLimited`), blocked (`LanguageModelError` code `Blocked`) and quota used up (`ChatQuotaExceeded`), by code first, then error name, then message. `BatchReviewResult` (`src/review/engine/batchReview.ts`) carries the class of each failed part alongside its text note, so the scheduler can apply R23. `LanguageModelError.RateLimited` is a proposed API and is not used. Governs R23.
+- KTD3. **Refusals are classified, not parsed from text.** `src/utils/lmRetry.ts` gains a classification of the three refusals Copilot sends: rate-limited (a plain error named `ChatRateLimited`), blocked (`LanguageModelError` code `Blocked`) and quota used up (`ChatQuotaExceeded`), by code first, then error name, then message. `withEasierRetry` and `callWithRetry` rethrow these refusals at once today, past `BatchReviewResult`, so `callBatchWithSplit` and `reviewBatch` (`src/review/engine/plumbing.ts`, `batchReview.ts`) catch a classified refusal and return it as a failed part carrying its class instead of throwing; `BatchReviewResult` keeps the text note beside the class. On a blocked or quota refusal the scheduler aborts the other running passes through the shared `AbortController` before it stops. Once one batch is refused as rate-limited, every later rate-limited refusal in the same run is queued for the single rerun round too, and that round starts only after a wait taken from the refusal's retry hint, or 30 seconds when there is none. `LanguageModelError.RateLimited` is a proposed API and is not used. Governs R23.
 - KTD4. **The background enters the existing prompt seams.** Own text goes in as `focus`, the trusted `ADDITIONAL INSTRUCTIONS` block it uses today (`assemblePrompt`, `src/services/PrReviewService.ts`). Ticket text goes into a new block inside the `«UNTRUSTED-CONTENT»` fence, defanged like the requirements prompt does today. The "against goal" request lives in the trusted prompt tail next to the output contract, only when a background exists. Findings carry an `againstGoal` flag that `resolveFindingAnchors` keeps and that survives a merge when either side has it (`findingStore.ts`, `dedupeFindings` in `src/review/reviewSessionState.ts`); this is the one deduplication change Scope Boundaries allows. Governs R13, R14, R15.
 - KTD5. **The fence is defanged in every review prompt, and the critic's PR title and findings move inside it.** Ticket text in every call widens a weakness the review prompts already have (the diff is fenced but not defanged; the critic puts the title and findings outside), so the same unit closes it. Governs R15.
 - KTD6. **The ticket is read before Start by a first-step call run.** A `read-ticket` call (the pattern `reword` uses today in `src/boards/review/kind.ts`) reads through `TicketService.getRequirementsSource` with the 20-second guard (`src/review/ticketRead.ts`) and fills the box with `formatRequirementsSourceText` (`src/utils/requirementsSource.ts`). It runs when the developer picks Jira ticket or changes the key, and once on open when the ticket is preselected. A result for a key that is no longer in the field is dropped; a read over a box the developer edited asks first. Start waits while a read runs. Governs R10, R11, R12.
 - KTD7. **Markdown is rendered in the extension into a restricted node tree.** `markdown-it` with `html: false`, `linkify: false` and `typographer: false`, a link check that allows only `http:` and `https:`, and an image rule that emits the alt text only. Code blocks are highlighted with `highlight.js` core and a registered set of languages (Java, Kotlin, TypeScript, JavaScript, JSON, XML, SQL, shell, diff), with a size limit above which a block stays plain. The result is a JSON tree of allowed elements that the page builds with `h()`, so no HTML string reaches the page, and the test DOM, which has no HTML parser, can check it. Highlighter output is converted by a strict reader that accepts only its own span markup and escaped text and falls back to plain text otherwise. Input above a size cap renders as plain text. Both libraries are pinned to exact versions and bundled by esbuild into `out/extension.js`. (session-settled: user-directed — markdown-it and highlight.js chosen over markdown-it without highlighting and over a renderer of our own: well-tested parsers, about 55 KB gzipped.) Governs R31, R32, R33.
 - KTD8. **Links open through the extension.** Rendered links carry their target as data, not as a live `href`. A click posts a board message; the extension checks for `http:` or `https:` and calls `vscode.env.openExternal`, which shows VS Code's own confirmation. A plain anchor in a webview would open without one in a trusted workspace. Governs R33.
 - KTD9. **Discuss in chat uses VS Code's chat command, with a clipboard fallback.** A new board message makes the extension build the prompt (pull request link, finding number, the reviewed commit, and the read-findings tool by its reference name) and call `workbench.action.chat.open` with `isPartialQuery: true` and `mode: 'agent'`. Below VS Code 1.99 the mode is ignored and chat opens in its current mode; the engines floor stays `^1.95.0`. When the command fails, the prompt is copied and the board says so. The prompt never carries finding text. Governs R30.
-- KTD10. **The thread replaces the single explanation in the working state.** `explanations` becomes a list of turns per finding. A thread call sends the developer's turns as instructions and earlier model answers inside the untrusted fence, with the first answer and the newest turns within a character budget. Answers may use Markdown (`EXPLAIN_QUESTION`, `src/review/findingCalls.ts`, stops asking for plain text). A finding with a thread counts as worked on for the critic (`workedOn`, `runs.ts`). Regenerate becomes a one-call run from the finding and the thread when a thread exists, keeping the previous text for Undo; without a thread it stays the pure rebuild it is today. Governs R26, R27, R28, R29.
+- KTD10. **The thread replaces the single explanation in the working state.** `explanations` becomes a list of turns per finding. A thread or Regenerate call sends only the developer's turns and an own-text background as instructions; the PR title and description, the finding's title, description and recommendation, its code, a ticket-text background and earlier model answers go inside the untrusted fence, defanged (`buildFindingFollowUpPrompt` puts several of these outside the fence today), with the first answer and the newest turns within a character budget. Answers may use Markdown (`EXPLAIN_QUESTION`, `src/review/findingCalls.ts`, stops asking for plain text). A finding with a thread counts as worked on for the critic (`workedOn`, `runs.ts`). Regenerate becomes a one-call run from the finding and the thread when a thread exists, keeping the previous text for Undo; without a thread it stays the pure rebuild it is today. Governs R26, R27, R28, R29.
 - KTD11. **The requirements check is deleted, not left unused.** `src/review/engine/requirementsCheck.ts`, `goalReword.ts`, `src/review/requirementsPass.ts`, `requirementsCoverage.ts`, `buildRequirementsPrompt` and their tests go; `src/utils/requirementsSource.ts` and `TicketService.getRequirementsSource` stay as the ticket reader for the background box. The review board's `formatVersion` goes from 1 to 2, so the session manager discards a stored review and reopens the board from its recipe on the first step with its rebuilt notice, with nothing run. Governs R17, R18, R19.
-- KTD12. **The new file tool is `bitbucket_read_file`, and its checks are its own.** Inputs are the pull request link and a repository-relative path only. It refuses before any request when the link's host is not the configured Bitbucket server (the stored `recipe.host` is compared today by nothing), when no review is stored for the link, or when the path is empty, absolute, or has `.`, `..` or backslash segments (the client's per-segment encoding keeps `..`). Project, repository and commit come from the stored review. Output is capped with a note, a binary file is refused, and a Data Center read that hit the 5000-line browse limit says so. Governs R36.
+- KTD12. **The new file tool is `bitbucket_read_file`, and its checks are its own.** Inputs are the pull request link and a repository-relative path only. It refuses before any request when the link's host is not the configured Bitbucket server: on Data Center the host of `ticketSidekick.bitbucket.baseUrl`, on Cloud `bitbucket.org` (the client calls the fixed `api.bitbucket.org`, and the base URL setting is usually empty there); the stored `recipe.host` is compared today by nothing. It also refuses when no review is stored for the link, or when the path is empty, absolute, or has `.`, `..` or backslash segments (the client's per-segment encoding keeps `..`). Project, repository and commit come from the stored review. Output is capped with a note, a binary file is refused, and a Data Center read that hit the 5000-line browse limit says so. Governs R36.
 - KTD13. **The page layout lives in the review page and the shared style, and the shared client keeps scroll and caret.** Two columns by CSS grid with an overlay below a width threshold, checked by `ResizeObserver` on the board root. The shared `paintNow` (`board-pages/shared/board.js`) saves and restores `scrollTop` and the text selection of elements with ids across each repaint, since a live list otherwise jumps to the top on every tick. The review view sets a flag that makes the shared header leave out its run line and Stop, so the band owns both. The band's folded state is stored in the working state: it folds on the first selection after a run or on Not now, and reopens when a run ends (R25). Governs R1 to R9, R37.
 - KTD14. **`bitbucket_read_findings` and `bitbucket_open_review` follow the new board.** Read-findings drops coverage, reports the background (ticket text inside a data section), returns a finding's thread, marks "against goal" and "discussed", names the reviewed commit in one-finding mode and reads the pull request's current head there with one request (falling back to the stored head with a note), lists every running pass, and says when a stored review was discarded by the update. Open-review renames its `question` input to `background` and keeps `ticketKey`; when a review for that pull request already exists past the first step, the reply says the board keeps its background and New review starts over. Governs R12, R18, R34, R35.
 
@@ -384,7 +384,7 @@ flowchart LR
 
 **Approach:**
 1. Carry the background on the engine settings as either own text (to `focus`) or ticket text (a new fenced block), set from the started-with state.
-2. Defang the fence in the PR header, diffs, context files, ticket text and critic content; move the critic's title and candidate findings inside the fence.
+2. Defang the fence in the PR header, diffs, context files, ticket text and critic content; move the critic's title and candidate findings inside the fence. U6 applies the same to `buildFindingFollowUpPrompt`.
 3. Add the "against goal" request and output field to the trusted tail only when a background exists, keep the flag through anchor resolution, and make it survive a merge.
 
 **Patterns to follow:** the requirements prompt's fenced and defanged ticket block (removed in U1; mirror its shape).
@@ -437,7 +437,7 @@ flowchart LR
 - Tests: `src/test/reviewBoardRuns.test.ts`, `reviewEngine.test.ts`, `lmRetry.test.ts`.
 
 **Approach:**
-1. Classify refusals in `lmRetry.ts` and carry the class of failed parts in `BatchReviewResult` (KTD3).
+1. Classify refusals in `lmRetry.ts`, catch them in `callBatchWithSplit` and `reviewBatch` so they come back as classified failed parts instead of throwing, and carry the class in `BatchReviewResult` (KTD3).
 2. Make a persona pass report each finished batch's new findings and context paths instead of a rebuilt review.
 3. Schedule passes with the cap, fold results at one point, queue a rate-limited batch for one rerun after the others, stop launching on blocked or quota, and run the critic last under R21 and R38.
 4. Keep one progress entry and partial change per step, merge all of them on restart, and compute the passes and critic offered after the run (R25).
@@ -452,6 +452,9 @@ flowchart LR
 - Batches completing in interleaved order give unique, gap-free numbers across both passes, and a cross-pass duplicate merges into one finding.
 - Covers AE8. A Performance batch refused as rate-limited while Security runs is rerun once after Security ends, and the band says the passes now run one after another.
 - A rerun refused again stops the run with the quota message.
+- A multi-file batch whose first call throws `Blocked` comes back as a classified failure, the other running pass is aborted, and no model call starts after the run ends.
+- A second batch refused as rate-limited while the passes already run one after another joins the same rerun round.
+- The rerun round starts only after the refusal's retry hint, or 30 seconds without one (with a fake clock).
 - Covers AE15. A blocked refusal starts no further batch or pass, stops with the quota message, and offers the passes not started.
 - Covers AE16. Security failing on every batch while Performance finishes still runs the picked Critic over existing findings, and offers Security again.
 - Stop ends both passes, keeps what each found, does not run the Critic, and a batch result arriving after Stop does not change the store.
@@ -475,13 +478,14 @@ flowchart LR
 
 **Approach:**
 1. Replace the single explanation per finding with a list of turns; a follow-up appends a question and its answer.
-2. Build the thread prompt with the developer's turns as instructions and earlier answers fenced, within the character budget, and allow Markdown in answers.
+2. Build the thread and Regenerate prompt with the trust split in KTD10, within the character budget, and allow Markdown in answers.
 3. Mark the draft outdated when the thread grew since it was made, and make Regenerate a call run from finding plus thread when a thread exists, keeping Undo.
 4. Count a finding with a thread as worked on for the critic.
 
 **Test scenarios:**
 - Covers AE10. A follow-up on finding #1 appends below the first answer, and the call contains both earlier turns.
 - An earlier answer containing an instruction is sent inside the fence, not as an instruction.
+- A PR description and a ticket background containing the fence marker string stay inside the fence of a thread call and a Regenerate call, defanged.
 - A long thread sends the first answer and the newest turns within the budget, and says turns were left out.
 - A failed follow-up keeps the thread and shows the error line.
 - The draft made before a follow-up says the discussion changed; Regenerate replaces it with the model's text and Undo restores the hand-edited version.
@@ -527,7 +531,7 @@ flowchart LR
 **Dependencies:** U2, U4, U5, U6, U7.
 
 **Files:**
-- Modify `board-pages/review/page.js`, `board-pages/shared/board.css`, `board-pages/shared/board.js` (scroll and caret preservation, header flag), `src/boards/review/kind.ts` (view fields for the band, fold state, rendered trees).
+- Modify `board-pages/review/page.js`, `board-pages/shared/board.css`, `board-pages/shared/board.js` (scroll and caret preservation, header flag), `src/boards/review/kind.ts` (view fields for the band, fold state, rendered trees, the selected finding's code excerpt).
 - Tests: `src/test/reviewBoardPage.test.ts`, `src/test/boardClient.test.ts`.
 
 **Approach:**
@@ -536,6 +540,7 @@ flowchart LR
 3. Keep the focused finding as page state, the overlay below the width threshold, and Escape or Back returning focus to the same entry.
 4. Render thread answers and the draft preview from the node trees; links post `open-link`.
 5. Save and restore scroll position and text selection across repaints in the shared client.
+6. Have the review view supply the selected finding's code excerpt from the stored review diff (`extractHunkAround`, `src/review/reviewSessionState.ts`) with line numbers and the finding's line marked, and render it in the detail pane (R3).
 
 **Patterns to follow:** `h()` elements and `afterSaving` in `board-pages/review/page.js`; the shared client's focus restore.
 
@@ -546,6 +551,7 @@ flowchart LR
 - Covers AE13. Preview shows the draft's diff block highlighted; turning Preview off shows the same text in the box.
 - No rendered element in a thread answer or preview has an `href` attribute.
 - Every marker in the list has visible text.
+- The detail pane shows the code around the selected finding's line with its line numbers and the finding's line marked; a finding whose location is unverified shows no excerpt and says so.
 - The header shows no run line or Stop on the review board, and the band's Stop stops the run.
 
 **Verification:** The page test covers each band state; the mockup screens in Sources can be reproduced by state.
@@ -576,6 +582,7 @@ flowchart LR
 - `bitbucket_read_file` returns a file at the reviewed commit for a valid path.
 - It refuses `../../users`, `/etc/passwd`, a path with a backslash, `./a` and an empty path before any client call.
 - It refuses a link whose host is not the configured server, and a link with no stored review.
+- On Cloud a link on `bitbucket.org` is accepted, and a link on any other host is refused.
 - A binary file is refused, a file over the output cap is cut with a note, and a Data Center read of 5000 lines says it may be cut.
 
 **Verification:** The tool appears in the manifest and the Agent Mode tools page; the refusal tests assert the client was never called.
@@ -610,7 +617,7 @@ flowchart LR
 | `npm test` | before every commit | All unit and scenario tests, the parity guard, the docs and manifest guards, the bundle smoke test |
 | `node scripts/sync-tools.mjs` then `npm test` | after U2 and U9 | `contributes.languageModelTools` matches the catalog |
 | `xvfb-run -a npm run test:e2e` | before opening the PR | The bundle activates in a real VS Code with the new libraries, registers every tool, and opens a board tab |
-| Managed-machine probe | early, before U5 and U9 are finished | Two concurrent model requests succeed; `workbench.action.chat.open` opens agent mode with a prefilled, unsent prompt |
+| Managed-machine probe | early, before U5 and U9 are finished | Four concurrent model requests, the most R20 sends, succeed; `workbench.action.chat.open` opens agent mode with a prefilled, unsent prompt |
 | Step 3 of `docs/architecture/manual-checklist.md` | on the PR's preview build, by the maintainer | The band states, live findings, parallel passes, overlay, thread, preview, Discuss in chat and the file tool in a real Copilot setup |
 
 ---
@@ -624,3 +631,21 @@ flowchart LR
 - No deleted module is imported, and no code, test or doc from an abandoned approach is left in the diff.
 - The user manual, `docs/review-process.md`, the Agent Mode tools page, `CLAUDE.md`, the migration status ledger and the Step 3 checklist describe the new board.
 
+
+---
+
+## Deferred / Open Questions
+
+These entries are review items left for the author. They do not block implementation.
+
+### From 2026-11-25 review
+
+- **Select, Post and Copy have no place in the new layout** — Product Contract, list entries (R2), detail pane (R3), narrow tab (R9) (P2, design-lens, confidence 75)
+  An implementer working from the requirements alone has to guess where the selection checkboxes, Select all, Post and Copy live, and whether they stay reachable when a finding is open as an overlay on a narrow tab. The "probably a false alarm" label the critic sets is also missing from the list's markers.
+  Change: R2 gives each list entry a checkbox for Post and Copy and ends the list with a footer holding Select all, Post N comments and both Copy buttons, adds "probably a false alarm" to the markers, and R9 keeps that footer reachable on a narrow tab, as mockup case 6 shows.
+- **The empty list and the first selection are undefined** — Product Contract, list and detail pane (R3, R8) (P2, design-lens, confidence 75)
+  On a wide tab the detail pane could stay blank while the first findings arrive, or jump when a higher-severity finding sorts above an auto-selected one, and nothing says what the pane shows when a pass finds nothing.
+  Change: R8 selects the top finding once when the list gets its first finding with nothing selected and never changes the selection by itself after that; R3 shows what was reviewed (files, batches, reviewed commit) when there are no findings, with "No issues found" in the list.
+- **The Summary says Discuss in chat hands Copilot the thread and files** — Product Contract, Summary (P2, coherence, confidence 75)
+  A reader expects the chat prompt to contain the thread, background and files, while the hand-off requirement (R30) and its decision (KTD9) send only the pull request link and the finding number and let the agent read the rest through the tools.
+  Change: the Summary says Discuss in chat opens Copilot with a short prompt naming the pull request link and finding number, and the agent reads the thread, background and commit through the read-findings tool and whole files through the new file tool.
