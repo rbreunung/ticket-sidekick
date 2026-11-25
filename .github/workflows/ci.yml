@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Run CI by hand on a branch with no pull request, so the release gate finds a `ci-ok` result
+  # on its commit (Actions → CI → Run workflow, pick the branch).
+  workflow_dispatch:
 
 # CI only reads the repository.
 permissions:

@@ -66,6 +66,9 @@ jobs:
           echo "ci-ok on ${SHA}: ${RESULT}"
           if [ "${RESULT}" != "success" ]; then
             echo "::error::CI (ci-ok) is '${RESULT}' on ${SHA}. 'in_progress' or 'queued' means CI is still running; 'not found' means it never ran. Wait for a green CI run on this commit, then release again."
+            if [ "${RESULT}" = "not found" ]; then
+              echo "::error::CI runs only for pull requests to main and pushes to main. To release from a branch, open a pull request for it (a draft is enough), or run the CI workflow on the branch by hand (Actions → CI → Run workflow; the branch needs this trigger, so merge main into it first)."
+            fi
             exit 1
           fi
 
