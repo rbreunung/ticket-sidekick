@@ -46,6 +46,11 @@ export class BoardPanels implements BoardHost {
     await vscode.env.clipboard.writeText(text);
   }
 
+  /** A web link from rendered Markdown; VS Code shows its own confirmation before it opens. */
+  async openExternal(url: string): Promise<void> {
+    await vscode.env.openExternal(vscode.Uri.parse(url, true));
+  }
+
   pickReportFile(kind: ReportKind): Promise<string | undefined> {
     return this.pickReport ? this.pickReport(kind) : Promise.resolve(undefined);
   }

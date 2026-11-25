@@ -51,6 +51,8 @@ export interface BoardHost {
   closeSession?(kind: string, id: string): void;
   /** Puts text on the system clipboard; the text is always built by the extension. */
   copyText?(text: string): Promise<void>;
+  /** Opens a web link in the browser; VS Code asks the user first. Only ever called with an http or https URL. */
+  openExternal?(url: string): Promise<void>;
 }
 
 export interface BoardRequest {
@@ -144,6 +146,30 @@ async function copyFindings(manager: SessionManager, { kind, id }: BoardTarget, 
   return { outcome: 'copied', count: built.count };
 }
 
+/** The longest link a page may ask to open. */
+const MAX_LINK_CHARS = 4_000;
+
+/**
+ * A link in rendered Markdown: the page carries its target as data and asks the extension to open
+ * it, so that only web links open and always through VS Code's own confirmation.
+ */
+async function openLink(body: Record<string, unknown>, host: BoardHost): Promise<unknown> {
+  if (!host.openExternal) throw new BoardRequestError(404, 'Unknown request.');
+  const url = body.url;
+  if (typeof url !== 'string' || url.length > MAX_LINK_CHARS || !isWebLink(url)) throw new BoardRequestError(400, 'Only web links can be opened.');
+  await host.openExternal(url);
+  return { outcome: 'opened' };
+}
+
+function isWebLink(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
 async function sessionBoard(manager: SessionManager, target: BoardTarget, op: string, body: Record<string, unknown>, host: BoardHost): Promise<unknown> {
   const { kind, id } = target;
   switch (op) {
@@ -179,6 +205,8 @@ async function sessionBoard(manager: SessionManager, target: BoardTarget, op: st
       return pickReportFileAgain(manager, target, host);
     case 'copy':
       return copyFindings(manager, target, body, host);
+    case 'open-link':
+      return openLink(body, host);
     default:
       throw new BoardRequestError(404, 'Unknown request.');
   }

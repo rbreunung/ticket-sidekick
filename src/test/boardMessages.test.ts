@@ -167,6 +167,21 @@ describe('a board page and the extension', () => {
     expect(copied).toEqual([]);
   });
 
+  it('opens a web link the page names through the host, and refuses any other scheme', async () => {
+    const state = await openReady();
+    const opened: string[] = [];
+    host.openExternal = async url => { opened.push(url); };
+    try {
+      expect(await ask(report(state.id), 'open-link', { url: 'https://example.com/docs?a=1' })).toEqual({ status: 200, body: { outcome: 'opened' } });
+      for (const url of ['command:workbench.action.openSettings', 'vscode:extension/x.y', 'javascript:alert(1)', 'data:text/html,hi', 'file:///etc/passwd', 'mailto:a@b.c', '/relative', 42]) {
+        expect((await ask(report(state.id), 'open-link', { url })).status).toBe(400);
+      }
+    } finally {
+      delete host.openExternal;
+    }
+    expect(opened).toEqual(['https://example.com/docs?a=1']);
+  });
+
   it('saves the full report through the save dialog', async () => {
     const state = await openReady();
     expect((await ask(report(state.id), 'save', { format: 'csv' })).body).toEqual({ outcome: 'saved' });
