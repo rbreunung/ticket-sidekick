@@ -1,5 +1,6 @@
 import type { BitbucketPR } from '../../bitbucket/IBitbucketClient';
 import type { PrReviewService } from '../../services/PrReviewService';
+import { refusalOf, type Refusal } from '../../utils/lmRetry';
 import { formatBatchFailureText } from '../reviewDiagnostics';
 import {
   buildTruncationEvent,
@@ -67,6 +68,8 @@ export interface BatchReviewResult {
   droppedOutsidePr: number;
   /** First findings the call with whole files retracted. */
   retracted: number;
+  /** The model refused a call of the batch; no further call of the batch was made after it. */
+  refusal?: Refusal;
 }
 
 /** Reviews one batch. A stop throws; every other failure is reported in the result. */
@@ -88,6 +91,12 @@ export async function reviewBatch(p: BatchReviewParams): Promise<BatchReviewResu
   };
   let anyMeta = false;
   const recommended = new Set<string>();
+  // A refused part means the model takes no more calls now: no continuation or whole-file call follows.
+  for (const part of parts) {
+    const refusal = part.error !== undefined ? refusalOf(part.error) : undefined;
+    if (refusal) { result.refusal = refusal; break; }
+  }
+  const noteRefusal = (err: unknown) => { const refusal = refusalOf(err); if (refusal) result.refusal ??= refusal; };
 
   for (const part of parts) {
     if (part.error !== undefined) {
@@ -107,7 +116,7 @@ export async function reviewBatch(p: BatchReviewParams): Promise<BatchReviewResu
     let retracted = 0;
     let filesNeeded = reply.additionalFilesNeeded;
 
-    if (reply.truncated) {
+    if (reply.truncated && !result.refusal) {
       const covered = new Set(reply.findings.map((f) => f.file));
       const event = buildTruncationEvent({
         runTag: ctx.runTag, batch, totalBatches, raw: part.result!, parsedFindingsCount: reply.findings.length, hasMetaLine: reply.hasMetaLine,
@@ -130,13 +139,14 @@ export async function reviewBatch(p: BatchReviewParams): Promise<BatchReviewResu
         partFindings = [...partFindings, ...resolved.findings];
       } catch (err) {
         if (isStop(err, ctx.signal)) throw err;
+        noteRefusal(err);
         result.failures.push(`${label}: the reply was cut off and the rest could not be recovered (${describeError(err)})`);
       }
     }
 
     const shownPaths = new Set(initial ? initial.keys() : []);
     const newlyRequested = filesNeeded.filter((path) => !shownPaths.has(path));
-    if (newlyRequested.length > 0) {
+    if (newlyRequested.length > 0 && !result.refusal) {
       try {
         const contents = await fetchAndBudgetContextFiles({
           requested: [...shownPaths, ...newlyRequested], cache: p.cache, service: p.service,
@@ -158,6 +168,7 @@ export async function reviewBatch(p: BatchReviewParams): Promise<BatchReviewResu
         }
       } catch (err) {
         if (isStop(err, ctx.signal)) throw err;
+        noteRefusal(err);
         result.failures.push(`${label}: the call with whole files failed, so the first findings are kept (${describeError(err)})`);
       }
     }

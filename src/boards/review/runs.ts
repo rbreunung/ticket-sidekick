@@ -1,13 +1,13 @@
 import {
-  runCritic, runExtraPass, runRegularPass, uncheckedFindings,
-  type EngineDeps, type EngineProgress, type PassOutcome, type ReviewStep, type StagedReview,
+  addFindings, addTokenTotals, markStepRun, runCritic, runPersonaPass, runRegularPass, uncheckedFindings,
+  type EngineDeps, type EngineProgress, type FoldResult, type PassOutcome, type PersonaBatch, type ReviewStep, type StagedReview,
 } from '../../review/engine';
 import { PERSONAS, type PersonaId } from '../../services/PrReviewService';
 import type { RunFinished, RunProgress } from '../../sessions/boardKind';
 import { REVIEW_MODEL_SETTING, type BoardModelHandle } from '../boardModels';
 import { DEFAULT_CONFIDENCE_THRESHOLD, type ReviewBoardDeps } from './deps';
 import type { Background } from './firstStep';
-import type { ActivePass, PassRecord, ReviewSession, ReviewWorking, StartedWith } from './kind';
+import type { ActivePass, PassRecord, ReviewSession, ReviewWorking, StartedWith, StepProgress } from './kind';
 
 // The review board's model runs after the first step: the regular pass (Start and Run again) and the
 // extra passes the developer picked (persona passes first, the critic last, in one run). Each step's
@@ -130,10 +130,7 @@ function withPartialChanges(review: StagedReview, changes: NonNullable<ActivePas
   };
 }
 
-/**
- * Reports engine progress in order: each report waits for the one before it. The regular pass saves
- * the review as it stands; an extra pass or the critic saves only what it changed in the stored review.
- */
+/** Reports the regular pass's progress in order: each report waits for the one before it, and saves the review as it stands. */
 function progressReporter(progress: RunProgress<ReviewWorking>) {
   let reported = Promise.resolve();
   return {
@@ -142,10 +139,7 @@ function progressReporter(progress: RunProgress<ReviewWorking>) {
         update: w => {
           if (!w.active) return w;
           const active: ActivePass = { ...w.active, step: p.step, done: p.batchesDone, total: p.batchesTotal };
-          if (p.review) {
-            if (active.what === 'passes' && w.review) active.partialChanges = partialChanges(w.review, p.review);
-            else active.partial = p.review;
-          }
+          if (p.review) active.partial = p.review;
           return { ...w, active };
         },
         done: p.batchesDone,
@@ -219,7 +213,60 @@ export async function regularRun(
   };
 }
 
-/** The picked extra passes, persona passes first and the critic last, each saved as it finishes. */
+/** Why the run stopped when the model refused: blocked, quota used up, or rate-limited a second time. */
+export const QUOTA_MESSAGE =
+  'The model refused further requests: the request limit or quota is used up, or the model is blocked for now. ' +
+  'The run stopped, and the passes it did not finish are offered again. Try again later.';
+export const ONE_AT_A_TIME_NOTE = 'The model limited the requests, so the passes now run one after another.';
+/** Said after a run whose passes had to run one after another, and whose refused batches ran again. */
+export const RAN_ONE_AT_A_TIME_NOTICE = 'The model limited the requests, so the passes ran one after another and the refused batches ran once more.';
+/** How long the rerun round waits when the refusal gave no retry hint. */
+export const RATE_LIMIT_WAIT_MS = 30_000;
+/** Up to this many batches, every picked persona pass runs at once; above it, two at a time. */
+export const ALL_AT_ONCE_MAX_BATCHES = 4;
+const TWO_AT_ONCE = 2;
+
+const realSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+/** Waits `ms`, or less when the run is stopped meanwhile. */
+function waitUnlessStopped(sleep: (ms: number) => Promise<void>, ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise<void>(resolve => {
+    const done = () => { signal.removeEventListener('abort', done); resolve(); };
+    signal.addEventListener('abort', done, { once: true });
+    void sleep(ms).then(done, done);
+  });
+}
+
+/** Two outcomes of the same step in one run (before and after its refused batches ran again) as one. */
+function combineOutcomes(a: PassOutcome | undefined, b: PassOutcome): PassOutcome {
+  if (!a) return b;
+  return {
+    ...b,
+    batchesDone: a.batchesDone + b.batchesDone,
+    failedBatches: a.failedBatches + b.failedBatches,
+    notes: [...a.notes, ...b.notes],
+    added: [...a.added, ...b.added],
+    merged: [...new Set([...a.merged, ...b.merged])],
+    droppedOutsidePr: (a.droppedOutsidePr ?? 0) + (b.droppedOutsidePr ?? 0),
+    removed: [...a.removed, ...b.removed],
+    labelled: [...a.labelled, ...b.labelled],
+    tokens: addTokenTotals(a.tokens, b.tokens),
+    ...(a.error ?? b.error ? { error: a.error ?? b.error } : {}),
+  };
+}
+
+/**
+ * The picked extra passes in one run. The persona passes run at the same time (all of them when the
+ * review has at most four batches, else two at once, the next starting as one ends), each over its
+ * batches one after another; the critic runs after all of them. Every finished batch of every pass is
+ * folded into the review at one place, `fold`, in one synchronous step, so the numbers stay unique
+ * and gap-free and a duplicate across passes merges. Stop, and a refusal that stops the run, abort
+ * one shared controller; a batch result arriving after that is dropped. A batch refused as
+ * rate-limited pauses its pass: the passes not started then run one after another, and after the
+ * others end, following a wait, the paused passes run once more from the refused batch; a refusal in
+ * that round, or a blocked or quota refusal at any time, stops the run with the quota message.
+ */
 export async function extraPassesRun(
   session: ReviewSession, steps: ReviewStep[], deps: ReviewBoardDeps, progress: RunProgress<ReviewWorking>, signal: AbortSignal,
 ): Promise<RunFinished<ReviewWorking>> {
@@ -235,37 +282,181 @@ export async function extraPassesRun(
   const engineSettings = { ...settings, ...(background ? { background } : {}) };
   const run = nextRun(working);
   const modelId = model.handle.id;
-  await progress({ update: w => ({ ...w, active: { what: 'passes', steps, step: steps[0], done: 0, total: 0, modelId, run } }), done: 0, total: 0 });
-  const reporter = progressReporter(progress);
+  const batchCount = review.snapshot.batches.length;
+  const entries: StepProgress[] = steps.map(step => ({ step, done: 0, total: step === 'critic' ? 0 : batchCount, state: 'queued' }));
+  const entryOf = (step: ReviewStep) => entries.find(e => e.step === step)!;
+  await progress({
+    update: w => ({ ...w, active: { what: 'passes', steps, step: steps[0], done: 0, total: 0, modelId, run, stepsProgress: entries.map(e => ({ ...e })) } }),
+    done: 0, total: 0,
+  });
+
+  // One controller for the whole run: Stop, and a refusal that stops the run, end every pass at once.
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal.aborted) abort();
+  else signal.addEventListener('abort', abort, { once: true });
+  const runSignal = controller.signal;
   // One cache for the run, so the steps after the first do not read the same context files again.
-  const engine: EngineDeps = { ...await engineDeps(deps, model.handle, bitbucket.client, signal, reporter.report), runCache: new Map() };
+  const engine: EngineDeps = { ...await engineDeps(deps, model.handle, bitbucket.client, runSignal), runCache: new Map() };
+  const sleep = deps.sleep ?? realSleep;
   const worked = workedOn(working);
 
-  for (const step of steps) {
-    if (signal.aborted) break;
-    const result: { review: StagedReview; outcome: PassOutcome } = step === 'critic'
-      ? await runCritic(review, worked, engineSettings, engine)
-      : await runExtraPass(review, step as PersonaId, engineSettings, engine);
-    await reporter.settled();
-    review = result.review;
-    const record: PassRecord = { ...result.outcome, modelId, run };
-    const done = review;
-    await progress({
+  let oneAtATime = false;
+  let refusedStop = false;
+  let rerunRound = false;
+  let unexpected: unknown;
+  const outcomes = new Map<ReviewStep, PassOutcome>();
+  const reviewedFiles = new Map<ReviewStep, number>();
+  const deferred: Array<{ step: PersonaId; remaining: number[]; retryAfterMs?: number }> = [];
+
+  // Saves the run's state in order: each report waits for the one before it.
+  let saved = Promise.resolve();
+  const report = (ended: PassRecord[] = []) => {
+    const current = review;
+    const list = entries.map(e => ({ ...e }));
+    const slow = oneAtATime;
+    const head = list.find(e => e.state === 'running' || e.state === 'waiting') ?? list.find(e => e.state === 'queued') ?? list[list.length - 1];
+    const done = list.reduce((n, e) => n + e.done, 0);
+    const total = list.reduce((n, e) => n + e.total, 0);
+    saved = saved.then(() => progress({
       update: w => {
-        const next: ReviewWorking = { ...w, review: done, passes: [...w.passes, record] };
-        if (next.active) {
-          next.active = { ...next.active };
-          delete next.active.partial;
-          delete next.active.partialChanges;
+        if (!w.active) return w;
+        const active: ActivePass = { ...w.active, step: head.step, done: head.done, total: head.total, stepsProgress: list, ...(slow ? { oneAtATime: true } : {}) };
+        delete active.partial;
+        const next: ReviewWorking = { ...w, active };
+        if (ended.length > 0) {
+          next.review = current;
+          next.passes = [...w.passes, ...ended];
+          delete active.partialChanges;
+        } else if (w.review) {
+          active.partialChanges = partialChanges(w.review, current);
         }
         return next;
       },
-      done: result.outcome.batchesDone,
-      total: result.outcome.batchesTotal,
-    });
-    if (result.outcome.status !== 'finished') break;
+      done, total,
+    })).catch(() => undefined);
+  };
+
+  /** The one place that writes the review while the passes run. */
+  const fold = (step: ReviewStep) => (b: PersonaBatch): FoldResult | undefined => {
+    // A result arriving after Stop or after a refusal stopped the run changes nothing.
+    if (runSignal.aborted) return undefined;
+    const folded = addFindings(review.store, b.findings);
+    const batches = b.contextPaths.length === 0 ? review.snapshot.batches : review.snapshot.batches.map((batch, i) => (i === b.batch
+      ? { ...batch, contextPaths: [...batch.contextPaths, ...b.contextPaths.filter(p => !batch.contextPaths.includes(p))] } : batch));
+    review = { ...review, snapshot: { ...review.snapshot, batches }, store: folded.store };
+    entryOf(step).done++;
+    report();
+    return {
+      added: folded.added, merged: folded.merged,
+      unverified: folded.store.findings.filter(f => folded.added.includes(f.id) && f.locationUnverified).length,
+    };
+  };
+
+  /** The record of a step that ended, with its status in the run's words. */
+  const recordOf = (step: ReviewStep, status: PassRecord['status']): PassRecord => ({ ...outcomes.get(step)!, status, modelId, run });
+
+  const endStep = (step: ReviewStep, outcome: PassOutcome) => {
+    let status: PassRecord['status'] = outcome.status;
+    if (outcome.status === 'stopped' && !signal.aborted) status = 'refused';
+    if (outcome.status === 'finished' || outcome.status === 'failed') {
+      status = step === 'critic' || (reviewedFiles.get(step) ?? 0) > 0 ? 'finished' : 'failed';
+    }
+    if (status === 'finished' && step !== 'critic') review = { ...review, store: markStepRun(review.store, step) };
+    entryOf(step).state = 'ended';
+    report([recordOf(step, status)]);
+  };
+
+  const runPersona = async (step: PersonaId, batches?: number[]) => {
+    entryOf(step).state = 'running';
+    report();
+    try {
+      const result = await runPersonaPass(review, step, engineSettings, engine, { fold: fold(step), ...(batches ? { batches } : {}) });
+      outcomes.set(step, combineOutcomes(outcomes.get(step), result.outcome));
+      reviewedFiles.set(step, (reviewedFiles.get(step) ?? 0) + result.reviewedFiles);
+      const refused = result.refused;
+      if (refused && refused.refusal.kind === 'rate-limited' && !rerunRound && !runSignal.aborted) {
+        oneAtATime = true;
+        deferred.push({ step, remaining: refused.remaining, ...(refused.refusal.retryAfterMs !== undefined ? { retryAfterMs: refused.refusal.retryAfterMs } : {}) });
+        entryOf(step).state = 'waiting';
+        report();
+        return;
+      }
+      if (refused && !runSignal.aborted) {
+        // Copilot refuses every call for minutes after this: no further batch or pass starts.
+        refusedStop = true;
+        abort();
+      }
+      endStep(step, result.outcome);
+    } catch (err) {
+      unexpected ??= err;
+      abort();
+    }
+  };
+
+  // The persona passes, under the cap.
+  const queue = steps.filter((s): s is PersonaId => s !== 'critic');
+  const cap = () => (oneAtATime ? 1 : batchCount <= ALL_AT_ONCE_MAX_BATCHES ? queue.length + running.size : TWO_AT_ONCE);
+  const running = new Set<Promise<void>>();
+  const persona = [...queue];
+  while (queue.length > 0 || running.size > 0) {
+    while (queue.length > 0 && running.size < Math.max(1, cap()) && !runSignal.aborted) {
+      const step = queue.shift()!;
+      const pass: Promise<void> = runPersona(step).finally(() => running.delete(pass));
+      running.add(pass);
+    }
+    if (running.size === 0) break;
+    await Promise.race(running);
   }
+
+  // The rerun round: each paused pass once more from its refused batch, one after another, after the wait.
+  if (deferred.length > 0 && !runSignal.aborted) {
+    const waitMs = Math.max(...deferred.map(d => d.retryAfterMs ?? RATE_LIMIT_WAIT_MS));
+    engine.onDiag?.('info', 'Rate-limited batches run again after a wait', { waitMs, passes: deferred.map(d => d.step) });
+    await waitUnlessStopped(sleep, waitMs, runSignal);
+    rerunRound = true;
+    for (const d of deferred) {
+      if (runSignal.aborted) break;
+      await runPersona(d.step, d.remaining);
+    }
+  }
+  // A pass still paused when the run ended was refused.
+  const leftPaused = deferred.filter(d => entryOf(d.step).state === 'waiting').map(d => recordOf(d.step, 'refused'));
+  if (leftPaused.length > 0) {
+    for (const r of leftPaused) entryOf(r.step).state = 'ended';
+    report(leftPaused);
+  }
+
+  // The critic, last, when no stop came and some picked persona pass finished (or none was picked).
+  const personaFinished = persona.length === 0 || persona.some(step => outcomes.get(step)?.status === 'finished' && (reviewedFiles.get(step) ?? 0) > 0);
+  if (steps.includes('critic') && !runSignal.aborted && personaFinished && unexpected === undefined) {
+    entryOf('critic').state = 'running';
+    report();
+    const criticEngine: EngineDeps = {
+      ...engine,
+      onProgress: p => {
+        if (runSignal.aborted) return;
+        if (p.review) review = p.review;
+        Object.assign(entryOf('critic'), { done: p.batchesDone, total: p.batchesTotal });
+        report();
+      },
+    };
+    try {
+      const result = await runCritic(review, worked, engineSettings, criticEngine);
+      review = result.review;
+      if (result.outcome.status === 'stopped' && !signal.aborted) refusedStop = true;
+      outcomes.set('critic', result.outcome);
+      endStep('critic', result.outcome);
+    } catch (err) {
+      unexpected ??= err;
+    }
+  }
+  signal.removeEventListener('abort', abort);
+  await saved;
+  if (unexpected !== undefined) throw unexpected;
+
   const final = review;
+  const notice = refusedStop ? QUOTA_MESSAGE : deferred.length > 0 ? RAN_ONE_AT_A_TIME_NOTICE : undefined;
   return {
     update: w => {
       const next: ReviewWorking = { ...w, review: final };
@@ -273,7 +464,8 @@ export async function extraPassesRun(
       if (left.length > 0) next.picked = left;
       else delete next.picked;
       delete next.active;
-      delete next.notice;
+      if (notice) next.notice = notice;
+      else delete next.notice;
       return next;
     },
   };
@@ -332,12 +524,16 @@ export function interruptedWorking(working: ReviewWorking): ReviewWorking {
     withoutResultsState(result);
     return result;
   }
-  const step = active.step;
-  // The running step's finished batches join the review; the steps finished before it were saved already.
+  // The running steps' finished batches join the review; the steps that ended before were saved already.
   if (active.partialChanges && next.review) next.review = withPartialChanges(next.review, active.partialChanges);
   else if (active.partial) next.review = active.partial;
   const review = next.review;
   const left = active.steps.filter(s => !review?.store.stepsRun.includes(s));
   if (left.length > 0) next.picked = left;
-  return { ...next, passes: [...working.passes, emptyRecord(step, active, active.run)] };
+  // Every step that had started and not ended is recorded as cut off.
+  const cut = active.stepsProgress
+    ? active.stepsProgress.filter(e => e.state === 'running' || e.state === 'waiting')
+      .map(e => emptyRecord(e.step, { ...active, done: e.done, total: e.total }, active.run))
+    : [emptyRecord(active.step, active, active.run)];
+  return { ...next, passes: [...working.passes, ...cut] };
 }

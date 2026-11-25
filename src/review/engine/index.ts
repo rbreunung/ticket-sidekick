@@ -2,7 +2,7 @@
 // review. vscode-free.
 export * from './types';
 export { runRegularPass, suggestionOf, type RegularPassResult } from './regularPass';
-export { runExtraPass } from './extraPass';
+export { runExtraPass, runPersonaPass, type FoldResult, type PersonaBatch, type PersonaPassHooks, type PersonaPassResult } from './extraPass';
 export { runCritic } from './critic';
 export { snapshotFiles } from './snapshot';
-export { addFindings, applyCriticVerdicts, emptyStore, uncheckedFindings } from './findingStore';
+export { addFindings, applyCriticVerdicts, emptyStore, markStepRun, uncheckedFindings } from './findingStore';

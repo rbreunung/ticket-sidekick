@@ -16,7 +16,7 @@ import {
 } from './firstStep';
 import { REVIEW_KIND, reviewRecipeOf, type ReviewRecipe } from './recipe';
 import {
-  EXTRA_STEPS, STEP_LABELS, extraPassesRun, interruptedWorking, joinNames, modelIdOf, pickedSteps, regularRun,
+  EXTRA_STEPS, ONE_AT_A_TIME_NOTE, STEP_LABELS, extraPassesRun, interruptedWorking, joinNames, modelIdOf, pickedSteps, regularRun,
   reviewNotes, stepBlocker, stepName,
 } from './runs';
 import {
@@ -48,11 +48,20 @@ export interface ReviewDerived {
 
 /** One pass as it ended, with the model it ran on and the run it was part of. */
 export interface PassRecord extends Omit<PassOutcome, 'status'> {
-  /** `interrupted`: a restart cut the pass off. */
-  status: PassStatus | 'interrupted';
+  /** `interrupted`: a restart cut the pass off. `refused`: the model refused its requests, so the run stopped. */
+  status: PassStatus | 'interrupted' | 'refused';
   modelId: string;
   /** Which run of this review it was part of; the board's banners are about the last run. */
   run: number;
+}
+
+/** How far one step of a run of extra passes is. */
+export interface StepProgress {
+  step: ReviewStep;
+  done: number;
+  total: number;
+  /** `waiting`: a batch was refused as rate-limited, and the step runs again after the others end. */
+  state: 'queued' | 'running' | 'waiting' | 'ended';
 }
 
 /** The pass run going on, saved so a restart finds it cut off. */
@@ -60,7 +69,7 @@ export interface ActivePass {
   /** The regular pass (Start, Run again) or the picked extra passes. */
   what: 'regular' | 'passes';
   steps: ReviewStep[];
-  /** The step running now and how far it is. */
+  /** The first step running now and how far it is; `stepsProgress` has every step of a run of extra passes. */
   step: ReviewStep;
   done: number;
   total: number;
@@ -80,6 +89,10 @@ export interface ActivePass {
    * restart that cuts the pass off merges it onto the stored review.
    */
   partialChanges?: { store: FindingStore; contextPaths?: string[][] };
+  /** For the extra passes: one progress entry per step, as the passes run at the same time. */
+  stepsProgress?: StepProgress[];
+  /** The model limited the requests, so the passes not started run one after another. */
+  oneAtATime?: true;
 }
 
 /** What the regular pass was started with. */
@@ -218,6 +231,8 @@ export interface PassPickerView {
   choices: PassChoiceView[];
   canRun: boolean;
   runBlocker?: string;
+  /** The steps a next run can do: the passes not run yet, and the critic when there are unchecked findings. */
+  offered: ReviewStep[];
 }
 
 export interface ReviewResultsView {
@@ -243,8 +258,15 @@ export interface ReviewResultsView {
   post: { count: number; blocker?: string };
   /** What Copy acts on: the selection, or every finding when nothing is selected. */
   copy: { scope: 'selected' | 'all'; count: number };
-  /** A pass is running: which run, the step running now and its finished batches. */
-  running?: { what: ActivePass['what']; step: ReviewStep; done: number; total: number };
+  /**
+   * A pass is running: which run, the first step running now and its finished batches, a progress
+   * line per extra pass running or waiting, and why the passes now run one after another.
+   */
+  running?: {
+    what: ActivePass['what']; step: ReviewStep; done: number; total: number;
+    passes?: Array<{ step: ReviewStep; text: string }>;
+    note?: string;
+  };
 }
 
 export interface ReviewView {
@@ -283,6 +305,8 @@ function statusLine(pass: PassRecord): string | undefined {
   switch (pass.status) {
     case 'stopped':
       return `${name} was stopped: ${pass.batchesDone} of ${pass.batchesTotal} batches finished, and ${kept}.${offered}`;
+    case 'refused':
+      return `${name} was refused by the model: ${pass.batchesDone} of ${pass.batchesTotal} batches finished, and ${kept}.${offered}`;
     case 'interrupted':
       return `${name} was cut off by a restart: ${pass.batchesDone} of ${pass.batchesTotal} batches finished, and ${kept}.${offered}`;
     case 'failed':
@@ -370,7 +394,10 @@ function pickerView(working: ReviewWorking, review: StagedReview): PassPickerVie
       picked: picked.includes(step), available: !reason, ...(reason ? { reason } : {}),
     };
   });
-  return { suggestion: suggestionText(review), choices, canRun: picked.length > 0, ...(picked.length === 0 ? { runBlocker: 'Pick at least one pass.' } : {}) };
+  return {
+    suggestion: suggestionText(review), choices, canRun: picked.length > 0, ...(picked.length === 0 ? { runBlocker: 'Pick at least one pass.' } : {}),
+    offered: choices.filter(c => c.available).map(c => c.step),
+  };
 }
 
 function resultsView(session: ReviewSession, label: (id: string) => string): ReviewResultsView {
@@ -406,8 +433,7 @@ function resultsView(session: ReviewSession, label: (id: string) => string): Rev
       ...(selected.length === 0 ? { blocker: 'Select the findings to post.' } : postCount === 0 ? { blocker: 'The selected comments are posted already.' } : {}),
     },
     copy: selected.length > 0 ? { scope: 'selected', count: selected.length } : { scope: 'all', count: findingCount },
-    ...(working.active
-      ? { running: { what: working.active.what, step: working.active.step, done: working.active.done, total: working.active.total } } : {}),
+    ...(working.active ? { running: runningView(working.active) } : {}),
   };
 }
 
@@ -436,11 +462,34 @@ function liveRegularSession(session: ReviewSession): ReviewSession | undefined {
   return { ...session, working: live };
 }
 
+function stepProgressText(step: ReviewStep, done: number, total: number, waiting = false): string {
+  const name = step === 'critic' ? 'Critic' : `${STEP_LABELS[step]} pass`;
+  if (waiting) return `${name}: ${done} of ${total} batches, runs again after the others`;
+  return total > 0 ? `${name}: ${done} of ${total} batches` : `${name}: starting`;
+}
+
+/** The progress line of each extra pass running or waiting; undefined for the regular pass. */
+function passLines(active: ActivePass): Array<{ step: ReviewStep; text: string }> | undefined {
+  if (!active.stepsProgress) return undefined;
+  return active.stepsProgress
+    .filter(e => e.state === 'running' || e.state === 'waiting')
+    .map(e => ({ step: e.step, text: stepProgressText(e.step, e.done, e.total, e.state === 'waiting') }));
+}
+
+function runningView(active: ActivePass): NonNullable<ReviewResultsView['running']> {
+  const passes = passLines(active);
+  return {
+    what: active.what, step: active.step, done: active.done, total: active.total,
+    ...(passes ? { passes } : {}), ...(active.oneAtATime ? { note: ONE_AT_A_TIME_NOTE } : {}),
+  };
+}
+
 function progressText(working: ReviewWorking): string | undefined {
   const { active } = working;
   if (!active) return undefined;
-  const name = active.step === 'critic' ? 'Critic' : `${STEP_LABELS[active.step]} pass`;
-  return active.total > 0 ? `${name}: ${active.done} of ${active.total} batches` : `${name}: starting`;
+  const lines = passLines(active);
+  if (lines && lines.length > 0) return lines.map(l => l.text).join('; ');
+  return stepProgressText(active.step, active.done, active.total);
 }
 
 /** The background as the first step shows it. */

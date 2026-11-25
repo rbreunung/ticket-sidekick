@@ -3,7 +3,9 @@ import { ModelRequestCancelledError, type BoardModelHandle } from '../boards/boa
 import {
   runCritic,
   runExtraPass,
+  runPersonaPass,
   runRegularPass,
+  type PersonaBatch,
   type EngineDeps,
   type EngineSettings,
   type StagedReview,
@@ -483,6 +485,59 @@ describe('extra passes', () => {
     expect(t.calls).toHaveLength(0);
     expect(result.outcome).toMatchObject({ status: 'commit-unreadable', unreadablePath: 'src/ctx.ts' });
     expect(result.review).toBe(review);
+  });
+});
+
+describe('a persona pass reporting batch by batch', () => {
+  it('hands each finished batch\'s new findings and newly read context paths to the fold, in batch order, and changes no store itself', async () => {
+    const { t, review } = await reviewedTwoFiles((c) => {
+      if (c.kind === 'security' && c.file === 2 && !c.prompt.includes('First-pass findings')) {
+        return reviewReply([{ file: 2, line: 3, title: 'Token logged' }], { additionalFilesNeeded: ['src/auth.ts'] });
+      }
+      return reviewReply(c.file === 1 ? [{ file: 1, line: 6, title: 'Timing leak' }] : []);
+    });
+    t.client.fileContents.set('src/auth.ts', 'export const auth = 2;');
+    const folded: PersonaBatch[] = [];
+
+    const result = await runPersonaPass(review, 'security', ONE_FILE_PER_BATCH, t.deps, {
+      fold: (b) => { folded.push(b); return { added: b.findings.map((_, i) => 10 + folded.length * 2 + i), merged: [], unverified: 0 }; },
+    });
+
+    expect(folded.map((b) => [b.batch, b.findings.map((f) => f.title), b.contextPaths])).toEqual([
+      [0, ['Timing leak'], []],
+      [1, ['Token logged'], ['src/auth.ts']],
+    ]);
+    expect(result.outcome).toMatchObject({ step: 'security', status: 'finished', batchesDone: 2, added: [12, 14] });
+    expect(review.store.findings.map((f) => f.id)).toEqual([1, 2, 3]);
+  });
+
+  it('a stop that lands while a batch is out ends the pass when the fold drops that batch\'s result', async () => {
+    const { t, review } = await reviewedTwoFiles((c) => reviewReply([{ file: c.file, line: 6, title: `Timing leak in f${c.file}` }]));
+    const result = await runPersonaPass(review, 'security', ONE_FILE_PER_BATCH, t.deps, { fold: () => undefined });
+    expect(result.outcome).toMatchObject({ status: 'stopped', batchesDone: 0, added: [] });
+    expect(t.calls).toHaveLength(1);
+  });
+
+  it('a two-file batch whose first call is refused as blocked comes back as a classified refusal, with no retry, split or later batch', async () => {
+    const blocked = Object.assign(new Error('The request was blocked'), { code: 'Blocked' });
+    const { t, review } = await reviewedTwoFiles(() => { throw blocked; });
+    const twoFiles: StagedReview = {
+      ...review,
+      snapshot: { ...review.snapshot, batches: [{ files: review.snapshot.batches.flatMap((b) => b.files), contextPaths: [] }, review.snapshot.batches[1]] },
+    };
+
+    const result = await runPersonaPass(twoFiles, 'performance', ONE_FILE_PER_BATCH, t.deps, { fold: () => ({ added: [], merged: [], unverified: 0 }) });
+
+    expect(t.calls).toHaveLength(1);
+    expect(result.refused).toEqual({ batch: 0, refusal: { kind: 'blocked' }, remaining: [0, 1] });
+    expect(result.outcome.batchesDone).toBe(0);
+  });
+
+  it('runs only the batches it is given, in their order', async () => {
+    const { t, review } = await reviewedTwoFiles(() => reviewReply([]));
+    const result = await runPersonaPass(review, 'security', ONE_FILE_PER_BATCH, t.deps, { batches: [1], fold: () => ({ added: [], merged: [], unverified: 0 }) });
+    expect(t.calls.map((c) => [c.kind, c.file])).toEqual([['security', 2]]);
+    expect(result.outcome).toMatchObject({ status: 'finished', batchesDone: 1 });
   });
 });
 

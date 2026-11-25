@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isTransientLmError, withLmRetry, withEasierRetry, PartialLmResponseError, UnparseableReplyError } from '../utils/lmRetry';
+import { isTransientLmError, refusalOf, withLmRetry, withEasierRetry, PartialLmResponseError, UnparseableReplyError } from '../utils/lmRetry';
 
 const noopSleep = async () => {};
 
@@ -172,5 +172,45 @@ describe('withEasierRetry', () => {
       [3, [1]],
       [3, [2]],
     ]);
+  });
+});
+
+describe('refusalOf: the refusals Copilot sends, by code, then name, then message', () => {
+  function named(name: string, message: string): Error {
+    const err = new Error(message);
+    err.name = name;
+    return err;
+  }
+
+  it('classifies a plain error named ChatRateLimited as rate-limited, with the retry hint its message gives', () => {
+    expect(refusalOf(named('ChatRateLimited', 'Sorry, you have been rate-limited. Please wait 45 seconds before trying again.')))
+      .toEqual({ kind: 'rate-limited', retryAfterMs: 45_000 });
+    expect(refusalOf(named('ChatRateLimited', 'Please retry after 2 minutes.'))).toEqual({ kind: 'rate-limited', retryAfterMs: 120_000 });
+  });
+
+  it('classifies a rate limit named only in the message, with no retry hint', () => {
+    expect(refusalOf(new Error('Request failed: 429 Too Many Requests'))).toEqual({ kind: 'rate-limited' });
+    expect(refusalOf(new Error('You hit the rate limit for this model'))).toEqual({ kind: 'rate-limited' });
+  });
+
+  it('classifies a LanguageModelError coded Blocked as blocked, whatever its message says', () => {
+    expect(refusalOf(lmError('rate limit exceeded', 'Blocked'))).toEqual({ kind: 'blocked' });
+  });
+
+  it('classifies ChatQuotaExceeded, by name or by a quota message, as quota used up', () => {
+    expect(refusalOf(named('ChatQuotaExceeded', 'You have used up your monthly allowance'))).toEqual({ kind: 'quota' });
+    expect(refusalOf(new Error('Quota exceeded for premium requests'))).toEqual({ kind: 'quota' });
+  });
+
+  it('is undefined for any other failure', () => {
+    expect(refusalOf(new Error('The model is overloaded'))).toBeUndefined();
+    expect(refusalOf(lmError('no permission', 'NoPermissions'))).toBeUndefined();
+    expect(refusalOf('not an error')).toBeUndefined();
+  });
+
+  it('a refusal is never retried: withEasierRetry rethrows it at once for a batch of several items', async () => {
+    const call = vi.fn().mockRejectedValue(named('ChatRateLimited', 'rate-limited'));
+    await expect(withEasierRetry(['a', 'b'], call, (xs) => [xs.slice(0, 1), xs.slice(1)], { sleep: noopSleep })).rejects.toThrow('rate-limited');
+    expect(call).toHaveBeenCalledTimes(1);
   });
 });

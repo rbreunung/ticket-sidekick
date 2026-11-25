@@ -1,7 +1,7 @@
 import { ModelRequestCancelledError, type BoardModelHandle } from '../../boards/boardModels';
 import { PrReviewService, type ReviewBackground } from '../../services/PrReviewService';
 import type { DiagLogger } from '../../utils/diagTypes';
-import { isTransientLmError, PartialLmResponseError, UnparseableReplyError, withEasierRetry, withLmRetry, type SplitBatch } from '../../utils/lmRetry';
+import { isTransientLmError, PartialLmResponseError, refusalOf, UnparseableReplyError, withEasierRetry, withLmRetry, type SplitBatch } from '../../utils/lmRetry';
 import { sanitizeDetails } from '../../utils/logRedaction';
 import { createTokenMeter, type TokenMeter } from '../tokenMeter';
 import {
@@ -149,7 +149,9 @@ export function splitInHalf<T>(items: T[]): [T[], T[]] {
 /**
  * One batch's first call over `items`: tried twice, then split in half with one try per half. Each
  * attempt gets its call line and each failure its failure, call and recovery lines. A stop throws;
- * a part that failed after its tries is returned with its error.
+ * a part that failed after its tries is returned with its error. A refusal (rate-limited, blocked,
+ * quota used up) is never retried or split: it comes back as one failed part over every item, so the
+ * caller can read its class with `refusalOf`.
  */
 export async function callBatchWithSplit<T>(ctx: PassContext, params: {
   items: T[];
@@ -167,36 +169,42 @@ export async function callBatchWithSplit<T>(ctx: PassContext, params: {
   const { items, pass, batch, totalBatches, label } = params;
   const tracker = createAttemptTracker<T>();
   let promptChars = 0;
-  const parts = await withEasierRetry(
-    items,
-    async (subset) => {
-      const attempt = tracker.start(subset);
-      const prompt = params.buildPrompt(subset);
-      promptChars = prompt.length;
-      const raw = await callOnce(ctx, prompt);
-      params.validate?.(raw);
-      ctx.log('info', formatCallLine({
-        runTag: ctx.runTag, pass, batch, totalBatches, attempt, itemCount: subset.length, promptChars: prompt.length,
-        responseChars: raw.length, durationMs: tracker.elapsedMs(), status: params.statusOf(raw),
-      }));
-      return raw;
-    },
-    splitInHalf,
-    {
-      ...(ctx.sleep ? { sleep: ctx.sleep } : {}),
-      onAttemptFailed: (attempt, err, subset) => {
-        if (isStop(err, ctx.signal)) return;
-        handleAttemptFailure({
-          runTag: ctx.runTag, pass, batch, totalBatches, libraryAttempt: attempt, err, items: subset, originalItems: items,
-          tracker, promptChars, split: splitInHalf,
-          logFailure: (a, e) => ctx.log('warn', `Model call failed — ${label} (attempt ${a})`, {
-            ...params.failureDetails?.(subset), error: e instanceof Error ? e.message : String(e),
-          }),
-          logReview: ctx.log,
-        });
+  let parts: Array<SplitBatch<T, string>>;
+  try {
+    parts = await withEasierRetry(
+      items,
+      async (subset) => {
+        const attempt = tracker.start(subset);
+        const prompt = params.buildPrompt(subset);
+        promptChars = prompt.length;
+        const raw = await callOnce(ctx, prompt);
+        params.validate?.(raw);
+        ctx.log('info', formatCallLine({
+          runTag: ctx.runTag, pass, batch, totalBatches, attempt, itemCount: subset.length, promptChars: prompt.length,
+          responseChars: raw.length, durationMs: tracker.elapsedMs(), status: params.statusOf(raw),
+        }));
+        return raw;
       },
-    },
-  );
+      splitInHalf,
+      {
+        ...(ctx.sleep ? { sleep: ctx.sleep } : {}),
+        onAttemptFailed: (attempt, err, subset) => {
+          if (isStop(err, ctx.signal)) return;
+          handleAttemptFailure({
+            runTag: ctx.runTag, pass, batch, totalBatches, libraryAttempt: attempt, err, items: subset, originalItems: items,
+            tracker, promptChars, split: splitInHalf,
+            logFailure: (a, e) => ctx.log('warn', `Model call failed — ${label} (attempt ${a})`, {
+              ...params.failureDetails?.(subset), error: e instanceof Error ? e.message : String(e),
+            }),
+            logReview: ctx.log,
+          });
+        },
+      },
+    );
+  } catch (err) {
+    if (isStop(err, ctx.signal) || !refusalOf(err)) throw err;
+    parts = [{ items, error: err }];
+  }
   rethrowStop(parts.map((part) => part.error), ctx.signal);
   return parts;
 }

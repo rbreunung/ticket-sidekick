@@ -1,3 +1,4 @@
+import { refusalOf } from '../../utils/lmRetry';
 import { parseCriticAdditionalFiles, parseCriticKeep, type ReviewFinding } from '../reviewSessionState';
 import { logFindingsFunnel, runPass, writeRunRecord } from './diagnostics';
 import { applyCriticVerdicts, markStepRun, uncheckedFindings } from './findingStore';
@@ -72,6 +73,8 @@ async function critic(
   const worked = new Set(workedOn);
   let store = review.store;
   let stopped = false;
+  /** The model refused a call: it takes no more now, so the critic checks no further batch. */
+  let refused = false;
 
   deps.onProgress?.({ step: 'critic', batchesDone: 0, batchesTotal: order.length });
   for (let n = 0; n < order.length; n++) {
@@ -102,6 +105,7 @@ async function critic(
       for (const part of parts) {
         if (part.error !== undefined) {
           failed = true;
+          if (refusalOf(part.error)) refused = true;
           outcome.notes.push(`${label}: ${part.items.length} finding(s) could not be checked and stay unchecked (${describeError(part.error)})`);
           continue;
         }
@@ -150,10 +154,14 @@ async function critic(
     if (failed) outcome.failedBatches++;
     outcome.batchesDone = n + 1;
     deps.onProgress?.({ step: 'critic', batchesDone: n + 1, batchesTotal: order.length, review: { ...review, store } });
+    if (refused) {
+      outcome.notes.push(`The model refused further requests, so the critic checked no batch after ${label}.`);
+      break;
+    }
   }
 
   keepInRunCache(deps.runCache, reviewedCommit, cache);
-  if (!stopped) store = markStepRun(store, 'critic');
+  if (!stopped && !refused) store = markStepRun(store, 'critic');
   ctx.log('info', `Critic ${stopped ? 'stopped' : 'finished'}`, {
     batchesDone: outcome.batchesDone, batchesTotal: order.length, removed: outcome.removed.length, labelled: outcome.labelled.length,
   });
@@ -166,5 +174,5 @@ async function critic(
     unverified: order.flatMap((i) => byBatch.get(i)!).filter((f) => kept.has(f.id) && f.locationUnverified).length,
   });
   writeRunRecord(ctx, funnel);
-  return { review: { ...review, store }, outcome: { ...outcome, status: stopped ? 'stopped' : 'finished', tokens: ctx.meter.totals() } };
+  return { review: { ...review, store }, outcome: { ...outcome, status: stopped || refused ? 'stopped' : 'finished', tokens: ctx.meter.totals() } };
 }
