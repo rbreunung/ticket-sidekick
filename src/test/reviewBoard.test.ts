@@ -516,7 +516,7 @@ describe('a stored review', () => {
     const store = new SessionStore(dir);
     const stored = (await store.load(state.id))!.session;
     const working = stored.working as ReviewWorking;
-    await store.save({ ...stored, working: { ...working, explanations: { 2: { text: 'The query concatenates user input.' } } } });
+    await store.save({ ...stored, working: { ...working, threads: { 2: [{ answer: 'The query concatenates user input.' }] } } });
     return state.id;
   }
 
@@ -536,7 +536,7 @@ describe('a stored review', () => {
     state = await runAndWait(m, state, { type: 'start' });
     expect(confirms).toEqual(['Replace the stored review?']);
     expect(calls).toEqual([]);
-    expect((await new SessionStore(dir).load(id))!.session.working).toMatchObject({ explanations: { 2: { text: 'The query concatenates user input.' } } });
+    expect((await new SessionStore(dir).load(id))!.session.working).toMatchObject({ threads: { 2: [{ answer: 'The query concatenates user input.' }] } });
 
     state = await act(m, state, { type: 'back-to-review' });
     expect(viewOf(state).results?.findings).toHaveLength(2);
@@ -549,7 +549,7 @@ describe('a stored review', () => {
     state = await act(m, state, { type: 'new-review' });
     state = await runAndWait(m, state, { type: 'start' });
     const working = (await new SessionStore(dir).load(state.id))!.session.working as ReviewWorking;
-    expect(working.explanations).toEqual({});
+    expect(working.threads).toEqual({});
     expect(viewOf(state).stage).toBe('review');
   });
 

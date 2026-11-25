@@ -30,13 +30,18 @@ export function joinNames(names: string[]): string {
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
-export function hasWork(working: ReviewWorking): boolean {
-  return Object.keys(working.explanations).length > 0 || Object.keys(working.drafts).length > 0;
+/** The findings with a discussion of at least one turn, by number as stored. */
+function discussed(working: ReviewWorking): string[] {
+  return Object.keys(working.threads).filter(key => working.threads[key].length > 0);
 }
 
-/** Numbers of the findings the developer worked on: explained, or with a draft comment. */
+export function hasWork(working: ReviewWorking): boolean {
+  return discussed(working).length > 0 || Object.keys(working.drafts).length > 0;
+}
+
+/** Numbers of the findings the developer worked on: discussed (Explain or a follow-up), or with a draft comment. */
 export function workedOn(working: ReviewWorking): number[] {
-  return [...new Set([...Object.keys(working.explanations), ...Object.keys(working.drafts)].map(Number))].filter(Number.isInteger);
+  return [...new Set([...discussed(working), ...Object.keys(working.drafts)].map(Number))].filter(Number.isInteger);
 }
 
 /** The model the runs use: the one picked on the board, else the setting's when it is available. */
@@ -62,11 +67,6 @@ export function pickedSteps(working: ReviewWorking): ReviewStep[] {
   if (!review) return [];
   const picks = working.picked ?? (review.suggestion.kind === 'suggested' ? review.suggestion.personas : []);
   return EXTRA_STEPS.filter(step => picks.includes(step) && !stepBlocker(review, step));
-}
-
-/** The own-text background as Explain takes it, as its focus question; a ticket's text is not given to Explain yet. */
-export function focusOf(startedWith: Pick<StartedWith, 'background'>): string {
-  return startedWith.background?.kind === 'text' ? startedWith.background.text : '';
 }
 
 /** A run that did nothing: the notice says why, on the first step or on the results. */
@@ -158,7 +158,7 @@ export interface RegularRunChoices {
   background?: Background;
   /** Why there is no background though a ticket was chosen. */
   backgroundReason?: string;
-  /** Asked before the review is replaced when it has explanations or drafts. */
+  /** Asked before the review is replaced when it has discussions or drafts. */
   confirm: { title: string; detail: string; button: string; declined: string };
   /** Run from the first step (Start) or from the results (Run again). */
   fromFirstStep: boolean;
@@ -200,7 +200,7 @@ export async function regularRun(
   return {
     update: w => {
       const next: ReviewWorking = {
-        ...w, stage: 'review', firstStep: { ...w.firstStep }, startedWith, passes: [record], explanations: {}, drafts: {},
+        ...w, stage: 'review', firstStep: { ...w.firstStep }, startedWith, passes: [record], threads: {}, drafts: {},
       };
       delete next.firstStep.notice;
       delete next.active;
@@ -517,7 +517,7 @@ export function interruptedWorking(working: ReviewWorking): ReviewWorking {
     // The findings of the batches that finished stay, as after a stop; the review it replaced is gone.
     const startedWith: StartedWith = { ...active.startedWith!, confidenceThreshold: working.startedWith?.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD };
     const result: ReviewWorking = {
-      ...next, stage: 'review', startedWith, passes: [emptyRecord(active.step, active, active.run)], explanations: {}, drafts: {},
+      ...next, stage: 'review', startedWith, passes: [emptyRecord(active.step, active, active.run)], threads: {}, drafts: {},
     };
     if (active.partial) result.review = active.partial;
     else delete result.review;

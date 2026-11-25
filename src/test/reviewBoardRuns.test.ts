@@ -195,8 +195,8 @@ async function storedWorking(id: string): Promise<ReviewWorking> {
   return (await new SessionStore(dir).load(id))!.session.working as ReviewWorking;
 }
 
-/** Writes explanations and drafts into the stored session, as Explain and the drafts would. */
-async function storeWork(id: string, work: Pick<ReviewWorking, 'explanations' | 'drafts'>): Promise<void> {
+/** Writes discussions and drafts into the stored session, as Explain and the drafts would. */
+async function storeWork(id: string, work: Pick<ReviewWorking, 'threads' | 'drafts'>): Promise<void> {
   const store = new SessionStore(dir);
   const stored = (await store.load(id))!.session;
   await store.save({ ...stored, working: { ...(stored.working as ReviewWorking), ...work } });
@@ -300,7 +300,7 @@ describe('Run selected', () => {
     state = await runAndWait(m, state, { type: 'passes' });
     expect(resultsOf(state).passesRun).toEqual(['Regular', 'Security']);
     const numbers = Object.fromEntries(resultsOf(state).findings.map(f => [f.title, f.number]));
-    await storeWork(state.id, { explanations: { [numbers['Token logged in f1']]: { text: 'The token reaches the log.' } }, drafts: { [numbers['Unchecked input in f2']]: { text: 'Please validate.' } } });
+    await storeWork(state.id, { threads: { [numbers['Token logged in f1']]: [{ answer: 'The token reaches the log.' }] }, drafts: { [numbers['Unchecked input in f2']]: { text: 'Please validate.' } } });
 
     clock += 24 * 60 * 60 * 1000;
     calls = [];
@@ -795,7 +795,7 @@ describe('Run again', () => {
     state = await act(m, state, { type: 'own-text', text: 'does this handle retries?' });
     state = await runAndWait(m, state, { type: 'start' });
     state = await runAndWait(m, state, { type: 'passes' });
-    await storeWork(state.id, { explanations: { 1: { text: 'Explained.' } }, drafts: {} });
+    await storeWork(state.id, { threads: { 1: [{ answer: 'Explained.' }] }, drafts: {} });
     const m2 = manager();
     state = await open(m2);
 
@@ -805,7 +805,7 @@ describe('Run again', () => {
     expect(confirms).toEqual(['Run the whole review again?']);
     expect(calls).toEqual([]);
     expect(resultsOf(state).notice).toMatch(/kept/);
-    expect((await storedWorking(state.id)).explanations).toEqual({ 1: { text: 'Explained.' } });
+    expect((await storedWorking(state.id)).threads).toEqual({ 1: [{ answer: 'Explained.' }] });
     expect(resultsOf(state).passesRun).toEqual(['Regular', 'Security']);
 
     confirmAnswer = true;
@@ -813,7 +813,7 @@ describe('Run again', () => {
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.filter(c => c.kind === 'regular').every(c => c.prompt.includes('does this handle retries?'))).toBe(true);
     expect(resultsOf(state).passesRun).toEqual(['Regular']);
-    expect((await storedWorking(state.id)).explanations).toEqual({});
+    expect((await storedWorking(state.id)).threads).toEqual({});
   });
 
   it('a review with nothing worked on runs again without asking', async () => {

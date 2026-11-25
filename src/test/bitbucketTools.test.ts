@@ -227,7 +227,7 @@ describe('bitbucket_read_findings', () => {
     const id = await reviewOnBoard();
     const working = await storedWorking(id);
     const three = working.review!.store.findings.find(f => f.id === 3)!;
-    await storeWork(id, w => ({ ...w, explanations: { '3': { text: 'The **input** reaches the query `as is`.' } } }));
+    await storeWork(id, w => ({ ...w, threads: { '3': [{ answer: 'The **input** reaches the query `as is`.' }, { question: 'Is it *reachable*?', answer: 'Yes, from the **form**.' }] } }));
 
     const result = await callTool(tool('bitbucket_read_findings'), { url: PR_URL, finding: 3 }, toolDeps(manager()));
 
@@ -235,8 +235,8 @@ describe('bitbucket_read_findings', () => {
     expect(result.text).toContain(`Title: ${three.title}`);
     expect(result.text).toContain('Code from the diff:');
     expect(result.text).toContain(codeLine(three.line!));
-    // The explanation comes back as plain text, without its Markdown.
-    expect(result.text).toContain('Explanation:\nThe input reaches the query as is.');
+    // The discussion comes back as plain text, without its Markdown.
+    expect(result.text).toContain('Discussion:\nQuestion: Explain\nAnswer: The input reaches the query as is.\n\nQuestion: Is it reachable?\nAnswer: Yes, from the form.');
     expect(result.text).toContain(`Recommendation: Fix ${three.title}`);
   });
 
@@ -311,7 +311,7 @@ describe('bitbucket_read_findings', () => {
     const suggestion = numberOf(working, 'Name could be clearer');
     await storeWork(id, w => ({
       ...w,
-      explanations: { [critical]: { text: 'The id reaches the query.' } },
+      threads: { [critical]: [{ answer: 'The id reaches the query.' }] },
       drafts: {
         [critical]: { text: 'Please use a **bound** parameter.', posted: { commentId: 100 } },
         [warning]: { text: 'Validate the input.', postError: 'Bitbucket said 500' },
@@ -320,7 +320,7 @@ describe('bitbucket_read_findings', () => {
     const deps = toolDeps(manager());
 
     const posted = await callTool(tool('bitbucket_read_findings'), { url: PR_URL, finding: critical }, deps);
-    expect(posted.text).toContain('Explanation:\nThe id reaches the query.\n\nDraft comment, posted as comment 100:\nPlease use a bound parameter.');
+    expect(posted.text).toContain('Discussion:\nQuestion: Explain\nAnswer: The id reaches the query.\n\nDraft comment, posted as comment 100:\nPlease use a bound parameter.');
     const failed = await callTool(tool('bitbucket_read_findings'), { url: PR_URL, finding: warning }, deps);
     expect(failed.text).toContain('Draft comment, not posted: the last post failed (Bitbucket said 500):\nValidate the input.');
     const none = await callTool(tool('bitbucket_read_findings'), { url: PR_URL, finding: suggestion }, deps);

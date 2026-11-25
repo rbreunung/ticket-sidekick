@@ -370,7 +370,7 @@ describe('the review board page: findings, drafts, Post and Copy', () => {
     selectedCount: 1, post: { count: 1 }, copy: { scope: 'selected', count: 1 }, ...extra,
   });
 
-  it('Explain starts one run for its finding, shows Explaining… while it runs and the answer as text after', async () => {
+  it('Explain starts one run for its finding, shows Explaining… while it runs and the discussion as text after', async () => {
     await loadBoard(boardState(view({ stage, results: results() })));
     await click(must('explain-2'));
     expect(posted('run')).toEqual([{ revision: 1, request: { type: 'explain', number: 2 } }]);
@@ -379,10 +379,27 @@ describe('the review board page: findings, drafts, Post and Copy', () => {
     expect(must('explain-2').textContent).toBe('Explaining…');
     expect(must('explain-1').disabled).toBeFalsy();
     expect(must('select-1').disabled).toBeFalsy();
-    await push({ running: undefined, view: view({ stage, results: results({ findings: [f2({ explanation: '<b>Because</b> [x](https://evil.example)' }), f1({ explainError: 'Explain failed: rate limited' })] }) }) });
-    expect(must('explanation-2').textContent).toBe('<b>Because</b> [x](https://evil.example)');
-    expect(must('explanation-2').elements().length).toBe(0);
-    expect(must('explain-error-1').textContent).toBe('Explain failed: rate limited');
+    await push({ running: undefined, view: view({ stage, results: results({ findings: [f2({ thread: [{ question: 'Explain', answer: '<b>Because</b> [x](https://evil.example)' }] }), f1({ threadError: 'Explain failed: rate limited' })] }) }) });
+    expect(must('turn-2-1').textContent).toContain('<b>Because</b> [x](https://evil.example)');
+    expect(must('turn-2-1').elements().map(e => e.tagName.toLowerCase())).toEqual(['p', 'pre']);
+    expect(must('thread-error-1').textContent).toBe('Explain failed: rate limited');
+    expect(byId('explain-2')).toBeFalsy();
+  });
+
+  it('a follow-up starts one run with the typed question and keeps the box locked while it runs; the new turn shows below the first', async () => {
+    const explained = f2({ thread: [{ question: 'Explain', answer: 'First answer.' }] });
+    await loadBoard(boardState(view({ stage, results: results({ findings: [explained, f1()] }) })));
+    await type(must('follow-up-question-2'), 'Is it reachable?', false);
+    await click(must('follow-up-2'));
+    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'follow-up', number: 2, question: 'Is it reachable?' } }]);
+    await push({ running: [{ size: 'call', what: 'follow-up:2', label: 'the follow-up on #2', done: 0, total: 1 }] });
+    expect(must('follow-up-2').disabled).toBe(true);
+    expect(must('follow-up-2').textContent).toBe('Asking…');
+    await push({ running: undefined, view: view({ stage, results: results({ findings: [f2({ thread: [{ question: 'Explain', answer: 'First answer.' }, { question: 'Is it reachable?', answer: 'Yes.' }] }), f1()] }) }) });
+    expect(must('turn-2-1').textContent).toContain('First answer.');
+    expect(must('turn-2-2').textContent).toContain('You: Is it reachable?');
+    expect(must('turn-2-2').textContent).toContain('Yes.');
+    expect(must('follow-up-question-2').value).toBe('');
   });
 
   it('a checkbox selects one finding and select all selects every finding, each as an action', async () => {
@@ -406,13 +423,11 @@ describe('the review board page: findings, drafts, Post and Copy', () => {
   it('shows the draft under its finding; it is saved on leaving the box, and an outdated draft offers Regenerate', async () => {
     await loadBoard(boardState(view({ stage, results: selected2({}, { outdated: true }) })));
     expect(must('draft-2').value).toBe('Draft of #2');
-    expect(must('finding-2').textContent).toMatch(/explanation changed/);
+    expect(must('finding-2').textContent).toMatch(/discussion changed/);
     await type(must('draft-2'), 'My comment');
     await click(must('regenerate-2'));
-    expect(posted('action')).toEqual([
-      { revision: 1, action: { type: 'draft', number: 2, text: 'My comment' } },
-      { revision: 1, action: { type: 'regenerate', number: 2 } },
-    ]);
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'draft', number: 2, text: 'My comment' } }]);
+    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'regenerate', number: 2 } }]);
     expect(must('post').textContent).toBe('Post 1 comment(s)');
     expect(must('copy-markdown').textContent).toBe('Copy 1 selected as Markdown');
   });
@@ -505,11 +520,15 @@ describe('the review board page: a field left by pressing a button', () => {
       box.dispatch('change');
       must(id).dispatch('click');
       await settle();
-      const expected = { 'undo-2': { type: 'undo-rewrite', number: 2 }, 'regenerate-2': { type: 'regenerate', number: 2 }, 'keep-as-is': { type: 'keep-as-is' }, 'new-review': { type: 'new-review' } }[id];
-      expect(posted('action'), id).toEqual([
-        { revision: 1, action: { type: 'draft', number: 2, text: 'My comment' } },
-        { revision: 1, action: expected },
-      ]);
+      const saved = { revision: 1, action: { type: 'draft', number: 2, text: 'My comment' } };
+      if (id === 'regenerate-2') {
+        // Regenerate is a run: the draft is saved first, then the run starts once.
+        expect(posted('action'), id).toEqual([saved]);
+        expect(posted('run'), id).toEqual([{ revision: 1, request: { type: 'regenerate', number: 2 } }]);
+      } else {
+        const expected = { 'undo-2': { type: 'undo-rewrite', number: 2 }, 'keep-as-is': { type: 'keep-as-is' }, 'new-review': { type: 'new-review' } }[id];
+        expect(posted('action'), id).toEqual([saved, { revision: 1, action: expected }]);
+      }
       stopped = true;
       removeFakePage();
     }

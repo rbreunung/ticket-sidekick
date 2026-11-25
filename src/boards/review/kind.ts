@@ -3,7 +3,7 @@ import {
 } from '../../review/engine';
 import type { BoardKind, Reduced, RunBegun, RunFinished, RunProgress } from '../../sessions/boardKind';
 import type { DerivedPart, Session } from '../../sessions/sessionTypes';
-import { SHARE_SEVERITY_ORDER } from '../../review/reviewSessionState';
+import { SHARE_SEVERITY_ORDER, type ThreadTurn } from '../../review/reviewSessionState';
 import { findJiraKeyInText } from '../../utils/branchParser';
 import { capitalised } from '../../utils/textCase';
 import { modelLabel, reviewModelState, REVIEW_MODEL_SETTING, type BoardModelInfo } from '../boardModels';
@@ -105,20 +105,18 @@ export interface StartedWith {
   confidenceThreshold: number;
 }
 
-/** A finding's explanation, by finding number. */
-export interface Explanation {
-  text: string;
-  /** Raised by each new explanation of the finding, so a draft made from an earlier one shows as outdated. */
-  revision?: number;
-}
+/** One question and answer of a finding's discussion; the first is Explain's. */
+export type { ThreadTurn };
 
 /** A finding's draft comment, by finding number. */
 export interface Draft {
   text: string;
-  /** The explanation revision the draft was made from; 0 or absent: made without one. */
-  basedOn?: number;
-  /** The text before the last Rewrite, for Undo until the next edit or post. */
+  /** How many turns of the finding's discussion the text was made from; 0 or absent: none. A longer discussion marks it outdated. */
+  threadTurns?: number;
+  /** The text before the last Rewrite or Regenerate, for Undo until the next edit or post. */
   previous?: string;
+  /** After a Regenerate: the discussion turns the text before it was made from, which Undo puts back. */
+  previousThreadTurns?: number;
   posted?: { commentId: number };
   /** Why the last post of this draft failed. */
   postError?: string;
@@ -132,7 +130,8 @@ export interface ReviewWorking {
   startedWith?: StartedWith;
   /** The passes run over the current review, in order. */
   passes: PassRecord[];
-  explanations: Record<string, Explanation>;
+  /** Each finding's discussion, oldest turn first, by finding number. */
+  threads: Record<string, ThreadTurn[]>;
   drafts: Record<string, Draft>;
   /** The extra passes picked; undefined means the suggestion. */
   picked?: ReviewStep[];
@@ -141,9 +140,9 @@ export interface ReviewWorking {
   notice?: string;
   /** The findings selected for posting and copying, by number. */
   selected?: number[];
-  /** The last failed Explain or Rewrite of a finding, by finding number; the earlier text stays. */
-  failures?: Record<string, { explain?: string; rewrite?: string }>;
-  /** Tokens of the explanations and rewrites since the regular pass. */
+  /** The last failed question (Explain or a follow-up) and Rewrite or Regenerate of a finding, by finding number; the earlier text stays. */
+  failures?: Record<string, { thread?: string; rewrite?: string }>;
+  /** Tokens of the discussions, rewrites and regenerated comments since the regular pass. */
   callTokens?: TokenTotals;
 }
 
@@ -163,7 +162,7 @@ export type ReviewRunRequest = { type: 'read-ticket' } | { type: 'start' } | { t
 
 export interface DraftView {
   text: string;
-  /** The finding's explanation changed since the draft was made: Regenerate rebuilds it. */
+  /** The finding's discussion grew since the draft was made: Regenerate writes it again. */
   outdated: boolean;
   /** The last Rewrite can be undone. */
   canUndo: boolean;
@@ -185,8 +184,10 @@ export interface FindingView {
   /** Low confidence, location unverified, probably a false alarm, against goal. */
   markers: string[];
   selected: boolean;
-  explanation?: string;
-  explainError?: string;
+  /** The discussion, oldest first; the first question is Explain's, shown as "Explain". */
+  thread?: Array<{ question: string; answer: string }>;
+  /** Why the last question failed. */
+  threadError?: string;
   draft?: DraftView;
 }
 
@@ -367,8 +368,8 @@ function findingView(f: StoredFinding, threshold: number, working: ReviewWorking
     facts: findingFacts(f),
     markers,
     selected: selected.includes(f.id),
-    ...(working.explanations[String(f.id)] ? { explanation: working.explanations[String(f.id)].text } : {}),
-    ...(working.failures?.[String(f.id)]?.explain ? { explainError: working.failures[String(f.id)].explain } : {}),
+    ...(working.threads[String(f.id)]?.length ? { thread: working.threads[String(f.id)].map(t => ({ question: t.question ?? 'Explain', answer: t.answer })) } : {}),
+    ...(working.failures?.[String(f.id)]?.thread ? { threadError: working.failures[String(f.id)].thread } : {}),
     ...(selected.includes(f.id) || working.drafts[String(f.id)] ? { draft: draftView(working, f.id) } : {}),
   };
 }
@@ -455,7 +456,7 @@ function liveRegularSession(session: ReviewSession): ReviewSession | undefined {
   const { active } = working;
   if (active?.what !== 'regular' || !active.startedWith) return undefined;
   const live: ReviewWorking = {
-    stage: 'review', firstStep: working.firstStep, passes: [], explanations: {}, drafts: {}, active,
+    stage: 'review', firstStep: working.firstStep, passes: [], threads: {}, drafts: {}, active,
     startedWith: { ...active.startedWith, confidenceThreshold: working.startedWith?.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD },
     ...(active.partial ? { review: active.partial } : {}),
   };
@@ -564,7 +565,7 @@ function isRunRequest(request: unknown): request is ReviewRunRequest {
 }
 
 function workCount(working: ReviewWorking): string {
-  return `${Object.keys(working.explanations).length} explanation(s) and ${Object.keys(working.drafts).length} draft comment(s)`;
+  return `${Object.keys(working.threads).length} discussion(s) and ${Object.keys(working.drafts).length} draft comment(s)`;
 }
 
 /** The ticket read before Start: it fills the box, after asking when the developer edited it. */
@@ -642,7 +643,7 @@ function runAgainRun(
       title: 'Run the whole review again?',
       detail: `The review has ${workCount(working)}. Running it again from the regular pass loses them.`,
       button: 'Run again',
-      declined: 'Not run again: the review, its explanations and drafts were kept.',
+      declined: 'Not run again: the review, its discussions and drafts were kept.',
     },
     fromFirstStep: false,
   });
@@ -673,7 +674,7 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
   revalidate: async stored => reviewRecipeOf(stored),
   sourceKey: recipe => recipe.url,
   sourceLabel: recipe => recipe.url,
-  initialWorking: recipe => ({ stage: 'first-step', firstStep: emptyFirstStep(recipe.prefill), passes: [], explanations: {}, drafts: {} }),
+  initialWorking: recipe => ({ stage: 'first-step', firstStep: emptyFirstStep(recipe.prefill), passes: [], threads: {}, drafts: {} }),
 
   // The board asked for again with a ticket key or background text: laid over the first step as a
   // new board would take them, the model picked kept. Text preselects the own text and the key stays

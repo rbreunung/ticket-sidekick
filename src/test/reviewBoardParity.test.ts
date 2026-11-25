@@ -153,8 +153,12 @@ const STORED_REVIEW: BoardEquivalent = {
 const BOARD_PARITY: Record<string, BoardEquivalent> = {
   // Follow-up intents and reply words
   explain: {
-    actions: ['explain'],
-    tests: [[FINDINGS, 'explaining #3 makes one model call with its code, the pull request and the own-text background, and shows the answer; explaining again replaces it']],
+    actions: ['explain', 'follow-up'],
+    tests: [
+      [FINDINGS, 'explaining #3 makes one model call with its code, the pull request and the own-text background, and shows the answer as the first turn of its discussion'],
+      [FINDINGS, 'a follow-up on #1 appends below the first answer, the call carries both earlier messages, and the draft says the discussion changed since it was made'],
+      [FINDINGS, 'the discussion survives a restart of the board'],
+    ],
   },
   copy: {
     requests: ['copy'],
@@ -170,8 +174,11 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     tests: [[FINDINGS, 'previews each selected draft as it is, and declining the native confirmation posts nothing and keeps the drafts']],
   },
   refinement: {
-    actions: ['rewrite', 'undo-rewrite'],
-    tests: [[FINDINGS, 'a successful Rewrite uses the instruction and offers Undo, which restores the previous text until the next edit']],
+    actions: ['rewrite', 'regenerate', 'undo-rewrite'],
+    tests: [
+      [FINDINGS, 'a successful Rewrite uses the instruction and offers Undo, which restores the previous text until the next edit'],
+      [FINDINGS, 'Regenerate of a draft made before a follow-up writes it from the finding and the discussion, and Undo restores the hand-edited text'],
+    ],
   },
 
   'finding-not-found': {
@@ -190,9 +197,9 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     ],
   },
   'follow-up-failure': {
-    actions: ['explain', 'rewrite'],
+    actions: ['follow-up', 'rewrite'],
     tests: [
-      [FINDINGS, 'a failed explanation shows an error line under the finding and keeps the earlier answer'],
+      [FINDINGS, 'a failed follow-up keeps the discussion and shows an error line under the finding'],
       [FINDINGS, 'a failed Rewrite leaves the hand-edited text unchanged and shows the error under the draft'],
     ],
   },
@@ -368,10 +375,10 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
 
 
   'token-meter': {
-    actions: ['start', 'explain', 'rewrite'],
+    actions: ['start', 'explain', 'follow-up', 'regenerate', 'rewrite'],
     tests: [
       [BOARD, 'runs the regular pass with the own text and shows the findings by severity, with the passes run and the model'],
-      [FINDINGS, 'Explain and Rewrite each count toward the monthly per-model counters, and Post makes no model call'],
+      [FINDINGS, 'Explain, a follow-up, Regenerate and Rewrite each count toward the monthly per-model counters, and Post makes no model call'],
       ['tokenMeter.test.ts', 'meters a frozen model and counts a frozen reply'],
     ],
   },

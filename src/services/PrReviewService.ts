@@ -8,6 +8,7 @@ import {
   numberDiffLines,
   neutralizeMarkdownLinks,
   sanitizeGfmCellText,
+  defangFence,
   MAX_CONTEXT_FILES_PER_BATCH,
 } from '../review/reviewSessionState';
 
@@ -211,11 +212,6 @@ function renderContextFiles(fileDiffs: FileDiff[], fileContents?: Map<string, st
   return sections.length > 0
     ? `\n\n---\n\n## Context files (not part of this diff)\n\n${sections.join('\n\n---\n\n')}`
     : '';
-}
-
-/** Defangs the fence markers so untrusted text cannot close «UNTRUSTED-CONTENT» early and speak as the prompt. */
-function defangFence(text: string): string {
-  return text.replace(/«(END-)?UNTRUSTED-CONTENT»/g, '(fence marker removed)');
 }
 
 function isAuthError(err: unknown): boolean {

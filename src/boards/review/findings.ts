@@ -1,32 +1,37 @@
 import type { IBitbucketClient } from '../../bitbucket/IBitbucketClient';
 import { addTokenTotals, type StoredFinding, type TokenTotals } from '../../review/engine';
-import { explainFinding, rewriteComment, type CallResult } from '../../review/findingCalls';
+import { tokenBudgetOf } from '../../review/engine/plumbing';
+import { askAboutFinding, regenerateComment, rewriteComment, type CallResult, type ThreadCallInput } from '../../review/findingCalls';
 import { formatShare, type ShareFormat, type SharedText } from '../../review/shareFormat';
 import { PrReviewService } from '../../services/PrReviewService';
 import type { Applied, ApplyProgress, Planned, Reduced, RunBegun, RunFinished } from '../../sessions/boardKind';
 import type { ApplyLineResult, WritePlan } from '../../sessions/sessionTypes';
 import { DEFAULT_CONFIDENCE_THRESHOLD, type ReviewBoardDeps } from './deps';
-import type { Draft, ReviewDerived, ReviewSession, ReviewWorking } from './kind';
-import { focusOf, modelFor } from './runs';
+import type { Draft, ReviewDerived, ReviewSession, ReviewWorking, ThreadTurn } from './kind';
+import { modelFor } from './runs';
 
-// What the developer does with the findings of a review: Explain one (one model call that answers
-// under the finding and replaces an earlier answer), select findings, which drafts one comment per
-// finding once, edit a draft by hand or Rewrite it with an instruction (one model call, with Undo),
-// Post the selected drafts after a preview and the native confirmation, and Copy the selection, or
-// every finding, as plain text or Markdown. The copied text is built here from the session, never
-// taken from the page. vscode-free.
+// What the developer does with the findings of a review: discuss one in a thread under it (Explain
+// asks the first question, each follow-up adds a question and its answer below; one model call
+// each), select findings, which drafts one comment per finding once, edit a draft by hand, Rewrite
+// it with an instruction or Regenerate it from the finding and its discussion (one model call each,
+// with Undo), Post the selected drafts after a preview and the native confirmation, and Copy the
+// selection, or every finding, as plain text or Markdown. The copied text is built here from the
+// session, never taken from the page. vscode-free.
 
 export type FindingAction =
   | { type: 'select'; numbers: number[]; selected: boolean }
   | { type: 'draft'; number: number; text: string }
-  | { type: 'undo-rewrite'; number: number }
+  | { type: 'undo-rewrite'; number: number };
+
+export const FINDING_ACTIONS: ReadonlySet<string> = new Set(['select', 'draft', 'undo-rewrite']);
+
+export type FindingRunRequest =
+  | { type: 'explain'; number: number }
+  | { type: 'follow-up'; number: number; question: string }
+  | { type: 'rewrite'; number: number; instruction: string }
   | { type: 'regenerate'; number: number };
 
-export const FINDING_ACTIONS: ReadonlySet<string> = new Set(['select', 'draft', 'undo-rewrite', 'regenerate']);
-
-export type FindingRunRequest = { type: 'explain'; number: number } | { type: 'rewrite'; number: number; instruction: string };
-
-export const FINDING_RUNS: ReadonlySet<string> = new Set(['explain', 'rewrite']);
+export const FINDING_RUNS: ReadonlySet<string> = new Set(['explain', 'follow-up', 'rewrite', 'regenerate']);
 
 /** The one writing action: post the selected drafts. */
 export type PostAction = { type: 'post' };
@@ -36,6 +41,15 @@ interface PostPayload {
 }
 
 const MAX_INSTRUCTION_CHARS = 2000;
+
+/**
+ * The share of the batch token budget a discussion call gives to the earlier questions and answers,
+ * counted at four characters a token: a quarter of the budget, so the finding and its code still fit.
+ */
+export function threadCharBudget(batchTokens: number): number {
+  const charsPerToken = 4;
+  return Math.floor(batchTokens / 4) * charsPerToken;
+}
 
 /** `formatPrComment` reads nothing from Bitbucket, so the service is built without a client for it. */
 const commentFormatter = new PrReviewService(undefined as unknown as IBitbucketClient);
@@ -50,27 +64,34 @@ export function selectedNumbers(working: ReviewWorking): number[] {
   return (working.selected ?? []).filter(n => present.has(n));
 }
 
-/** A draft comment from the finding and its explanation, as it would be posted. */
+/** A draft comment from the finding and the first answer of its discussion, as it would be posted. */
 export function draftText(finding: StoredFinding, explanation?: string): string {
   const comment = commentFormatter.formatPrComment(finding);
   return explanation?.trim() ? `${comment}\n\n${explanation.trim()}` : comment;
 }
 
-function explanationRevision(working: ReviewWorking, number: number): number {
-  return working.explanations[String(number)]?.revision ?? 0;
+function threadOf(working: ReviewWorking, number: number): ThreadTurn[] {
+  return working.threads[String(number)] ?? [];
 }
 
-/** The explanation changed since the draft was made from it. */
+/** The discussion grew since the draft was made from it. */
 export function draftOutdated(working: ReviewWorking, number: number): boolean {
   const draft = working.drafts[String(number)];
-  return Boolean(draft) && (draft.basedOn ?? 0) !== explanationRevision(working, number);
+  return Boolean(draft) && threadOf(working, number).length > (draft.threadTurns ?? 0);
 }
 
+/** A discussion as one text: the first answer, then each follow-up question and its answer. */
+export function discussionText(turns: ThreadTurn[]): string {
+  return turns.map((t, i) => (i === 0 ? t.answer.trim() : `Question: ${(t.question ?? '').trim()}\n\n${t.answer.trim()}`)).join('\n\n');
+}
+
+/** The draft made without a model call: the finding and the first answer of its discussion. */
 function newDraft(working: ReviewWorking, finding: StoredFinding): Draft {
-  return { text: draftText(finding, working.explanations[String(finding.id)]?.text), basedOn: explanationRevision(working, finding.id) };
+  const first = threadOf(working, finding.id)[0];
+  return { text: draftText(finding, first?.answer), threadTurns: first ? 1 : 0 };
 }
 
-function withFailure(working: ReviewWorking, number: number, what: 'explain' | 'rewrite', error: string | undefined): ReviewWorking {
+function withFailure(working: ReviewWorking, number: number, what: 'thread' | 'rewrite', error: string | undefined): ReviewWorking {
   const failures = { ...working.failures };
   const entry = { ...failures[String(number)] };
   if (error) entry[what] = error;
@@ -111,18 +132,16 @@ export function reduceFindings(working: ReviewWorking, action: FindingAction): R
       const { text } = action as { text?: unknown };
       if (typeof text !== 'string') return { ok: false, reason: 'Invalid draft.' };
       if (text === draft.text) return { ok: true, working };
-      // A hand edit ends Undo of the last Rewrite.
-      const { previous: _previous, ...rest } = draft;
+      // A hand edit ends Undo of the last Rewrite or Regenerate.
+      const { previous: _previous, previousThreadTurns: _turns, ...rest } = draft;
       return { ok: true, working: withDraft(working, finding.id, { ...rest, text }) };
     }
     case 'undo-rewrite': {
       if (draft.previous === undefined) return { ok: false, reason: 'There is no rewrite to undo.' };
-      const { previous, ...rest } = draft;
-      return { ok: true, working: withDraft(working, finding.id, { ...rest, text: previous }) };
-    }
-    case 'regenerate': {
-      // From the finding and its explanation as they are now; Undo and the last post error go.
-      return { ok: true, working: withFailure(withDraft(working, finding.id, newDraft(working, finding)), finding.id, 'rewrite', undefined) };
+      const { previous, previousThreadTurns, ...rest } = draft;
+      const restored: Draft = { ...rest, text: previous };
+      if (previousThreadTurns !== undefined) restored.threadTurns = previousThreadTurns;
+      return { ok: true, working: withDraft(working, finding.id, restored) };
     }
     default:
       return { ok: false, reason: 'Unknown action.' };
@@ -139,10 +158,22 @@ export function beginFindingRun(session: ReviewSession, request: FindingRunReque
   if (working.stage !== 'review' || !working.review) return { ok: false, reason: 'There is no review.' };
   const finding = findingOf(working, request.number);
   if (!finding) return { ok: false, reason: 'That finding is no longer in the review.' };
-  if (request.type === 'explain') return { ok: true, size: 'call', what: `explain:${finding.id}`, label: `the explanation of #${finding.id}`, total: 1 };
+  const n = finding.id;
+  if (request.type === 'explain') {
+    if (threadOf(working, n).length > 0) return { ok: false, reason: `#${n} is explained already. Ask a follow-up below the answer.` };
+    return { ok: true, size: 'call', what: `explain:${n}`, label: `the explanation of #${n}`, total: 1 };
+  }
+  if (request.type === 'follow-up') {
+    if (threadOf(working, n).length === 0) return { ok: false, reason: `Explain #${n} first; a follow-up is asked below the answer.` };
+    const question = typeof request.question === 'string' ? request.question.trim() : '';
+    if (!question) return { ok: false, reason: 'Type the follow-up question first.' };
+    if (question.length > MAX_INSTRUCTION_CHARS) return { ok: false, reason: `The question is longer than ${MAX_INSTRUCTION_CHARS} characters.` };
+    return { ok: true, size: 'call', what: `follow-up:${n}`, label: `the follow-up on #${n}`, total: 1 };
+  }
   const draft = working.drafts[String(finding.id)];
   if (!draft) return { ok: false, reason: `#${finding.id} has no draft comment. Select it for posting first.` };
   if (draft.posted) return { ok: false, reason: `The comment of #${finding.id} is posted already.` };
+  if (request.type === 'regenerate') return { ok: true, size: 'call', what: `regenerate:${n}`, label: `the regenerated comment of #${n}`, total: 1 };
   const instruction = typeof request.instruction === 'string' ? request.instruction.trim() : '';
   if (!instruction) return { ok: false, reason: 'Type how the comment should change first.' };
   if (instruction.length > MAX_INSTRUCTION_CHARS) return { ok: false, reason: `The instruction is longer than ${MAX_INSTRUCTION_CHARS} characters.` };
@@ -161,6 +192,23 @@ export function sameReview(a: ReviewWorking, b: ReviewWorking): boolean {
     && a.review!.snapshot.pr.id === b.review!.snapshot.pr.id;
 }
 
+/** The pure rebuild of a draft from the finding, for a finding with no discussion: no model call; Undo and the last error go. */
+function rebuiltDraft(started: ReviewWorking, number: number): RunFinished<ReviewWorking> {
+  return {
+    update: w => {
+      const finding = findingOf(w, number);
+      const draft = w.drafts[String(number)];
+      if (!sameReview(w, started) || !finding || !draft || draft.posted) return w;
+      const { previous: _previous, previousThreadTurns: _turns, ...rest } = draft;
+      return withFailure(withDraft(w, number, { ...rest, ...newDraft(w, finding) }), number, 'rewrite', undefined);
+    },
+  };
+}
+
+const FAILED_LINE: Record<FindingRunRequest['type'], string> = {
+  explain: 'Explain failed', 'follow-up': 'Follow-up failed', rewrite: 'Rewrite failed', regenerate: 'Regenerate failed',
+};
+
 export async function findingRun(
   session: ReviewSession, request: FindingRunRequest, deps: ReviewBoardDeps, signal: AbortSignal,
 ): Promise<RunFinished<ReviewWorking>> {
@@ -168,29 +216,43 @@ export async function findingRun(
   const finding = findingOf(started, request.number)!;
   const number = finding.id;
   const what = request.type;
-  const failed = (error: string): RunFinished<ReviewWorking> => ({ update: w => withFailure(w, number, what, error) });
+  const thread = threadOf(started, number);
+  if (what === 'regenerate' && thread.length === 0) return rebuiltDraft(started, number);
+  const slot = what === 'explain' || what === 'follow-up' ? 'thread' : 'rewrite';
+  const failed = (error: string): RunFinished<ReviewWorking> => ({ update: w => withFailure(w, number, slot, error) });
   const model = await modelFor(session, deps);
   if (!('handle' in model)) return failed(model.problem);
   const callDeps = { model: model.handle, recordTokens: deps.recordTokens, signal, ...(deps.onDiag ? { onDiag: deps.onDiag } : {}) };
+  const background = started.startedWith?.background;
+  const threadInput = async (): Promise<ThreadCallInput> => ({
+    pr: started.review!.snapshot.pr,
+    finding,
+    ...(background?.text.trim() ? { background } : {}),
+    turns: thread,
+    maxThreadChars: threadCharBudget(tokenBudgetOf(await deps.settings(), model.handle).tokens),
+  });
   let result: CallResult;
-  if (what === 'explain') {
-    result = await explainFinding({ pr: started.review!.snapshot.pr, finding, upfrontQuestion: started.startedWith ? focusOf(started.startedWith) : '' }, callDeps);
-  } else {
-    result = await rewriteComment(started.drafts[String(number)].text, (request as { instruction: string }).instruction.trim(), callDeps);
-  }
+  const question = what === 'follow-up' ? (request as { question: string }).question.trim() : undefined;
+  if (what === 'explain' || what === 'follow-up') result = await askAboutFinding({ ...(await threadInput()), ...(question ? { question } : {}) }, callDeps);
+  else if (what === 'regenerate') result = await regenerateComment(await threadInput(), callDeps);
+  else result = await rewriteComment(started.drafts[String(number)].text, (request as { instruction: string }).instruction.trim(), callDeps);
   return {
     update: w => {
       const counted = withTokens(w, result.tokens);
       if (!sameReview(w, started) || !findingOf(w, number)) return counted;
-      if (!result.ok) return result.stopped ? counted : withFailure(counted, number, what, `${what === 'explain' ? 'Explain' : 'Rewrite'} failed: ${result.error}`);
-      const cleared = withFailure(counted, number, what, undefined);
-      if (what === 'explain') {
-        const revision = explanationRevision(w, number) + 1;
-        return { ...cleared, explanations: { ...cleared.explanations, [String(number)]: { text: result.text, revision } } };
+      if (!result.ok) return result.stopped ? counted : withFailure(counted, number, slot, `${FAILED_LINE[what]}: ${result.error}`);
+      const cleared = withFailure(counted, number, slot, undefined);
+      if (slot === 'thread') {
+        const turn: ThreadTurn = { ...(question ? { question } : {}), answer: result.text };
+        return { ...cleared, threads: { ...cleared.threads, [String(number)]: [...threadOf(cleared, number), turn] } };
       }
       const draft = cleared.drafts[String(number)];
       if (!draft || draft.posted) return cleared;
-      return withDraft(cleared, number, { ...draft, text: result.text, previous: draft.text });
+      if (what === 'regenerate') {
+        return withDraft(cleared, number, { ...draft, text: result.text, previous: draft.text, previousThreadTurns: draft.threadTurns ?? 0, threadTurns: thread.length });
+      }
+      const { previousThreadTurns: _turns, ...rest } = draft;
+      return withDraft(cleared, number, { ...rest, text: result.text, previous: draft.text });
     },
   };
 }
@@ -300,7 +362,7 @@ export function reviewCopyText(session: ReviewSession, format: ShareFormat, numb
   const targets = numbers.filter(n => findings.some(f => f.id === n));
   if (numbers.length > 0 && targets.length === 0) return { ok: false, reason: 'Those findings are no longer in the review.' };
   const explanations: Record<number, string> = {};
-  for (const [key, value] of Object.entries(working.explanations)) explanations[Number(key)] = value.text;
+  for (const [key, turns] of Object.entries(working.threads)) if (turns.length > 0) explanations[Number(key)] = discussionText(turns);
   return formatShare(format, {
     pr: review.snapshot.pr,
     url: recipe.url,

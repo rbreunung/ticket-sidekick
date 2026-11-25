@@ -127,7 +127,7 @@ function findingsList(session: StoredReview): string {
   if (running) lines.push(running);
   if (review.store.findings.length === 0) lines.push('No findings.');
   for (const f of sorted(review.store.findings)) {
-    const notes = [...markersOf(f, threshold), ...(session.working.explanations[String(f.id)] ? ['explained'] : []), ...draftMarkers(session, f.id)];
+    const notes = [...markersOf(f, threshold), ...(session.working.threads[String(f.id)]?.length ? ['explained'] : []), ...draftMarkers(session, f.id)];
     lines.push(`#${f.id} ${f.severity} ${locationOf(f)}: ${oneLine(f.title)}${notes.length > 0 ? ` (${notes.join(', ')})` : ''}`);
   }
   return lines.join('\n');
@@ -155,10 +155,15 @@ function oneFinding(session: StoredReview, number: number): string {
   lines.push('');
   if (f.diffHunk?.trim()) lines.push('Code from the diff:', indented(f.diffHunk.trim()));
   else lines.push('No code from the diff is stored for this finding: its location could not be verified.');
-  const explanation = session.working.explanations[String(f.id)];
+  const thread = session.working.threads[String(f.id)] ?? [];
   lines.push('');
-  if (explanation?.text.trim()) lines.push('Explanation:', plain(explanation.text));
-  else lines.push('Not explained yet: Explain on the board gives one.');
+  if (thread.length > 0) {
+    lines.push('Discussion:');
+    thread.forEach((turn, i) => {
+      if (i > 0) lines.push('');
+      lines.push(`Question: ${turn.question ? oneLine(turn.question) : 'Explain'}`, `Answer: ${plain(turn.answer)}`);
+    });
+  } else lines.push('Not explained yet: Explain on the board starts a discussion.');
   lines.push('', ...draftLines(session, f.id));
   return lines.join('\n');
 }

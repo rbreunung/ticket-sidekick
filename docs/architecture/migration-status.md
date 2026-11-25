@@ -129,15 +129,15 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 
 | Behaviour | Board | Note |
 | --- | --- | --- |
-| `explain` | Carry over | `#N <question>`: Explain under the finding, one call with its code, the PR title and description and the upfront question; explaining again replaces the answer |
+| `explain` | Carry over | `#N <question>`: a discussion under the finding. Explain asks the first question and each follow-up adds a question and its answer below; each is one call with the finding, its code, the PR title and description, the background and the discussion so far |
 | `copy` | Carry over | Copy for Teams as plain text, plus Copy as Markdown, for the selected findings or all of them; the typed word goes |
 | `add` | Carry over | `add … to review`: select the findings, edit one draft comment each, Post after the native confirmation; inline on a verified line, else on the activity feed; each comment reported, only the failed ones offered again |
 | `post it` | Carry over | The comment preview's confirmation is Post's preview and native confirmation |
-| `refinement` | Carry over | A refinement instruction in the comment preview is Rewrite with a typed instruction, with Undo |
+| `refinement` | Carry over | A refinement instruction in the comment preview is Rewrite with a typed instruction, with Undo; Regenerate writes the draft again from the finding and its discussion, with Undo |
 | `goal` | Dropped | The requirements coverage check was removed; a goal is now given as the own-text background on the first step |
 | `finding-not-found` | Carry over | An unknown finding number is refused on the board; the read-findings tool names the numbers the review has |
 | `diff-question` | Carry over | A general question about the PR: the agent reads the findings and the diff through the tools |
-| `follow-up-failure` | Carry over | A failed follow-up or refinement keeps what was there: the earlier explanation or the hand-edited draft stays, with an error line |
+| `follow-up-failure` | Carry over | A failed follow-up or refinement keeps what was there: the discussion so far or the hand-edited draft stays, with an error line |
 | `finding-match` | Dropped | Scope: the extension's call that matches a free-text question to a finding; the agent does it from the findings list |
 | `done`, `cancel` | Dropped | Scope: the reply words; a board is left by closing its tab |
 | `smart-fallback-reply` | Dropped | Scope: the smart-mode fallback question and its replies `all` and `standard`; a review with no usable recommendation says so and the developer picks passes |
@@ -155,7 +155,7 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 
 | Session | Board | Note |
 | --- | --- | --- |
-| `bitbucket.session.review` | Carry over | The review is the board's session: findings, passes run, explanations, drafts and the reviewed diff survive a restart, and a repeat request opens it |
+| `bitbucket.session.review` | Carry over | The review is the board's session: findings, passes run, discussions, drafts and the reviewed diff survive a restart, and a repeat request opens it |
 | `bitbucket.session.commentPreview` | Carry over | Drafts are kept in the session until posted |
 | `bitbucket.session.smartFallback` | Dropped | Scope: the smart-mode fallback question |
 | `session-continuity` | Dropped | The removal takes out the chat sessions with `@bitbucket` (a settled decision of the plan): expiry through the chat history, a PR link that starts a fresh review over a live session (a repeat request now opens the stored review, also settled), `check` and `usage` keeping a session alive, and `/review` without a link or a lone mode word ending one |

@@ -205,13 +205,14 @@ function draftBlock(f, r, board, off) {
   const d = f.draft;
   const n = f.number;
   const rewriting = Boolean(board.running(`rewrite:${n}`));
-  const locked = off || rewriting || Boolean(d.posted);
+  const regenerating = Boolean(board.running(`regenerate:${n}`));
+  const locked = off || rewriting || regenerating || Boolean(d.posted);
   const instructionId = `instruction-${n}`;
   return h('div', { class: 'draft', id: `draft-block-${n}` },
     h('label', { class: 'field' }, `Comment for #${n}`, fieldInput('textarea', `draft-${n}`, d.text, board, locked, { rows: 8, 'aria-label': `Comment for #${n}` })),
     d.outdated && !d.posted ? h('p', { class: 'muted', id: `outdated-${n}` },
-      'The explanation changed since this draft was made. Regenerate rebuilds it from the finding and its explanation; your edits are lost. ',
-      h('vscode-button', { id: `regenerate-${n}`, secondary: true, disabled: locked, onClick: () => whenSaved(board, () => board.act({ type: 'regenerate', number: n })) }, 'Regenerate')) : null,
+      'The discussion changed since this draft was made. Regenerate writes it again from the finding and the discussion; Undo brings your text back. ',
+      h('vscode-button', { id: `regenerate-${n}`, secondary: true, disabled: locked, onClick: () => whenSaved(board, () => board.run({ type: 'regenerate', number: n })) }, regenerating ? 'Regenerating…' : 'Regenerate')) : null,
     d.posted ? h('p', { id: `posted-${n}`, role: 'status' }, d.posted) : h('div', { class: 'bar' },
       h('input', {
         type: 'text', id: instructionId, size: 40, placeholder: 'How should the comment change?', 'aria-label': `Rewrite instruction for #${n}`,
@@ -224,6 +225,30 @@ function draftBlock(f, r, board, off) {
       d.canUndo ? h('vscode-button', { id: `undo-${n}`, secondary: true, disabled: locked, onClick: () => whenSaved(board, () => board.act({ type: 'undo-rewrite', number: n })) }, 'Undo') : null),
     d.rewriteError ? h('p', { id: `rewrite-error-${n}`, class: 'banner error', role: 'alert' }, d.rewriteError) : null,
     d.postError ? h('p', { id: `post-error-${n}`, class: 'banner error', role: 'alert' }, d.postError) : null);
+}
+
+/** The discussion under a finding: each question and its answer as text, then the follow-up box. */
+function threadBlock(f, r, board, off) {
+  const n = f.number;
+  const asking = Boolean(board.running(`follow-up:${n}`));
+  const questionId = `follow-up-question-${n}`;
+  return h('div', { class: 'thread', id: `thread-${n}` },
+    h('ol', { class: 'turns', 'aria-label': `Discussion of #${n}` }, f.thread.map((t, i) => h('li', { id: `turn-${n}-${i + 1}` },
+      h('p', { class: 'muted question' }, i === 0 ? 'Explain' : `You: ${t.question}`),
+      h('pre', { class: 'coverage explanation answer' }, t.answer)))),
+    h('div', { class: 'bar' },
+      h('input', {
+        type: 'text', id: questionId, size: 40, placeholder: 'Ask a follow-up', 'aria-label': `Follow-up question on #${n}`,
+        value: typed[questionId] ?? '', disabled: off || asking, onInput: e => { typed[questionId] = e.target.value; },
+      }),
+      h('vscode-button', {
+        id: `follow-up-${n}`, secondary: true, disabled: off || asking,
+        onClick: () => afterSaving(board, draftFields(r), async () => {
+          const question = typed[questionId] ?? '';
+          // The question stays in the box when the board refuses it.
+          if (await board.run({ type: 'follow-up', number: n, question })) delete typed[questionId];
+        }),
+      }, asking ? 'Asking…' : 'Ask')));
 }
 
 function findingItem(f, r, board, off) {
@@ -241,12 +266,11 @@ function findingItem(f, r, board, off) {
     f.facts?.length ? h('p', { id: `facts-${n}`, class: 'muted facts' }, f.facts.join(' · ')) : null,
     f.description ? h('p', { id: `description-${n}`, class: 'description' }, f.description) : null,
     f.recommendation ? h('p', { id: `recommendation-${n}`, class: 'recommendation' }, `Recommendation: ${f.recommendation}`) : null,
-    ' ', h('vscode-button', {
+    f.thread?.length ? threadBlock(f, r, board, off) : [' ', h('vscode-button', {
       id: `explain-${n}`, secondary: true, disabled: off || explaining,
       onClick: () => afterSaving(board, draftFields(r), () => board.run({ type: 'explain', number: n })),
-    }, explaining ? 'Explaining…' : 'Explain'),
-    f.explanation ? h('pre', { id: `explanation-${n}`, class: 'coverage explanation' }, f.explanation) : null,
-    f.explainError ? h('p', { id: `explain-error-${n}`, class: 'banner error', role: 'alert' }, f.explainError) : null,
+    }, explaining ? 'Explaining…' : 'Explain')],
+    f.threadError ? h('p', { id: `thread-error-${n}`, class: 'banner error', role: 'alert' }, f.threadError) : null,
     f.draft ? draftBlock(f, r, board, off) : null);
 }
 
