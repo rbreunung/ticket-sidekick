@@ -610,6 +610,27 @@ describe('Copy through the tab', () => {
     for (const n of [1, 2, 3]) expect(copied[0]).toContain(`Unchecked input in f${n}`);
   });
 
+  it('Copy for Teams and as Markdown carry no requirements coverage, even when the stored review holds one', async () => {
+    const state = await reviewed(shared, 2);
+    const stored = await storedSession(state.id);
+    const coverage = {
+      ticketKey: 'PROJ-12', reading: 'Exports the report.', requirements: [{ text: 'Export as CSV', source: 'description', status: 'met', evidence: 'csv.ts' }],
+      outOfScope: [], noClearRequirements: false, unseenFileCount: 0,
+    };
+    await new SessionStore(dir).save({ ...stored, working: { ...stored.working, review: { ...stored.working.review!, coverage } as never } });
+    shared = manager();
+
+    for (const format of ['teams', 'markdown']) {
+      const reply = await ask(state.id, 'copy', { format, numbers: [] });
+      expect(reply).toMatchObject({ ok: true, data: { outcome: 'copied', count: 2 } });
+    }
+    expect(copied).toHaveLength(2);
+    for (const text of copied) {
+      expect(text).toContain('Unchecked input in f1');
+      expect(text).not.toMatch(/Requirements coverage|PROJ-12|Export as CSV/);
+    }
+  });
+
   it('says when the clipboard could not be written, and refuses an unknown format', async () => {
     const state = await reviewed(shared, 1);
     clipboardFails = true;

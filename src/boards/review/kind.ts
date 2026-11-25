@@ -1,8 +1,6 @@
 import {
-  rewordGoal, type FindingStore, type PassOutcome, type PassStatus, type RequirementsChoice, type RequirementsOutcome, type ReviewStep, type StagedReview, type StoredFinding,
-  type TokenTotals,
+  type FindingStore, type PassOutcome, type PassStatus, type ReviewStep, type StagedReview, type StoredFinding, type TokenTotals,
 } from '../../review/engine';
-import { renderCoverageText } from '../../review/requirementsCoverage';
 import type { BoardKind, Reduced, RunBegun, RunFinished, RunProgress } from '../../sessions/boardKind';
 import type { DerivedPart, Session } from '../../sessions/sessionTypes';
 import { SHARE_SEVERITY_ORDER } from '../../review/reviewSessionState';
@@ -11,13 +9,13 @@ import { capitalised } from '../../utils/textCase';
 import { modelLabel, reviewModelState, REVIEW_MODEL_SETTING, type BoardModelInfo } from '../boardModels';
 import { DEFAULT_CONFIDENCE_THRESHOLD, type ReviewBoardDeps } from './deps';
 import {
-  FIRST_STEP_ACTIONS, JIRA_NOT_CONFIGURED_REASON, emptyFirstStep, reduceFirstStep, requirementsChoiceOf, rewordApplied, rewordBlocker,
-  rewordReplacesCorrections, sourceOf, startBlocker, ticketKeyOf, type FirstStep, type FirstStepAction, type FirstStepContext, type SourceId,
+  FIRST_STEP_ACTIONS, JIRA_NOT_CONFIGURED_REASON, emptyFirstStep, reduceFirstStep, sourceOf, startBlocker, ticketKeyOf,
+  type FirstStep, type FirstStepAction, type FirstStepContext, type SourceId,
 } from './firstStep';
 import { REVIEW_KIND, reviewRecipeOf, type ReviewRecipe } from './recipe';
 import {
-  EXTRA_STEPS, STEP_LABELS, extraPassesRun, interruptedWorking, joinNames, modelFor, modelIdOf, pickedSteps, recheckRun, regularRun,
-  reviewNotes, stepBlocker, stepName, withNotice,
+  EXTRA_STEPS, STEP_LABELS, extraPassesRun, interruptedWorking, joinNames, modelIdOf, pickedSteps, regularRun,
+  reviewNotes, stepBlocker, stepName,
 } from './runs';
 import {
   FINDING_ACTIONS, applyPost, beginFindingRun, draftOutdated, findingRun, isFindingRun, planPost, postableNumbers, reduceFindings, selectedNumbers, shortCommit,
@@ -61,7 +59,7 @@ export interface ActivePass {
   what: 'regular' | 'passes';
   steps: ReviewStep[];
   /** The step running now and how far it is. */
-  step: ReviewStep | 'requirements';
+  step: ReviewStep;
   done: number;
   total: number;
   modelId: string;
@@ -85,7 +83,6 @@ export interface ActivePass {
 /** What the regular pass was started with. */
 export interface StartedWith {
   modelId: string;
-  requirements: RequirementsChoice;
   question: string;
   confidenceThreshold: number;
 }
@@ -117,8 +114,6 @@ export interface ReviewWorking {
   startedWith?: StartedWith;
   /** The passes run over the current review, in order. */
   passes: PassRecord[];
-  /** How the requirements check of the last regular pass ended. */
-  requirements?: RequirementsOutcome;
   explanations: Record<string, Explanation>;
   drafts: Record<string, Draft>;
   /** The extra passes picked; undefined means the suggestion. */
@@ -126,8 +121,6 @@ export interface ReviewWorking {
   active?: ActivePass;
   /** Why the last run on the results did nothing, e.g. Run again declined. */
   notice?: string;
-  /** Tokens of the requirements re-checks since the regular pass. */
-  recheckTokens?: TokenTotals;
   /** The findings selected for posting and copying, by number. */
   selected?: number[];
   /** The last failed Explain or Rewrite of a finding, by finding number; the earlier text stays. */
@@ -148,7 +141,7 @@ export type ReviewAction =
   | FindingAction
   | PostAction;
 
-export type ReviewRunRequest = { type: 'reword' } | { type: 'start' } | { type: 'passes' } | { type: 'again' } | { type: 'recheck' } | FindingRunRequest;
+export type ReviewRunRequest = { type: 'start' } | { type: 'passes' } | { type: 'again' } | FindingRunRequest;
 
 export interface DraftView {
   text: string;
@@ -184,37 +177,12 @@ export interface FirstStepView {
   source: SourceId;
   ticketKey: string;
   goal: string;
-  points: string;
-  /** The points were reworded from an earlier wording of the goal. */
-  pointsFromOtherGoal: boolean;
-  rewordError?: string;
   question: string;
   notice?: string;
-  canReword: boolean;
-  rewordBlocker?: string;
-  /** The key the pull request title names, offered when the ticket key in use could not be found. */
-  titleKey?: string;
   canStart: boolean;
   startBlocker?: string;
   /** A review is stored: Start replaces it, Back to the review shows it again. */
   storedReview: boolean;
-}
-
-/** The requirements source after a review: changed or edited here, then Re-check runs only the requirements check. */
-export interface RequirementsFormView {
-  sources: FirstStepView['sources'];
-  source: SourceId;
-  ticketKey: string;
-  goal: string;
-  points: string;
-  pointsFromOtherGoal: boolean;
-  rewordError?: string;
-  canReword: boolean;
-  rewordBlocker?: string;
-  /** The key the pull request title names, offered when the ticket key in use could not be found. */
-  titleKey?: string;
-  /** Why Re-check cannot run now. */
-  recheckBlocker?: string;
 }
 
 export interface PassChoiceView {
@@ -238,7 +206,6 @@ export interface PassPickerView {
 
 export interface ReviewResultsView {
   model: string;
-  requirements: string;
   passesRun: string[];
   /** The head commit moved since the review read the pull request. */
   outOfDate?: { reviewed: string; head: string };
@@ -250,12 +217,6 @@ export interface ReviewResultsView {
   /** There is a review to show; false after a regular pass that found nothing it could read. */
   hasReview: boolean;
   picker?: PassPickerView;
-  /** Why the requirements check gave no coverage, in the coverage position. */
-  requirementsLine?: string;
-  /** The requirements source to re-check with; there when there is a review. */
-  requirementsForm?: RequirementsFormView;
-  canRecheck: boolean;
-  coverage?: string;
   /** Token usage per pass. */
   tokens: Array<{ pass: string; text: string }>;
   canRunAgain: boolean;
@@ -296,12 +257,6 @@ function contextOf(session: ReviewSession): FirstStepContext {
   };
 }
 
-function requirementsLabel(choice: RequirementsChoice): string {
-  if (choice.kind === 'ticket') return `Jira ticket ${choice.key}`;
-  if (choice.kind === 'goal') return 'the stated goal';
-  return 'none';
-}
-
 function statusLine(pass: PassRecord): string | undefined {
   const name = capitalised(stepName(pass.step));
   const extra = pass.step !== 'regular';
@@ -323,20 +278,6 @@ function statusLine(pass: PassRecord): string | undefined {
       return pass.failedBatches > 0
         ? `${pass.failedBatches} of ${pass.batchesTotal} batches of ${stepName(pass.step)} had a part that failed; the findings of the others are shown.`
         : undefined;
-  }
-}
-
-function requirementsLine(outcome: RequirementsOutcome | undefined, titleKey: string | undefined): string | undefined {
-  switch (outcome?.status) {
-    case 'ticket-unreadable':
-      return `The requirements check did not run: the ticket ${outcome.key} could not be read (${outcome.message}). The findings stand.`
-        + (titleKey ? ` The pull request title names ${titleKey} instead.` : '');
-    case 'failed':
-      return 'The requirements check failed: the model call failed or its reply could not be read. The findings stand.';
-    case 'stopped':
-      return 'The requirements check was stopped. The findings stand.';
-    default:
-      return undefined;
   }
 }
 
@@ -419,17 +360,13 @@ function resultsView(session: ReviewSession, label: (id: string) => string): Rev
   const lastRun = working.passes[working.passes.length - 1]?.run;
   const threshold = startedWith?.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
   const statuses = working.passes.filter(p => p.run === lastRun).map(statusLine).filter((line): line is string => line !== undefined);
-  const line = review ? requirementsLine(working.requirements, titleKeyOffer(session, false)) : undefined;
-  const recheck = recheckBlocker(session);
   const tokens = working.passes.filter(p => p.tokens.calls > 0).map(p => ({ pass: p.step === 'critic' ? 'Critic' : `${STEP_LABELS[p.step]} pass`, text: tokenText(p.tokens) }));
-  if (working.recheckTokens && working.recheckTokens.calls > 0) tokens.push({ pass: 'Requirements re-check', text: tokenText(working.recheckTokens) });
   if (working.callTokens && working.callTokens.calls > 0) tokens.push({ pass: 'Explain and Rewrite', text: tokenText(working.callTokens) });
   const selected = selectedNumbers(working);
   const postCount = postableNumbers(working).length;
   const findingCount = review?.store.findings.length ?? 0;
   return {
     model: startedWith ? label(startedWith.modelId) : '',
-    requirements: requirementsLabel(review?.requirements ?? startedWith?.requirements ?? { kind: 'none' }),
     passesRun: (review?.store.stepsRun ?? []).map(step => STEP_LABELS[step]),
     ...(review && review.snapshot.reviewedCommit !== derived.data.pr.headCommit
       ? { outOfDate: { reviewed: shortCommit(review.snapshot.reviewedCommit), head: shortCommit(derived.data.pr.headCommit) } } : {}),
@@ -438,10 +375,6 @@ function resultsView(session: ReviewSession, label: (id: string) => string): Rev
     ...(working.notice ? { notice: working.notice } : {}),
     hasReview: review !== undefined,
     ...(review ? { picker: pickerView(working, review) } : {}),
-    ...(line ? { requirementsLine: line } : {}),
-    ...(review ? { requirementsForm: { ...sourceFields(session), ...(recheck ? { recheckBlocker: recheck } : {}) } } : {}),
-    canRecheck: recheck === undefined,
-    ...(review?.coverage ? { coverage: renderCoverageText(review.coverage) } : {}),
     tokens,
     canRunAgain: startedWith !== undefined,
     findings: (review?.store.findings ?? [])
@@ -460,34 +393,14 @@ function resultsView(session: ReviewSession, label: (id: string) => string): Rev
 function progressText(working: ReviewWorking): string | undefined {
   const { active } = working;
   if (!active) return undefined;
-  if (active.step === 'requirements') return 'Requirements check: running';
   const name = active.step === 'critic' ? 'Critic' : `${STEP_LABELS[active.step]} pass`;
   return active.total > 0 ? `${name}: ${active.done} of ${active.total} batches` : `${name}: starting`;
 }
 
-/**
- * The key the pull request title names, when the ticket the last check tried could not be found and
- * the title names another. With `current`, only while that ticket's key is still the one in use.
- */
-function titleKeyOffer(session: ReviewSession, current: boolean): string | undefined {
-  const outcome = session.working.requirements;
-  if (outcome?.status !== 'ticket-unreadable' || outcome.reason !== 'not-found') return undefined;
-  const titleKey = findJiraKeyInText(session.derived.data.pr.title);
-  if (!titleKey || titleKey === outcome.key) return undefined;
-  if (current) {
-    const ctx = contextOf(session);
-    const step = session.working.firstStep;
-    if (sourceOf(step, ctx) !== 'ticket' || ticketKeyOf(step, ctx) !== outcome.key) return undefined;
-  }
-  return titleKey;
-}
-
-/** The requirements source as the first step and the results show it. */
-function sourceFields(session: ReviewSession): RequirementsFormView {
+/** The source as the first step shows it. */
+function sourceFields(session: ReviewSession): Pick<FirstStepView, 'sources' | 'source' | 'ticketKey' | 'goal'> {
   const step = session.working.firstStep;
   const ctx = contextOf(session);
-  const reword = rewordBlocker(step, ctx);
-  const titleKey = titleKeyOffer(session, true);
   return {
     sources: [
       { id: 'ticket', label: 'Jira ticket', available: ctx.jiraConfigured, ...(ctx.jiraConfigured ? {} : { reason: JIRA_NOT_CONFIGURED_REASON }) },
@@ -497,24 +410,7 @@ function sourceFields(session: ReviewSession): RequirementsFormView {
     source: sourceOf(step, ctx),
     ticketKey: ticketKeyOf(step, ctx),
     goal: step.goal,
-    points: step.points,
-    pointsFromOtherGoal: step.points.trim() !== '' && step.pointsFrom !== undefined && step.pointsFrom !== step.goal,
-    ...(step.rewordError ? { rewordError: step.rewordError } : {}),
-    canReword: !reword,
-    ...(reword ? { rewordBlocker: reword } : {}),
-    ...(titleKey ? { titleKey } : {}),
   };
-}
-
-/** What keeps Re-check from running with the source as it is set now, when something does. */
-function recheckBlocker(session: ReviewSession): string | undefined {
-  const { review, firstStep } = session.working;
-  if (!review) return 'There is no review to check.';
-  const ctx = contextOf(session);
-  const blocker = startBlocker(firstStep, ctx);
-  if (blocker) return blocker;
-  if (sourceOf(firstStep, ctx) === 'none' && review.requirements.kind === 'none' && !review.coverage) return 'Pick a ticket or a goal to check against.';
-  return undefined;
 }
 
 function firstStepView(session: ReviewSession): FirstStepView {
@@ -561,34 +457,11 @@ async function readModels(deps: ReviewBoardDeps): Promise<ReviewModels> {
   return { setting, state: state.state, options: listed.map(m => ({ id: m.id, label: modelLabel(m) })) };
 }
 
-/** The first-step actions the results take too: the requirements source, the ticket key, the goal and its points. */
-const SOURCE_ACTIONS: ReadonlySet<string> = new Set(['source', 'ticket-key', 'goal', 'points']);
-
-const RUN_TYPES = new Set(['reword', 'start', 'passes', 'again', 'recheck']);
+const RUN_TYPES = new Set(['start', 'passes', 'again']);
 
 function isRunRequest(request: unknown): request is ReviewRunRequest {
   const type = (request as { type?: unknown } | null)?.type;
   return typeof type === 'string' && (RUN_TYPES.has(type) || isFindingRun(request));
-}
-
-async function rewordRun(
-  session: ReviewSession, deps: ReviewBoardDeps, signal: AbortSignal,
-): Promise<RunFinished<ReviewWorking>> {
-  const onFirstStep = session.working.stage !== 'review';
-  const step = session.working.firstStep;
-  if (rewordReplacesCorrections(step)) {
-    const replace = await deps.confirm({
-      title: 'Replace your corrected points?',
-      detail: 'Reword writes new points from the goal as it is typed now, and your corrections to the points are lost.',
-      button: 'Reword',
-    });
-    if (!replace) return withNotice('Not reworded: your corrected points were kept.', onFirstStep);
-  }
-  const model = await modelFor(session, deps);
-  if (!('handle' in model)) return withNotice(model.problem, onFirstStep);
-  const goal = step.goal;
-  const result = await rewordGoal(goal, { model: model.handle, recordTokens: (id, figures) => deps.recordTokens(id, figures), signal, ...(deps.onDiag ? { onDiag: deps.onDiag } : {}) });
-  return { update: w => ({ ...w, firstStep: rewordApplied(w.firstStep, goal, result) }) };
 }
 
 function workCount(working: ReviewWorking): string {
@@ -600,7 +473,6 @@ function startRun(
 ): Promise<RunFinished<ReviewWorking>> {
   const { working } = session;
   return regularRun(session, deps, progress, signal, {
-    requirements: requirementsChoiceOf(working.firstStep, contextOf(session)),
     question: working.firstStep.question.trim(),
     confirm: {
       title: 'Replace the stored review?',
@@ -618,7 +490,6 @@ function runAgainRun(
   const { working } = session;
   const startedWith = working.startedWith!;
   return regularRun(session, deps, progress, signal, {
-    requirements: startedWith.requirements,
     question: startedWith.question,
     confirm: {
       title: 'Run the whole review again?',
@@ -628,12 +499,6 @@ function runAgainRun(
     },
     fromFirstStep: false,
   });
-}
-
-/** The goal rewording, from the first step or the results. */
-function beginReword(session: ReviewSession): RunBegun<ReviewWorking> {
-  const blocker = rewordBlocker(session.working.firstStep, contextOf(session));
-  return blocker ? { ok: false, reason: blocker } : { ok: true, size: 'call', what: 'reword', label: 'the goal rewording', total: 1 };
 }
 
 function beginResultsRun(session: ReviewSession, request: ReviewRunRequest): RunBegun<ReviewWorking> {
@@ -646,11 +511,6 @@ function beginResultsRun(session: ReviewSession, request: ReviewRunRequest): Run
   }
   const review = working.review;
   if (!review) return { ok: false, reason: 'There is no review. Run again reviews the pull request.' };
-  if (request.type === 'reword') return beginReword(session);
-  if (request.type === 'recheck') {
-    const blocker = recheckBlocker(session);
-    return blocker ? { ok: false, reason: blocker } : { ok: true, size: 'call', what: 'recheck', label: 'the requirements re-check', total: 1 };
-  }
   const steps = pickedSteps(working);
   if (steps.length === 0) return { ok: false, reason: 'Pick at least one pass.' };
   return { ok: true, size: 'pass', what: 'passes', label: joinNames(steps.map(stepName)) };
@@ -658,7 +518,9 @@ function beginResultsRun(session: ReviewSession, request: ReviewRunRequest): Run
 
 export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, ReviewAction, ReviewView, ReviewBoardDeps> = {
   kind: REVIEW_KIND,
-  formatVersion: 1,
+  // 2: the requirements check and the goal rewording were removed; a review stored before is rebuilt
+  // from its recipe and opens on the first step.
+  formatVersion: 2,
   title: recipe => `Review: ${recipe.project}/${recipe.repo}#${recipe.prId}`,
   validate: async input => reviewRecipeOf(input),
   revalidate: async stored => reviewRecipeOf(stored),
@@ -727,7 +589,7 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
     }
     if (typeof type === 'string' && FINDING_ACTIONS.has(type)) return reduceFindings(working, action as FindingAction);
     if (typeof type === 'string' && FIRST_STEP_ACTIONS.has(type)) {
-      if (working.stage !== 'first-step' && !(SOURCE_ACTIONS.has(type) && working.review)) return { ok: false, reason: 'Press New review to change the first step.' };
+      if (working.stage !== 'first-step') return { ok: false, reason: 'Press New review to change the first step.' };
       const reduced = reduceFirstStep(working.firstStep, action as FirstStepAction, contextOf(session));
       return reduced.ok ? { ok: true, working: { ...working, firstStep: reduced.working } } : reduced;
     }
@@ -737,11 +599,8 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
   beginRun(session, request): RunBegun<ReviewWorking> {
     if (!isRunRequest(request)) return { ok: false, reason: 'Unknown run.' };
     if (isFindingRun(request)) return beginFindingRun(session, request);
-    if (request.type === 'passes' || request.type === 'again' || request.type === 'recheck' || (request.type === 'reword' && session.working.stage === 'review')) {
-      return beginResultsRun(session, request);
-    }
+    if (request.type === 'passes' || request.type === 'again') return beginResultsRun(session, request);
     if (session.working.stage !== 'first-step') return { ok: false, reason: 'Press New review to start another review.' };
-    if (request.type === 'reword') return beginReword(session);
     const blocker = startBlocker(session.working.firstStep, contextOf(session));
     return blocker ? { ok: false, reason: blocker } : { ok: true, size: 'pass', what: 'regular', label: 'the regular pass' };
   },
@@ -750,10 +609,8 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
     if (!isRunRequest(request)) throw new Error('Unknown run.');
     if (isFindingRun(request)) return findingRun(session, request, deps, signal);
     switch (request.type) {
-      case 'reword': return rewordRun(session, deps, signal);
       case 'start': return startRun(session, deps, progress, signal);
       case 'again': return runAgainRun(session, deps, progress, signal);
-      case 'recheck': return recheckRun(session, requirementsChoiceOf(session.working.firstStep, contextOf(session)), deps, signal);
       case 'passes': return extraPassesRun(session, pickedSteps(session.working), deps, progress, signal);
     }
   },

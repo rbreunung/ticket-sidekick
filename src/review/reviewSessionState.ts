@@ -1,6 +1,4 @@
 import { extractJsonObject } from '../utils/extractJsonObject';
-import type { RequirementsTicket } from '../utils/requirementsSource';
-import type { RequirementsCoverage } from './requirementsCoverage';
 // Type-only — IBitbucketClient.ts has no imports of its own (vscode included), so this
 // stays safe for a vscode-free, Vitest-loadable module.
 import type { ReviewMode } from '../bitbucket/IBitbucketClient';
@@ -76,10 +74,8 @@ export interface ReviewSession {
   prAuthor?: string;
   /** PR target branch, for the "Copy for Teams" header. Absent on sessions saved before it existed. */
   prTargetBranch?: string;
-  /** The source commit the review ran against, so a later goal correction reads files at the same version. Absent on older sessions. */
+  /** The source commit the review ran against. Absent on older sessions. */
   prFromCommitHash?: string;
-  /** The ticket check, when the user opted into one: kept so "Copy for Teams" can include it and a stated goal can redo it. */
-  requirements?: RequirementsTicket & { coverage: RequirementsCoverage };
 }
 
 /** Running counters for one review, reported by the shared completion step (KTD10). */
@@ -210,9 +206,6 @@ export function formatReviewForSharing(
   options: {
     targets?: number[];
     confidenceThreshold?: number;
-    coverageText?: string;
-    /** Keep the coverage block in a copy limited to some findings, as the review board does. */
-    coverageWithTargets?: boolean;
     /** Plain-text explanations by finding id, shown under their finding with their line breaks kept. */
     explanations?: Record<number, string>;
   } = {},
@@ -236,11 +229,8 @@ export function formatReviewForSharing(
     session.prUrl,
   ].join('\n');
 
-  // The ticket check belongs to the whole review, so a copy limited to some findings leaves it out.
-  const coverage = (options.targets && !options.coverageWithTargets) || !options.coverageText ? '' : `\n\n${options.coverageText}`;
-
   if (copiedCount === 0) {
-    return { text: `${header}${coverage}\n\nNo issues found.`, copiedCount, totalCount, countLabel };
+    return { text: `${header}\n\nNo issues found.`, copiedCount, totalCount, countLabel };
   }
 
   const block = (f: ReviewFinding): string => {
@@ -271,7 +261,7 @@ export function formatReviewForSharing(
     return [`${shareSeverityIcon(severity)} ${label} (${rows.length})`, ...rows.map(block)];
   });
 
-  return { text: `${header}${coverage}\n\n${groups.join('\n\n')}`, copiedCount, totalCount, countLabel };
+  return { text: `${header}\n\n${groups.join('\n\n')}`, copiedCount, totalCount, countLabel };
 }
 
 export function parsePrUrl(url: string): ParsedPrUrl | null {
@@ -1351,7 +1341,7 @@ export function buildTruncationEvent(params: {
  * create a cycle.
  */
 export type ReviewPass =
-  | 'pass1' | 'continuation' | 'pass2' | 'critic' | 'critic-r2' | 'requirements'
+  | 'pass1' | 'continuation' | 'pass2' | 'critic' | 'critic-r2'
   | 'security' | 'performance' | 'reliability' | 'maintainability';
 
 /** R5's recovery-decision shapes — logged so a reader can follow what happened

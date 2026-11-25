@@ -1,18 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
 import { ModelRequestCancelledError, type BoardModelHandle } from '../boards/boardModels';
 import {
-  recheckRequirements,
   runCritic,
   runExtraPass,
   runRegularPass,
   type EngineDeps,
   type EngineSettings,
-  type RequirementsChoice,
   type StagedReview,
 } from '../review/engine';
-import type { RequirementsSourceResult } from '../services/TicketService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 
 // Scenarios for the staged review engine: a PR whose files each land in their own batch, a scripted
@@ -60,11 +55,10 @@ function reviewReply(findings: FindingSpec[], meta: { recommendedPersonas?: stri
   return lines.join('\n');
 }
 
-type PromptKind = 'regular' | 'regular-whole-files' | 'security' | 'performance' | 'reliability' | 'maintainability' | 'critic' | 'requirements';
+type PromptKind = 'regular' | 'regular-whole-files' | 'security' | 'performance' | 'reliability' | 'maintainability' | 'critic';
 
 function kindOf(prompt: string): PromptKind {
   if (prompt.startsWith('You are verifying the findings')) return 'critic';
-  if (prompt.startsWith('You are checking whether a pull request')) return 'requirements';
   for (const lens of ['security', 'performance', 'reliability', 'maintainability'] as const) {
     if (prompt.includes(`through a ${lens} lens ONLY`)) return lens;
   }
@@ -100,7 +94,6 @@ function scriptedModel(respond: (call: Call, index: number) => string | Promise<
 function setup(options: {
   files: number;
   respond: (call: Call, index: number) => string | Promise<string>;
-  readTicket?: (key: string) => Promise<RequirementsSourceResult>;
 }) {
   const client = new MockBitbucketClient();
   client.rawDiff = prDiff(options.files);
@@ -113,19 +106,12 @@ function setup(options: {
     client,
     signal: controller.signal,
     sleep: async () => {},
-    ...(options.readTicket ? { readTicket: options.readTicket } : {}),
   };
   return { client, calls: model.calls, controller, deps, recorded };
 }
 
-const none: RequirementsChoice = { kind: 'none' };
-
-async function regular(t: ReturnType<typeof setup>, settings: EngineSettings = ONE_FILE_PER_BATCH, requirements: RequirementsChoice = none) {
-  return runRegularPass({ target: TARGET, requirements, settings }, t.deps);
-}
-
-function requirementsReply(): string {
-  return readFileSync(resolve(process.cwd(), 'src/test/fixtures/requirements-reply-clean-spec.json'), 'utf-8');
+async function regular(t: ReturnType<typeof setup>, settings: EngineSettings = ONE_FILE_PER_BATCH) {
+  return runRegularPass({ target: TARGET, settings }, t.deps);
 }
 
 describe('regular pass: suggestion of extra passes', () => {
@@ -265,36 +251,16 @@ describe('regular pass: findings, batches and the snapshot', () => {
   });
 });
 
-describe('regular pass: requirements check', () => {
-  it('with source none makes no Jira call and no requirements call', async () => {
-    const readTicket = vi.fn(async (): Promise<RequirementsSourceResult> => { throw new Error('should not be called'); });
-    const t = setup({ files: 1, respond: () => reviewReply([]), readTicket });
+describe('regular pass: no requirements check', () => {
+  it('makes only the review calls and gives the review no coverage', async () => {
+    const t = setup({ files: 2, respond: () => reviewReply([]) });
 
     const result = await regular(t);
 
-    expect(readTicket).not.toHaveBeenCalled();
-    expect(t.calls.map((c) => c.kind)).toEqual(['regular']);
-    expect(result.requirements).toEqual({ status: 'not-run' });
-    expect(result.review!.coverage).toBeUndefined();
-  });
-
-  it('with a ticket reads it and checks the whole diff against it after the findings', async () => {
-    const readTicket = vi.fn(async (key: string): Promise<RequirementsSourceResult> => ({
-      ok: true,
-      source: { key, summary: 'Retry failed captures', descriptionText: 'Retry three times.', truncatedDescription: false, comments: [], omittedComments: 0, commentsUnavailable: false },
-    }));
-    const t = setup({ files: 2, respond: (c) => (c.kind === 'requirements' ? requirementsReply() : reviewReply([])), readTicket });
-
-    const result = await regular(t, ONE_FILE_PER_BATCH, { kind: 'ticket', key: 'PAY-7' });
-
-    expect(readTicket).toHaveBeenCalledWith('PAY-7');
-    expect(t.calls.map((c) => c.kind)).toEqual(['regular', 'regular', 'requirements']);
-    const prompt = t.calls[2].prompt;
-    expect(prompt).toContain('Retry three times.');
-    expect(prompt).toContain('### File: src/f1.ts');
-    expect(prompt).toContain('### File: src/f2.ts');
-    expect(result.requirements).toEqual({ status: 'checked' });
-    expect(result.review!.coverage?.ticketKey).toBe('PAY-7');
+    expect(t.calls.map((c) => c.kind)).toEqual(['regular', 'regular']);
+    expect(t.calls.some((c) => c.prompt.includes('Jira ticket'))).toBe(false);
+    expect(Object.keys(result.review!).sort()).toEqual(['snapshot', 'store', 'suggestion']);
+    expect(result).not.toHaveProperty('requirements');
   });
 });
 
@@ -567,41 +533,6 @@ describe('critic', () => {
   });
 });
 
-describe('requirements re-check', () => {
-  it('runs exactly one model call on the stored diff and replaces only the coverage', async () => {
-    const { t, review } = await reviewedTwoFiles(() => requirementsReply());
-    const before: StagedReview = {
-      ...review,
-      requirements: { kind: 'goal', text: 'old goal' },
-      coverage: { ticketKey: 'Stated goal', reading: 'old reading', requirements: [], outOfScope: [], noClearRequirements: true, unseenFileCount: 0 },
-    };
-    t.client.rawDiff = 'diff --git a/src/other.ts b/src/other.ts\n--- a/src/other.ts\n+++ b/src/other.ts\n@@ -0,0 +1 @@\n+changed later\n';
-
-    const result = await recheckRequirements(before, { kind: 'goal', text: 'In scope:\n- only the backend endpoint' }, ONE_FILE_PER_BATCH, t.deps);
-
-    expect(t.calls).toHaveLength(1);
-    expect(t.calls[0].kind).toBe('requirements');
-    expect(t.calls[0].prompt).toContain('only the backend endpoint');
-    expect(t.calls[0].prompt).toContain('### File: src/f1.ts');
-    expect(t.calls[0].prompt).not.toContain('src/other.ts');
-    expect(result.outcome).toEqual({ status: 'checked' });
-    expect(result.review.coverage?.reading).toContain('retried automatically');
-    expect(result.review.coverage?.userGoal).toBe('In scope:\n- only the backend endpoint');
-    expect(result.review.store).toEqual(before.store);
-    expect(result.review.snapshot).toEqual(before.snapshot);
-  });
-
-  it('keeps the old coverage when the re-check fails', async () => {
-    const { t, review } = await reviewedTwoFiles(() => 'not json at all');
-    const coverage = { ticketKey: 'Stated goal', reading: 'old reading', requirements: [], outOfScope: [], noClearRequirements: true, unseenFileCount: 0 };
-
-    const result = await recheckRequirements({ ...review, coverage }, { kind: 'goal', text: 'new goal' }, ONE_FILE_PER_BATCH, t.deps);
-
-    expect(result.outcome).toEqual({ status: 'failed' });
-    expect(result.review.coverage).toEqual(coverage);
-  });
-});
-
 /** The diff of test file `n` alone, as `prDiff` writes it. */
 function fileDiff(n: number): string {
   return prDiff(n).split('diff --git ').filter(Boolean).map((part) => `diff --git ${part}`)[n - 1];
@@ -705,16 +636,10 @@ describe('regular pass: the rules every review pass keeps', () => {
     expect(result.review!.store.findings.map((f) => f.title)).toEqual(['Found on retry']);
   });
 
-  it('gives the review instructions and the upfront question to every review call, the persona passes and the critic, and the ticket text only to the requirements check', async () => {
-    const readTicket = async (key: string): Promise<RequirementsSourceResult> => ({
-      ok: true,
-      source: { key, summary: 'CSV export', descriptionText: 'Ship the CSV export by Friday.', truncatedDescription: false, comments: [], omittedComments: 0, commentsUnavailable: false },
-    });
+  it('gives the review instructions and the upfront question to every review call, the persona passes and the critic', async () => {
     const t = setup({
       files: 1,
-      readTicket,
       respond: (c) => {
-        if (c.kind === 'requirements') return requirementsReply();
         if (c.kind === 'critic') return '{"keep":[1]}';
         if (c.kind === 'regular') return reviewReply([{ file: 1, line: 2, title: 'Unchecked input' }], { additionalFilesNeeded: ['src/ctx.ts'] });
         return reviewReply([]);
@@ -723,18 +648,17 @@ describe('regular pass: the rules every review pass keeps', () => {
     t.client.fileContents.set('src/ctx.ts', 'export const ctx = 1;');
     const settings: EngineSettings = { ...ONE_FILE_PER_BATCH, reviewInstructions: 'Follow the house style guide.', focus: 'Is the retry loop bounded?' };
 
-    const first = await runRegularPass({ target: TARGET, requirements: { kind: 'ticket', key: 'PAY-9' }, settings }, t.deps);
+    const first = await runRegularPass({ target: TARGET, settings }, t.deps);
     const withSecurity = await runExtraPass(first.review!, 'security', settings, t.deps);
     await runCritic(withSecurity.review, [], settings, t.deps);
 
-    expect(t.calls.map((c) => c.kind)).toEqual(['regular', 'regular-whole-files', 'requirements', 'security', 'critic']);
-    for (const call of t.calls.filter((c) => c.kind !== 'requirements')) {
+    expect(t.calls.map((c) => c.kind)).toEqual(['regular', 'regular-whole-files', 'security', 'critic']);
+    for (const call of t.calls) {
       expect(call.prompt, call.kind).toContain('Follow the house style guide.');
       expect(call.prompt, call.kind).toContain('Is the retry loop bounded?');
-      expect(call.prompt, call.kind).not.toContain('Ship the CSV export by Friday.');
     }
-    expect(t.calls.find((c) => c.kind === 'requirements')!.prompt).toContain('Ship the CSV export by Friday.');
   });
+
 });
 
 describe('diagnostic timeline in the output channel', () => {
@@ -761,7 +685,7 @@ describe('diagnostic timeline in the output channel', () => {
     const lines = capture(t);
     const settings: EngineSettings = { ...ONE_FILE_PER_BATCH, contextLines: 5 };
 
-    const first = await runRegularPass({ target: TARGET, requirements: none, settings }, t.deps);
+    const first = await runRegularPass({ target: TARGET, settings }, t.deps);
     const withSecurity = await runExtraPass(first.review!, 'security', settings, t.deps);
     await runCritic(withSecurity.review, [], settings, t.deps);
 

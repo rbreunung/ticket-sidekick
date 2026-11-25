@@ -15,7 +15,7 @@ import type { EngineDeps, EngineSettings, ReviewStep, ReviewTarget } from './typ
  * token meter is attached and whether the host froze the model.
  */
 export function logPassOpening(ctx: PassContext, params: {
-  step: ReviewStep | 'requirements';
+  step: ReviewStep;
   model: BoardModelHandle;
   meter: TokenMeter<BoardModelHandle>;
   settings: EngineSettings;
@@ -66,7 +66,7 @@ type PassDeps = Pick<EngineDeps, 'model' | 'recordTokens' | 'signal' | 'onDiag' 
 
 /** Starts a pass over `target`: its context, its token budget, and its opening lines. */
 export function openPass(
-  deps: PassDeps, settings: EngineSettings, target: ReviewTarget, step: ReviewStep | 'requirements',
+  deps: PassDeps, settings: EngineSettings, target: ReviewTarget, step: ReviewStep,
 ): { ctx: PassContext; tokenBudget: number } {
   const ctx = passContext(deps, { runTag: buildRunTag(target.project, target.repo, target.prId), detailedDiagnostics: settings.detailedDiagnostics });
   const budget = tokenBudgetOf(settings, deps.model);

@@ -1,8 +1,6 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelRequestCancelledError, type BoardModelHandle } from '../boards/boardModels';
 import type { ReviewBoardDeps, ReviewSettings } from '../boards/review/deps';
@@ -16,7 +14,7 @@ import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 
 // The review board after its first step: the pass suggestion and picker, Run selected (persona
 // passes, then the critic), Stop, the banners for a stopped, interrupted, failed or refused pass,
-// Run again, the requirements re-check and the token usage per pass. A pull request whose files
+// Run again and the token usage per pass. A pull request whose files
 // each land in a batch of their own, a scripted model that answers by what the prompt asks, and a
 // fake native confirmation. Every scenario goes through the session manager, as a board tab does.
 
@@ -47,12 +45,10 @@ function reviewReply(findings: string[], meta: { recommendedPersonas?: string[];
   return [...findings, JSON.stringify({ additionalFilesNeeded: meta.additionalFilesNeeded ?? [], ...(meta.recommendedPersonas ? { recommendedPersonas: meta.recommendedPersonas } : {}) })].join('\n');
 }
 
-type CallKind = 'reword' | 'regular' | 'whole-files' | 'security' | 'performance' | 'reliability' | 'maintainability' | 'critic' | 'requirements';
+type CallKind = 'regular' | 'whole-files' | 'security' | 'performance' | 'reliability' | 'maintainability' | 'critic';
 
 function kindOf(prompt: string): CallKind {
   if (prompt.startsWith('You are verifying the findings')) return 'critic';
-  if (prompt.startsWith('You are checking whether a pull request')) return 'requirements';
-  if (prompt.startsWith('A developer typed the goal')) return 'reword';
   for (const lens of ['security', 'performance', 'reliability', 'maintainability'] as const) {
     if (prompt.includes(`through a ${lens} lens ONLY`)) return lens;
   }
@@ -72,24 +68,17 @@ let calls: Call[];
 let respond: (call: Call) => string | Promise<string>;
 let confirms: string[];
 let confirmAnswer: boolean;
-let ticketResult: RequirementsSourceResult;
 let clock: number;
 let jiraConfigured: boolean;
-/** The ticket read by key, when a test needs one key to fail and another to read. */
-let ticketFor: ((key: string) => RequirementsSourceResult) | undefined;
+/** The keys of the Jira tickets read. */
+let ticketReads: string[];
 /** Settings a test adds to the board's. */
 let extraSettings: Partial<ReviewSettings>;
 /** The review passes' diagnostic lines. */
 let reviewLines: string[];
 
-function requirementsReply(): string {
-  return readFileSync(resolve(process.cwd(), 'src/test/fixtures/requirements-reply-clean-spec.json'), 'utf-8');
-}
-
 /** The regular pass finds one warning per file and suggests the security pass. */
 const defaultRespond = (call: Call): string => {
-  if (call.kind === 'requirements') return requirementsReply();
-  if (call.kind === 'reword') return JSON.stringify({ inScope: ['Only the backend export endpoint'], outOfScope: ['The export button'], openPoints: [] });
   if (call.kind === 'critic') return JSON.stringify({ keep: [] });
   if (call.kind === 'regular') return reviewReply([findingLine(call.file, 2, `Unchecked input in f${call.file}`)], { recommendedPersonas: ['security'] });
   if (call.kind === 'security') return reviewReply([findingLine(call.file, 6, `Token logged in f${call.file}`, 'critical')]);
@@ -116,7 +105,12 @@ function handle(id: string): BoardModelHandle {
 function deps(): ReviewBoardDeps {
   return {
     bitbucket: async () => ({ configured: true, client }),
-    jira: async () => (jiraConfigured ? { readRequirements: async (key: string) => (ticketFor ? ticketFor(key) : ticketResult) } : undefined),
+    jira: async () => (jiraConfigured ? {
+      readRequirements: async (key: string): Promise<RequirementsSourceResult> => {
+        ticketReads.push(key);
+        return { ok: false, reason: 'not-found', message: 'Issue does not exist' };
+      },
+    } : undefined),
     models: { list: async () => [MODEL], handle: async id => (id === MODEL.id ? handle(id) : undefined) },
     modelSettings: { reviewModel: () => MODEL.id, writeReviewModel: async () => {} },
     // One file per batch.
@@ -206,13 +200,9 @@ beforeEach(() => {
   respond = defaultRespond;
   confirms = [];
   confirmAnswer = true;
-  ticketResult = {
-    ok: true,
-    source: { key: 'PROJ-12', summary: 'Add export', descriptionText: 'Export the report as CSV.', truncatedDescription: false, comments: [], omittedComments: 0, commentsUnavailable: false },
-  };
   clock = 1_000;
   jiraConfigured = true;
-  ticketFor = undefined;
+  ticketReads = [];
   extraSettings = {};
   reviewLines = [];
 });
@@ -472,113 +462,22 @@ describe('Run again', () => {
   });
 });
 
-describe('the requirements check', () => {
-  it('a ticket that cannot be read: the findings stand, the coverage position names the failed read, and Re-check runs only the check', async () => {
+describe('the results of a review', () => {
+  it('with a ticket key in the pull request title, read no ticket, have no requirements check, coverage or source form, and refuse Re-check and Reword', async () => {
     client.prOverride.title = 'PROJ-12 Add export';
-    ticketResult = { ok: false, reason: 'not-found', message: 'Issue does not exist' };
     const m = manager();
-    let state = await reviewed(m, 2);
-    let results = resultsOf(state);
-    expect(results.findings).toHaveLength(2);
-    expect(results.requirementsLine).toMatch(/the ticket PROJ-12 could not be read \(Issue does not exist\)/);
-    expect(results.canRecheck).toBe(true);
-    expect(results.coverage).toBeUndefined();
-
-    ticketResult = {
-      ok: true,
-      source: { key: 'PROJ-12', summary: 'Add export', descriptionText: 'Export the report as CSV.', truncatedDescription: false, comments: [], omittedComments: 0, commentsUnavailable: false },
-    };
-    calls = [];
-    const started = await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'recheck' });
-    expect(started.running).toEqual([expect.objectContaining({ size: 'call', what: 'recheck' })]);
-    state = await idle(m, state.id);
-    results = resultsOf(state);
-    expect(calls.map(c => c.kind)).toEqual(['requirements']);
-    expect(results.coverage).toMatch(/Requirements coverage \(PROJ-12\)/);
-    expect(results.requirementsLine).toBeUndefined();
-    expect(results.findings).toHaveLength(2);
-    expect(results.tokens.map(t => t.pass)).toEqual(['Regular pass', 'Requirements re-check']);
-  });
-
-  it('a check whose model reply is unreadable says it failed and offers Re-check', async () => {
-    client.prOverride.title = 'PROJ-12 Add export';
-    respond = call => (call.kind === 'requirements' ? 'no json here' : defaultRespond(call));
-    const results = resultsOf(await reviewed(manager(), 2));
-    expect(results.requirementsLine).toMatch(/^The requirements check failed/);
-    expect(results.canRecheck).toBe(true);
-    expect(results.findings).toHaveLength(2);
-  });
-});
-
-describe('changing the requirements source after a review', () => {
-  async function reviewedAgainstTicket(m: SessionManager): Promise<BoardState> {
-    client.prOverride.title = 'PROJ-12 Add export';
     const state = await reviewed(m, 2);
-    expect(resultsOf(state).coverage).toMatch(/Requirements coverage \(PROJ-12\)/);
-    return state;
-  }
-
-  it('switching from the ticket to a reworded goal and re-checking makes one requirements call, replaces the coverage and leaves the findings', async () => {
-    const m = manager();
-    let state = await reviewedAgainstTicket(m);
-    const before = resultsOf(state).findings;
-    expect(resultsOf(state).requirementsForm).toMatchObject({ source: 'ticket', ticketKey: 'PROJ-12' });
-
-    state = await act(m, state, { type: 'source', source: 'goal' });
-    state = await act(m, state, { type: 'goal', text: 'export only the backend endpoint' });
-    expect(resultsOf(state).requirementsForm).toMatchObject({ source: 'goal', goal: 'export only the backend endpoint', canReword: true });
-    expect(resultsOf(state).coverage).toMatch(/PROJ-12/);
-
-    calls = [];
-    state = await runAndWait(m, state, { type: 'reword' });
-    expect(calls.map(c => c.kind)).toEqual(['reword']);
-    expect(resultsOf(state).requirementsForm!.points).toMatch(/Only the backend export endpoint/);
-
-    calls = [];
-    const started = await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'recheck' });
-    expect(started.running).toEqual([expect.objectContaining({ size: 'call', what: 'recheck' })]);
-    state = await idle(m, state.id);
-    expect(calls.map(c => c.kind)).toEqual(['requirements']);
-    expect(calls[0].prompt).toContain('Only the backend export endpoint');
     const results = resultsOf(state);
-    expect(results.requirements).toBe('the stated goal');
-    expect(results.coverage).toMatch(/Stated goal/);
-    expect(results.coverage).not.toMatch(/PROJ-12/);
-    expect(results.findings).toEqual(before);
-    expect(results.passesRun).toEqual(['Regular']);
-  });
 
-  it('switching to none and re-checking makes no call and removes the coverage', async () => {
-    const m = manager();
-    let state = await reviewedAgainstTicket(m);
-    const before = resultsOf(state).findings;
-    state = await act(m, state, { type: 'source', source: 'none' });
-    expect(resultsOf(state).canRecheck).toBe(true);
-
-    calls = [];
-    state = await runAndWait(m, state, { type: 'recheck' });
-    expect(calls).toEqual([]);
-    const results = resultsOf(state);
-    expect(results.coverage).toBeUndefined();
-    expect(results.requirements).toBe('none');
-    expect(results.findings).toEqual(before);
-    // Nothing is left to check or remove.
-    expect(results.canRecheck).toBe(false);
-    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'recheck' })).rejects.toThrow(/ticket or a goal/);
-  });
-
-  it('a goal re-check needs the goal typed; the ticket is not offered while Jira is not configured', async () => {
-    jiraConfigured = false;
-    const m = manager();
-    let state = await reviewed(m, 2);
-    let form = resultsOf(state).requirementsForm!;
-    expect(form.sources.find(s => s.id === 'ticket')).toMatchObject({ available: false, reason: expect.stringMatching(/Jira is not configured/) });
-    await expect(act(m, state, { type: 'source', source: 'ticket' })).rejects.toThrow(/Jira is not configured/);
-
-    state = await act(m, state, { type: 'source', source: 'goal' });
-    form = resultsOf(state).requirementsForm!;
-    expect(resultsOf(state).canRecheck).toBe(false);
-    expect(form.recheckBlocker).toBe('Type the goal.');
+    expect(ticketReads).toEqual([]);
+    expect(calls.map(c => c.kind)).toEqual(['regular', 'regular']);
+    expect(results.findings).toHaveLength(2);
+    for (const gone of ['coverage', 'requirementsLine', 'requirementsForm', 'canRecheck', 'requirements']) expect(results).not.toHaveProperty(gone);
+    expect(results.tokens.map(t => t.pass)).toEqual(['Regular pass']);
+    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'recheck' })).rejects.toThrow('Unknown run.');
+    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'reword' })).rejects.toThrow('Unknown run.');
+    await expect(act(m, state, { type: 'source', source: 'none' })).rejects.toThrow(/New review/);
+    await expect(act(m, state, { type: 'ticket-key', key: 'PROJ-99' })).rejects.toThrow(/New review/);
   });
 
   it('the question and the model stay as the review was started', async () => {
@@ -708,42 +607,6 @@ describe('a finding in full', () => {
       facts: ['L2 (also L5, L7)', 'new code', 'confidence 0.6', 'source: general'],
       markers: ['low confidence'],
     });
-  });
-});
-
-describe('a requested ticket that does not exist while the title names another', () => {
-  it('names the title\'s key on the failure line, offers it on the first step and the results, and Re-check reads it after the switch', async () => {
-    client.prOverride.title = 'PROJ-12 Add export';
-    client.rawDiff = prDiff(2);
-    ticketFor = key => key === 'PROJ-12' ? ticketResult : { ok: false, reason: 'not-found', message: 'Issue does not exist' };
-    const m = manager();
-    let state = await runAndWait(m, await open(m, { url: PR_URL, ticketKey: 'PROJ-99' }), { type: 'start' });
-    let results = resultsOf(state);
-    expect(results.requirementsLine).toBe(
-      'The requirements check did not run: the ticket PROJ-99 could not be read (Issue does not exist). The findings stand. The pull request title names PROJ-12 instead.',
-    );
-    expect(results.requirementsForm).toMatchObject({ ticketKey: 'PROJ-99', titleKey: 'PROJ-12' });
-
-    state = await act(m, state, { type: 'new-review' });
-    expect(viewOf(state).firstStep).toMatchObject({ ticketKey: 'PROJ-99', titleKey: 'PROJ-12' });
-    state = await act(m, state, { type: 'back-to-review' });
-
-    state = await act(m, state, { type: 'ticket-key', key: 'PROJ-12' });
-    expect(resultsOf(state).requirementsForm!.titleKey).toBeUndefined();
-    calls = [];
-    state = await runAndWait(m, state, { type: 'recheck' });
-    results = resultsOf(state);
-    expect(calls.map(c => c.kind)).toEqual(['requirements']);
-    expect(results.coverage).toMatch(/Requirements coverage \(PROJ-12\)/);
-    expect(results.requirementsLine).toBeUndefined();
-  });
-
-  it('offers nothing when the title names the same key, or no key', async () => {
-    client.prOverride.title = 'PROJ-12 Add export';
-    ticketResult = { ok: false, reason: 'not-found', message: 'Issue does not exist' };
-    const results = resultsOf(await reviewed(manager(), 2));
-    expect(results.requirementsLine).not.toMatch(/title names/);
-    expect(results.requirementsForm!.titleKey).toBeUndefined();
   });
 });
 

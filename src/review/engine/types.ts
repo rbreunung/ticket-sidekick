@@ -1,10 +1,8 @@
 import type { BitbucketPR, IBitbucketClient } from '../../bitbucket/IBitbucketClient';
 import type { BoardModelHandle } from '../../boards/boardModels';
 import type { PersonaId } from '../../services/PrReviewService';
-import type { RequirementsSourceResult } from '../../services/TicketService';
 import type { DiagLogger } from '../../utils/diagTypes';
 import type { TokenFigures } from '../../utils/tokenUsage';
-import type { RequirementsCoverage } from '../requirementsCoverage';
 import type { FileDiff, ReviewFinding } from '../reviewSessionState';
 
 // The staged review's data and dependencies. Everything a review keeps is plain JSON, so a board can
@@ -64,20 +62,11 @@ export type PassSuggestion =
   /** No finished batch gave a readable recommendation. */
   | { kind: 'no-usable-recommendation' };
 
-/** What the requirements check compares the diff with. */
-export type RequirementsChoice =
-  | { kind: 'none' }
-  | { kind: 'ticket'; key: string }
-  /** The developer's goal, as it stands when the check runs (possibly a reworded and corrected text). */
-  | { kind: 'goal'; text: string };
-
 /** One review as the board keeps it. */
 export interface StagedReview {
   snapshot: ReviewSnapshot;
   store: FindingStore;
   suggestion: PassSuggestion;
-  requirements: RequirementsChoice;
-  coverage?: RequirementsCoverage;
 }
 
 export interface TokenTotals {
@@ -131,13 +120,6 @@ export interface PassOutcome {
   error?: string;
 }
 
-export type RequirementsOutcome =
-  | { status: 'not-run' }
-  | { status: 'checked' }
-  | { status: 'ticket-unreadable'; key: string; reason: 'not-found' | 'auth' | 'error'; message: string }
-  | { status: 'failed' }
-  | { status: 'stopped' };
-
 /** The review settings the passes read. */
 export interface EngineSettings {
   /** The developer's own review instructions; joined with `focus` and given to every review prompt. */
@@ -155,7 +137,7 @@ export interface EngineSettings {
 }
 
 export interface EngineProgress {
-  step: ReviewStep | 'requirements';
+  step: ReviewStep;
   batchesDone: number;
   batchesTotal: number;
   /**
@@ -172,8 +154,6 @@ export interface EngineDeps {
   /** Records one call's token figures; the board keeps the monthly counters. */
   recordTokens: (modelId: string, figures: TokenFigures) => PromiseLike<void>;
   client: IBitbucketClient;
-  /** Reads a Jira ticket's requirements text; needed only for a ticket choice. */
-  readTicket?: (key: string) => Promise<RequirementsSourceResult>;
   /** Aborting it stops the pass at once. */
   signal: AbortSignal;
   onProgress?: (progress: EngineProgress) => void;

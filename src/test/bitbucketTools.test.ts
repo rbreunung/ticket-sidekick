@@ -1,8 +1,6 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BitbucketConfig, BitbucketPR } from '../bitbucket/IBitbucketClient';
 import type { BoardModelHandle } from '../boards/boardModels';
@@ -76,13 +74,9 @@ function handle(id: string): BoardModelHandle {
     id,
     maxInputTokens: 100_000,
     countTokens: async text => Math.ceil((typeof text === 'string' ? text : text.content).length / 4),
-    sendRequest: async messages => {
+    sendRequest: async () => {
       modelCalls++;
-      const prompt = messages.map(m => m.content).join('\n');
-      const text = prompt.startsWith('You are checking whether a pull request')
-        ? readFileSync(resolve(process.cwd(), 'src/test/fixtures/requirements-reply-clean-spec.json'), 'utf-8')
-        : REVIEW_REPLY;
-      return { text: (async function* () { yield text; })() };
+      return { text: (async function* () { yield REVIEW_REPLY; })() };
     },
   };
 }
@@ -140,7 +134,7 @@ async function idle(m: SessionManager, id: string): Promise<BoardState> {
   return state;
 }
 
-/** Runs a regular pass on the review board of the pull request, checked against PROJ-12. */
+/** Runs a regular pass on the review board of the pull request, opened with the ticket key PROJ-12. */
 async function reviewOnBoard(): Promise<string> {
   const m = manager();
   const result = await m.open(REVIEW_KIND, { url: PR_URL, ticketKey: 'PROJ-12' });
@@ -209,7 +203,7 @@ describe('bitbucket_read_findings', () => {
     expect(result.text).not.toContain('Not reviewed or dropped');
   });
 
-  it('for a stored review answers the counts by severity, the passes run, the verdict and the coverage summary, and starts no check', async () => {
+  it('for a stored review answers the counts by severity, the passes run and the verdict, with no requirements coverage, and starts no check', async () => {
     await reviewOnBoard();
     const restarted = manager();
     const readsBefore = client.prReads;
@@ -222,7 +216,9 @@ describe('bitbucket_read_findings', () => {
     expect(result.text).toContain('Passes run: Regular');
     expect(result.text).toContain('Findings: 3 (1 critical, 1 warnings, 1 suggestions)');
     expect(result.text).toContain('Verdict: critical issues');
-    expect(result.text).toMatch(/Requirements coverage \(PROJ-12\): \d+ met, \d+ not evident, \d+ unclear/);
+    expect(result.text).not.toMatch(/coverage/i);
+    const list = await callTool(tool('bitbucket_read_findings'), { url: PR_URL, list: true }, toolDeps(restarted));
+    expect(list.text).not.toMatch(/coverage/i);
     expect(client.prReads).toBe(readsBefore);
     expect(modelCalls).toBe(callsBefore);
   });

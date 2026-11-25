@@ -1,18 +1,17 @@
 import {
-  addTokenTotals, recheckRequirements, runCritic, runExtraPass, runRegularPass, uncheckedFindings,
-  type EngineDeps, type EngineProgress, type PassOutcome, type RequirementsChoice, type ReviewStep, type StagedReview,
+  runCritic, runExtraPass, runRegularPass, uncheckedFindings,
+  type EngineDeps, type EngineProgress, type PassOutcome, type ReviewStep, type StagedReview,
 } from '../../review/engine';
 import { PERSONAS, type PersonaId } from '../../services/PrReviewService';
 import type { RunFinished, RunProgress } from '../../sessions/boardKind';
 import { REVIEW_MODEL_SETTING, type BoardModelHandle } from '../boardModels';
 import { DEFAULT_CONFIDENCE_THRESHOLD, type ReviewBoardDeps } from './deps';
-import { sameReview } from './findings';
 import type { ActivePass, PassRecord, ReviewSession, ReviewWorking, StartedWith } from './kind';
 
-// The review board's model runs after the first step: the regular pass (Start and Run again), the
-// extra passes the developer picked (persona passes first, the critic last, in one run), and the
-// requirements re-check. Each step's result is saved as it finishes, so a restart keeps the steps
-// done; a pass a restart cut off is marked interrupted. vscode-free.
+// The review board's model runs after the first step: the regular pass (Start and Run again) and the
+// extra passes the developer picked (persona passes first, the critic last, in one run). Each step's
+// result is saved as it finishes, so a restart keeps the steps done; a pass a restart cut off is
+// marked interrupted. vscode-free.
 
 /** The extra passes in the order a run does them: the four persona passes, then the critic. */
 export const EXTRA_STEPS: ReviewStep[] = [...PERSONAS.map(p => p.id), 'critic'];
@@ -90,13 +89,11 @@ export async function modelFor(session: ReviewSession, deps: ReviewBoardDeps): P
 async function engineDeps(
   deps: ReviewBoardDeps, model: BoardModelHandle, client: EngineDeps['client'], signal: AbortSignal, onProgress?: (p: EngineProgress) => void,
 ): Promise<EngineDeps> {
-  const jira = await deps.jira();
   const onDiag = deps.reviewDiag ?? deps.onDiag;
   return {
     model,
     recordTokens: (id, figures) => deps.recordTokens(id, figures),
     client,
-    ...(jira ? { readTicket: key => jira.readRequirements(key) } : {}),
     signal,
     ...(onProgress ? { onProgress } : {}),
     ...(onDiag ? { onDiag } : {}),
@@ -158,7 +155,6 @@ function nextRun(working: ReviewWorking): number {
 }
 
 export interface RegularRunChoices {
-  requirements: RequirementsChoice;
   question: string;
   /** Asked before the review is replaced when it has explanations or drafts. */
   confirm: { title: string; detail: string; button: string; declined: string };
@@ -180,27 +176,26 @@ export async function regularRun(
   const bitbucket = await deps.bitbucket();
   if (!bitbucket.configured) return withNotice(bitbucket.hint, choices.fromFirstStep);
   const { confidenceThreshold, ...settings } = await deps.settings();
-  const { requirements, question } = choices;
+  const { question } = choices;
   const active: ActivePass = {
     what: 'regular', steps: ['regular'], step: 'regular', done: 0, total: 0, modelId: model.handle.id, run: 1,
-    startedWith: { modelId: model.handle.id, requirements, question },
+    startedWith: { modelId: model.handle.id, question },
   };
   // From here a restart finds the pass cut off, and the review it replaces is gone.
   await progress({ update: w => ({ ...w, active }), done: 0, total: 0 });
   const reporter = progressReporter(progress);
   const result = await runRegularPass({
     target: { project: recipe.project, repo: recipe.repo, prId: recipe.prId },
-    requirements,
     settings: { ...settings, ...(question ? { focus: question } : {}) },
   }, await engineDeps(deps, model.handle, bitbucket.client, signal, reporter.report));
   await reporter.settled();
   if (result.outcome.status === 'finished') await deps.onReviewCompleted?.();
   const record: PassRecord = { ...result.outcome, modelId: model.handle.id, run: 1 };
-  const startedWith: StartedWith = { modelId: model.handle.id, requirements, question, confidenceThreshold };
+  const startedWith: StartedWith = { modelId: model.handle.id, question, confidenceThreshold };
   return {
     update: w => {
       const next: ReviewWorking = {
-        ...w, stage: 'review', firstStep: { ...w.firstStep }, startedWith, passes: [record], requirements: result.requirements, explanations: {}, drafts: {},
+        ...w, stage: 'review', firstStep: { ...w.firstStep }, startedWith, passes: [record], explanations: {}, drafts: {},
       };
       delete next.firstStep.notice;
       delete next.active;
@@ -274,37 +269,6 @@ export async function extraPassesRun(
 }
 
 /**
- * The requirements check alone, on the stored diff, with the source as it is set now: only the
- * coverage changes, and the source "none" removes it without a call.
- */
-export async function recheckRun(
-  session: ReviewSession, choice: RequirementsChoice, deps: ReviewBoardDeps, signal: AbortSignal,
-): Promise<RunFinished<ReviewWorking>> {
-  const review = session.working.review;
-  if (!review) return withNotice('There is no review to check.', false);
-  const model = await modelFor(session, deps);
-  if (!('handle' in model)) return withNotice(model.problem, false);
-  const bitbucket = await deps.bitbucket();
-  if (!bitbucket.configured) return withNotice(bitbucket.hint, false);
-  const { confidenceThreshold: _threshold, ...settings } = await deps.settings();
-  const result = await recheckRequirements(review, choice, settings, await engineDeps(deps, model.handle, bitbucket.client, signal));
-  return {
-    update: w => {
-      // A review replaced meanwhile is not given this coverage.
-      if (!sameReview(w, session.working)) return w;
-      // A failed or stopped check keeps the source and the coverage it had.
-      const nextReview: StagedReview = { ...w.review!, requirements: result.review.requirements };
-      if (result.review.coverage) nextReview.coverage = result.review.coverage;
-      else delete nextReview.coverage;
-      const next: ReviewWorking = { ...w, review: nextReview, requirements: result.outcome, recheckTokens: addTokenTotals(w.recheckTokens, result.tokens) };
-      // Run again redoes the review with the source the coverage now comes from.
-      if (w.startedWith) next.startedWith = { ...w.startedWith, requirements: result.review.requirements };
-      return next;
-    },
-  };
-}
-
-/**
  * What the passes did not review and the findings they dropped, as plain lines: files cut short,
  * not fetched, excluded or with no text change, the parts of batches that failed, the findings that
  * named a file outside the pull request and the findings the critic removed.
@@ -332,10 +296,9 @@ function emptyRecord(step: ReviewStep, active: ActivePass, run: number): PassRec
   return { ...outcome, status: 'interrupted', modelId: active.modelId, run };
 }
 
-/** Clears what belongs to the results of the review being replaced: the picks, the re-check tokens, the selection, the failed calls and their tokens. */
+/** Clears what belongs to the results of the review being replaced: the picks, the selection, the failed calls and their tokens. */
 function withoutResultsState(working: ReviewWorking): void {
   delete working.picked;
-  delete working.recheckTokens;
   delete working.selected;
   delete working.failures;
   delete working.callTokens;
@@ -350,17 +313,15 @@ export function interruptedWorking(working: ReviewWorking): ReviewWorking {
   if (active.what === 'regular') {
     // The findings of the batches that finished stay, as after a stop; the review it replaced is gone.
     const startedWith: StartedWith = { ...active.startedWith!, confidenceThreshold: working.startedWith?.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD };
-    const step = active.step === 'requirements' ? 'regular' : active.step;
     const result: ReviewWorking = {
-      ...next, stage: 'review', startedWith, passes: [emptyRecord(step, active, active.run)], explanations: {}, drafts: {},
+      ...next, stage: 'review', startedWith, passes: [emptyRecord(active.step, active, active.run)], explanations: {}, drafts: {},
     };
     if (active.partial) result.review = active.partial;
     else delete result.review;
-    delete result.requirements;
     withoutResultsState(result);
     return result;
   }
-  const step = active.step === 'requirements' ? active.steps[0] : active.step;
+  const step = active.step;
   // The running step's finished batches join the review; the steps finished before it were saved already.
   if (active.partialChanges && next.review) next.review = withPartialChanges(next.review, active.partialChanges);
   else if (active.partial) next.review = active.partial;

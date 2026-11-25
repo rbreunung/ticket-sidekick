@@ -134,7 +134,7 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 | `add` | Carry over | `add … to review`: select the findings, edit one draft comment each, Post after the native confirmation; inline on a verified line, else on the activity feed; each comment reported, only the failed ones offered again |
 | `post it` | Carry over | The comment preview's confirmation is Post's preview and native confirmation |
 | `refinement` | Carry over | A refinement instruction in the comment preview is Rewrite with a typed instruction, with Undo |
-| `goal` | Carry over | "the goal is …" after a review: change the source or edit the goal, then Re-check runs only the requirements check on the stored diff and replaces the coverage |
+| `goal` | Dropped | The requirements coverage check was removed; a background for the review replaces it in a later change |
 | `finding-not-found` | Carry over | An unknown finding number is refused on the board; the read-findings tool names the numbers the review has |
 | `diff-question` | Carry over | A general question about the PR: the agent reads the findings and the diff through the tools |
 | `follow-up-failure` | Carry over | A failed follow-up or refinement keeps what was there: the earlier explanation or the hand-edited draft stays, with an error line |
@@ -155,7 +155,7 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 
 | Session | Board | Note |
 | --- | --- | --- |
-| `bitbucket.session.review` | Carry over | The review is the board's session: findings, passes run, explanations, drafts, coverage and the reviewed diff survive a restart, and a repeat request opens it |
+| `bitbucket.session.review` | Carry over | The review is the board's session: findings, passes run, explanations, drafts and the reviewed diff survive a restart, and a repeat request opens it |
 | `bitbucket.session.commentPreview` | Carry over | Drafts are kept in the session until posted |
 | `bitbucket.session.smartFallback` | Dropped | Scope: the smart-mode fallback question |
 | `session-continuity` | Dropped | The removal takes out the chat sessions with `@bitbucket` (a settled decision of the plan): expiry through the chat history, a PR link that starts a fresh review over a live session (a repeat request now opens the stored review, also settled), `check` and `usage` keeping a session alive, and `/review` without a link or a lone mode word ending one |
@@ -172,7 +172,7 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 
 | Mode | Board | Note |
 | --- | --- | --- |
-| `standard` | Carry over | The regular pass every review starts with: pass 1, the budget-aware call with whole files, the requirements check when a source is chosen |
+| `standard` | Carry over | The regular pass every review starts with: pass 1 and the budget-aware call with whole files |
 | `smart` | Carry over | The regular pass suggests persona passes from every batch's recommendation; the developer runs the suggestion or picks others |
 | `deep` | Carry over | Picking all four persona passes and the critic, now or later |
 | `quick` | Dropped | Scope: the quick review (pass 1 without the call with whole files) |
@@ -216,9 +216,9 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 | `failed-review` | Carry over | No batch readable: a failure banner, no findings, Run again |
 | `upfront-question` | Carry over | The question goes into every review call; the agent passes it to the board instead of the prompt syntax (`question:`, `--`, a sentence ending in `?`) |
 | `ticket-choice` | Carry over | An explicit key wins over the PR title's, none without a key, the ticket unavailable with a reason while Jira is not configured; the title-key pause (Use / Skip) is the first step, which always stops before Start, and the quick/standard hint chip goes with the chips |
-| `ticket-read` | Carry over | The capped ticket text, read with a 20-second guard; a failed read lets the review finish without the check |
-| `requirements-call` | Carry over | One call over the whole PR after the findings, the only call that sees ticket text, with at most one extra-file round; an unreadable reply says the check failed |
-| `coverage-block` | Carry over | Shown above the findings as plain text |
+| `ticket-read` | Dropped | The requirements coverage check was removed; a background for the review replaces it in a later change |
+| `requirements-call` | Dropped | The requirements coverage check was removed; a background for the review replaces it in a later change |
+| `coverage-block` | Dropped | The requirements coverage check was removed; a background for the review replaces it in a later change |
 | `token-meter` | Carry over | Every model call is metered, a frozen host model included, and recorded toward the counters |
 | `monthly-counters` | Carry over | Per month and model, the current month and the two before |
 | `token-footer` | Carry over | The board shows the token usage per pass |
@@ -226,7 +226,7 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 | `diagnostic-timeline` | Carry over | Every pass logs to the output channel under `bitbucket.review`: its configuration (model, token budget and ratio, the pass, critic, context lines), the model in use with metering and frozen state, one line per model call (pass, batch, attempt, sizes, duration, status), the retry, split and give-up decisions, a cut-off reply, the findings funnel, "no file could be reviewed" and the last stage of an aborted pass |
 | `not-reviewed-notes` | Carry over | The board, under the banners, and the read-findings summary list what was not reviewed (cut short, not fetched, excluded, no text change, a failed batch part with its files, "after retrying" only for a transient error), the findings dropped for naming a file outside the PR and the findings the critic removed |
 | `finding-detail` | Carry over | Under each finding: its description, recommendation, line with the related lines ("L19 (also L12, L15)"), provenance (new, existing or removed code), confidence and source, as text |
-| `title-key-alternative` | Carry over | When the ticket key in use is not found and the PR title names another, the failure line says so, and the first step and the results offer Use with that key, which sets the ticket key for Start or Re-check |
+| `title-key-alternative` | Dropped | The requirements coverage check was removed; a background for the review replaces it in a later change |
 
 ### Across all steps
 

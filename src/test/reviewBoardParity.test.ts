@@ -130,7 +130,7 @@ const SKIPPED_FILES: BoardEquivalent = {
 };
 const INSTRUCTIONS: BoardEquivalent = {
   actions: ['start', 'passes'],
-  tests: [[ENGINE, 'gives the review instructions and the upfront question to every review call, the persona passes and the critic, and the ticket text only to the requirements check']],
+  tests: [[ENGINE, 'gives the review instructions and the upfront question to every review call, the persona passes and the critic']],
 };
 const PERSONAS: BoardEquivalent = {
   actions: ['pick-pass', 'passes'],
@@ -173,13 +173,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     actions: ['rewrite', 'undo-rewrite'],
     tests: [[FINDINGS, 'a successful Rewrite uses the instruction and offers Undo, which restores the previous text until the next edit']],
   },
-  goal: {
-    actions: ['source', 'goal', 'recheck'],
-    tests: [
-      [RUNS, 'switching from the ticket to a reworded goal and re-checking makes one requirements call, replaces the coverage and leaves the findings'],
-      [ENGINE, 'runs exactly one model call on the stored diff and replaces only the coverage'],
-    ],
-  },
+
   'finding-not-found': {
     actions: ['explain'],
     tools: ['bitbucket_read_findings'],
@@ -360,33 +354,11 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
       [BOARD, 'preselects the ticket when Jira is configured and the PR title has a key'],
       [BOARD, 'preselects the ticket the request names over the one in the title'],
       [BOARD, 'preselects none when no key is named, and with Jira not configured the ticket is unavailable with its reason'],
-      [BOARD, 'with none picked, reads no ticket and shows no coverage'],
     ],
   },
-  'ticket-read': {
-    actions: ['start', 'recheck'],
-    tests: [
-      [RUNS, 'a ticket that cannot be read: the findings stand, the coverage position names the failed read, and Re-check runs only the check'],
-      ['ticketRead.test.ts', 'turns a read that never settles into a failure the review can continue from'],
-      ['requirementsSource.test.ts', 'caps many long comments within the total budget, keeps the newest, and says how many older ones were left out'],
-    ],
-  },
-  'requirements-call': {
-    actions: ['start', 'recheck'],
-    tests: [
-      [ENGINE, 'with a ticket reads it and checks the whole diff against it after the findings'],
-      ...INSTRUCTIONS.tests,
-      ['requirementsPass.test.ts', 'makes one second call with the files the model asked for, and no third'],
-      [RUNS, 'a check whose model reply is unreadable says it failed and offers Re-check'],
-    ],
-  },
-  'coverage-block': {
-    actions: ['start'],
-    tests: [
-      [BOARD, 'reads the ticket and shows the coverage when the ticket is the source'],
-      [PAGE, 'shows crafted finding and coverage text as plain text: no HTML or link becomes an element'],
-    ],
-  },
+
+
+
   'token-meter': {
     actions: ['start', 'explain', 'rewrite'],
     tests: [
@@ -411,7 +383,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     tests: [[BOARD, 'runs the regular pass with the upfront question and shows the findings by severity, with the passes run and the model']],
   },
   'diagnostic-timeline': {
-    actions: ['start', 'passes', 'recheck'],
+    actions: ['start', 'passes'],
     tests: [
       [ENGINE, 'opens with the configuration and the model in use, then logs one call line per model call naming its pass and batch'],
       [ENGINE, 'after a transient failure logs the failed call and the identical retry, and after one that is not transient says it does not retry'],
@@ -447,15 +419,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
       [PAGE, 'shows each finding\'s line, provenance, confidence and source, its description and its recommendation, as text'],
     ],
   },
-  'title-key-alternative': {
-    actions: ['ticket-key', 'recheck'],
-    tests: [
-      [RUNS, 'names the title\'s key on the failure line, offers it on the first step and the results, and Re-check reads it after the switch'],
-      [RUNS, 'offers nothing when the title names the same key, or no key'],
-      [PAGE, 'on the results, offers the key the pull request title names when the ticket in use was not found, and Use sends it as the ticket key'],
-      [PAGE, 'on the first step, offers the title\'s key the same way, and offers nothing without one'],
-    ],
-  },
+
 };
 
 /** Code with its comments removed. */

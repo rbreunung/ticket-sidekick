@@ -3,7 +3,7 @@ import type { ReviewFinding } from '../review/reviewSessionState';
 import { escapeMarkdown, formatShareMarkdown, formatShareTeams, markdownToPlain, type ShareInput } from '../review/shareFormat';
 
 // The review board's Copy for Teams (plain text) and Copy as Markdown, built from the stored review.
-// Finding, explanation and coverage text comes from a model: in plain text it loses its Markdown,
+// Finding and explanation text comes from a model: in plain text it loses its Markdown,
 // in Markdown it is escaped so it shows as the characters it is.
 
 function finding(id: number, extra: Partial<ReviewFinding> = {}): ReviewFinding {
@@ -25,16 +25,14 @@ function input(extra: Partial<ShareInput> = {}): ShareInput {
 }
 
 describe('Copy for Teams', () => {
-  it('copies the selected findings with their explanations and the coverage block, as plain text', () => {
+  it('copies the selected findings with their explanations, as plain text', () => {
     const { text, count } = formatShareTeams(input({
       targets: [3],
       explanations: { 3: '## Why\nThe value is **never** checked; see `parse()`.\n\n```ts\nparse(x)\n```', 1: 'Not copied' },
-      coverageText: 'Requirements coverage (PROJ-12)\n- Export as CSV: met',
     }));
     expect(count).toBe(1);
     expect(text).toContain('PR #482 — Add export');
     expect(text).toContain('1 of 3 findings');
-    expect(text).toContain('Requirements coverage (PROJ-12)');
     expect(text).toContain('#3 ');
     expect(text).toContain('   Explanation:\n   Why\n   The value is never checked; see parse().\n\n   parse(x)');
     expect(text).not.toContain('Not copied');
@@ -65,7 +63,6 @@ describe('Copy as Markdown', () => {
     const { text } = formatShareMarkdown(input({
       findings: [finding(1, { title: hostile, file: 'src/`f`.ts' })],
       explanations: { 1: '# Heading\n- item\n1. step' },
-      coverageText: '## Coverage\n| a | b |',
     }));
     expect(text).not.toMatch(/(^|[^\\])\[click\]\(/);
     expect(text).not.toMatch(/(^|[^\\])<img/);
@@ -78,14 +75,13 @@ describe('Copy as Markdown', () => {
     expect(text).toContain('1\\. step');
   });
 
-  it('has the same content as the plain text: header, coverage, the selected findings and their explanations', () => {
+  it('has the same content as the plain text: header, the selected findings and their explanations', () => {
     const { text, count } = formatShareMarkdown(input({
-      targets: [2], explanations: { 2: 'Line one.\nLine two.' }, coverageText: 'Requirements coverage (PROJ-12)',
+      targets: [2], explanations: { 2: 'Line one.\nLine two.' },
     }));
     expect(count).toBe(1);
     expect(text).toContain('**PR #482: Add export**');
     expect(text).toContain('1 of 3 findings');
-    expect(text).toContain('Requirements coverage (PROJ-12)');
     expect(text).toContain('**Critical (1)**');
     expect(text).toContain('**#2** src/f2.ts:L4: Unchecked input 2');
     expect(text).toContain('Line one.  \nLine two.');

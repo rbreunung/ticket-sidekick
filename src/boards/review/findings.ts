@@ -1,7 +1,6 @@
 import type { IBitbucketClient } from '../../bitbucket/IBitbucketClient';
 import { addTokenTotals, type StoredFinding, type TokenTotals } from '../../review/engine';
 import { explainFinding, rewriteComment, type CallResult } from '../../review/findingCalls';
-import { renderCoverageText } from '../../review/requirementsCoverage';
 import { formatShare, type ShareFormat, type SharedText } from '../../review/shareFormat';
 import { PrReviewService } from '../../services/PrReviewService';
 import type { Applied, ApplyProgress, Planned, Reduced, RunBegun, RunFinished } from '../../sessions/boardKind';
@@ -308,7 +307,6 @@ export function reviewCopyText(session: ReviewSession, format: ShareFormat, numb
     findings,
     ...(targets.length > 0 ? { targets } : {}),
     explanations,
-    ...(review.coverage ? { coverageText: renderCoverageText(review.coverage) } : {}),
     confidenceThreshold: working.startedWith?.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD,
   });
 }

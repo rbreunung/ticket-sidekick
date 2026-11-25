@@ -5,8 +5,8 @@ import type { BoardState } from '../sessions/sessionManager';
 import { installFakePage, removeFakePage, settle, type FakeElement, type FakePage } from './helpers/fakeDom';
 
 // The pull request review board's page in its editor tab, and the review start screen's page: the
-// first step (model, requirements source, goal and its rewording, question, Start), and after the
-// regular pass the one-column results (header line, coverage, findings). The extension side is a
+// first step (model, requirements source, goal, question, Start), and after the regular pass the
+// one-column results (header line, findings). The extension side is a
 // canned state. Everything from Bitbucket, Jira or the model must reach the page as text.
 
 const SESSION = '0123456789abcdef01234567';
@@ -51,8 +51,8 @@ function firstStep(extra: Partial<FirstStepView> = {}): FirstStepView {
       { id: 'goal', label: 'A goal', available: true },
       { id: 'none', label: 'None', available: true },
     ],
-    source: 'none', ticketKey: '', goal: '', points: '', pointsFromOtherGoal: false, question: '',
-    canReword: true, canStart: true, storedReview: false, ...extra,
+    source: 'none', ticketKey: '', goal: '', question: '',
+    canStart: true, storedReview: false, ...extra,
   };
 }
 
@@ -68,10 +68,9 @@ function view(extra: Partial<ReviewView> = {}): ReviewView {
 
 function results(extra: Partial<ReviewResultsView> = {}): ReviewResultsView {
   return {
-    model: 'GPT (copilot)', requirements: 'Jira ticket PROJ-12', passesRun: ['Regular'],
-    coverage: 'Requirements coverage (PROJ-12)\n- Export as CSV: met',
+    model: 'GPT (copilot)', passesRun: ['Regular'],
     tokens: [{ pass: 'Regular pass', text: '1,200 input and 300 output tokens in 3 call(s)' }],
-    statuses: [], hasReview: true, canRecheck: false, canRunAgain: true, picker: picker(),
+    statuses: [], hasReview: true, canRunAgain: true, picker: picker(),
     findings: [
       { number: 2, severity: 'critical', location: 'src/a.ts:4', title: 'SQL built from input', markers: [], selected: false },
       { number: 1, severity: 'suggestion', location: 'src/b.ts', title: 'Maybe a race', markers: ['location unverified'], selected: false },
@@ -140,7 +139,7 @@ describe('the review board page: first step', () => {
   it('asks for a model when none is set, and the pick is sent as an action', async () => {
     await loadBoard(boardState(view({
       model: { options: [{ id: 'gpt', label: 'GPT (copilot)' }], askReason: 'ticketSidekick.bitbucket.reviewModel is empty. Pick the model every review call uses; it is saved to the setting.' },
-      firstStep: firstStep({ canStart: false, startBlocker: 'Pick the model first.', canReword: false }),
+      firstStep: firstStep({ canStart: false, startBlocker: 'Pick the model first.' }),
     })));
     expect(must('model').textContent).toMatch(/reviewModel is empty/);
     expect(must('start').disabled).toBe(true);
@@ -165,34 +164,12 @@ describe('the review board page: first step', () => {
     expect(must('source-ticket-reason').textContent).toMatch(/Jira is not configured/);
   });
 
-  it('leaving the goal field sends only the goal; Reword sends a typed goal first, then one rewording run', async () => {
+  it('leaving the goal field sends only the goal, and the first step has no Reword or reworded points', async () => {
     await loadBoard(boardState(view({ firstStep: firstStep({ source: 'goal' }) })));
     await type(must('goal'), 'only backend endpoint, export button later');
     expect(posted('action')).toEqual([{ revision: 1, action: { type: 'goal', text: 'only backend endpoint, export button later' } }]);
     expect(posted('run')).toEqual([]);
-
-    await type(must('goal'), 'only the backend endpoint', false);
-    await click(must('reword'));
-    expect(posted('action').at(-1)).toEqual({ revision: 1, action: { type: 'goal', text: 'only the backend endpoint' } });
-    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'reword' } }]);
-  });
-
-  it('locks Start and Reword while the rewording runs, then shows the points to correct', async () => {
-    await loadBoard(boardState(view({ firstStep: firstStep({ source: 'goal', goal: 'only backend endpoint' }) })));
-    await push({ running: [{ size: 'call', what: 'reword', label: 'the goal rewording', done: 0, total: 1 }] });
-    expect(must('start').disabled).toBe(true);
-    expect(must('reword').disabled).toBe(true);
-    expect(must('reword').textContent).toBe('Rewording…');
-
-    await push({ running: undefined, view: view({ firstStep: firstStep({ source: 'goal', goal: 'only backend endpoint', points: 'In scope:\n- The backend export endpoint' }) }) });
-    expect(must('start').disabled).toBeFalsy();
-    expect(must('points').value).toBe('In scope:\n- The backend export endpoint');
-  });
-
-  it('shows a failed rewording as an error line', async () => {
-    await loadBoard(boardState(view({ firstStep: firstStep({ source: 'goal', goal: 'x', rewordError: 'The goal could not be reworded: The model reply could not be read. Start uses your words as they stand.' }) })));
-    expect(must('reword-error').textContent).toMatch(/could not be reworded/);
-    expect(must('reword-error').getAttribute('role')).toBe('alert');
+    for (const id of ['reword', 'points', 'reword-error']) expect(byId(id), id).toBeNull();
   });
 
   it('Start sends a typed question first, then starts the regular pass; nothing else is posted', async () => {
@@ -210,26 +187,25 @@ describe('the review board page: first step', () => {
 });
 
 describe('the review board page: results', () => {
-  it('shows one column: header line, coverage, then the findings with number, severity, location, title and markers', async () => {
+  it('shows one column: header line, then the findings with number, severity, location, title and markers, and no requirements block', async () => {
     await loadBoard(boardState(view({ stage: 'review', results: results() })));
     expect(must('pr-line').textContent).toBe('PROJ/app#482 Add export by Jane Smith');
-    expect(must('review-header').textContent).toBe('Model: GPT (copilot) · Requirements: Jira ticket PROJ-12 · Passes run: Regular');
-    expect(must('coverage').textContent).toBe('Requirements coverage (PROJ-12)\n- Export as CSV: met');
+    expect(must('review-header').textContent).toBe('Model: GPT (copilot) · Passes run: Regular');
     expect(must('finding-2').textContent.trim()).toBe('#2 Critical src/a.ts:4 SQL built from input Explain');
     expect(must('finding-1').textContent.trim()).toBe('#1 Suggestion src/b.ts Maybe a race (location unverified) Explain');
-    const order = page.root.elements().map(el => el.id).filter(id => ['review-header', 'coverage', 'findings'].includes(id));
-    expect(order).toEqual(['review-header', 'coverage', 'findings']);
+    const order = page.root.elements().map(el => el.id).filter(id => ['review-header', 'findings'].includes(id));
+    expect(order).toEqual(['review-header', 'findings']);
+    for (const id of ['coverage', 'recheck', 'requirements-source', 'requirements-failure', 'reword']) expect(byId(id), id).toBeNull();
   });
 
-  it('shows crafted finding and coverage text as plain text: no HTML or link becomes an element', async () => {
+  it('shows crafted finding text as plain text: no HTML or link becomes an element', async () => {
     const crafted = '<img src=x onerror=alert(1)>[click](https://evil.example) <b>bold</b>';
     await loadBoard(boardState(view({
       stage: 'review',
       pr: { label: 'PROJ/app#482', url: 'u', title: crafted, author: crafted },
-      results: results({ coverage: crafted, findings: [{ number: 1, severity: 'warning', location: crafted, title: crafted, markers: [] }] }),
+      results: results({ findings: [{ number: 1, severity: 'warning', location: crafted, title: crafted, markers: [] }] }),
     })));
     expect(must('finding-1').textContent).toContain(crafted);
-    expect(must('coverage').textContent).toBe(crafted);
     const all = page.document.body.elements();
     expect(all.some(el => el.tagName === 'img' || el.tagName === 'b' || el.tagName === 'a')).toBe(false);
   });
@@ -256,8 +232,8 @@ describe('the review board page: passes and runs', () => {
     const boxes = ['security', 'performance', 'reliability', 'maintainability', 'critic'].map(step => must(`pass-${step}`));
     expect(boxes.every(b => !b.disabled && !b.checked)).toBe(true);
     expect(must('run-selected').disabled).toBe(true);
-    const order = page.root.elements().map(el => el.id).filter(id => ['review-header', 'pass-picker', 'coverage', 'findings'].includes(id));
-    expect(order).toEqual(['review-header', 'pass-picker', 'coverage', 'findings']);
+    const order = page.root.elements().map(el => el.id).filter(id => ['review-header', 'pass-picker', 'findings'].includes(id));
+    expect(order).toEqual(['review-header', 'pass-picker', 'findings']);
 
     boxes[0].checked = true;
     boxes[0].dispatch('change');
@@ -281,12 +257,12 @@ describe('the review board page: passes and runs', () => {
 
   it('while a pass runs, every other control is locked, Stop is enabled, and the live region reads the pass progress', async () => {
     const p = picker({ canRun: true });
-    await loadBoard(boardState(view({ stage, results: results({ picker: { ...p, runBlocker: undefined }, requirementsLine: 'The requirements check failed.', canRecheck: true }) })));
+    await loadBoard(boardState(view({ stage, results: results({ picker: { ...p, runBlocker: undefined } }) })));
     await push({
       running: [{ size: 'pass', what: 'passes', label: 'the security pass', done: 2, total: 5 }],
-      view: view({ stage, progress: 'Security pass: 2 of 5 batches', results: results({ picker: { ...p, runBlocker: undefined }, requirementsLine: 'The requirements check failed.', canRecheck: true }) }),
+      view: view({ stage, progress: 'Security pass: 2 of 5 batches', results: results({ picker: { ...p, runBlocker: undefined } }) }),
     });
-    for (const id of ['run-selected', 'keep-as-is', 'run-again', 'new-review', 'recheck', 'pass-security', 'pass-critic', 'refresh', 'discard']) {
+    for (const id of ['run-selected', 'keep-as-is', 'run-again', 'new-review', 'pass-security', 'pass-critic', 'refresh', 'discard']) {
       expect(must(id).disabled, id).toBe(true);
     }
     expect(must('stop-run').disabled).toBeFalsy();
@@ -297,7 +273,7 @@ describe('the review board page: passes and runs', () => {
   });
 
   it('a finished review with no findings shows "No issues found" with the picker, the token usage and Run again', async () => {
-    await loadBoard(boardState(view({ stage, results: results({ findings: [], coverage: undefined }) })));
+    await loadBoard(boardState(view({ stage, results: results({ findings: [] }) })));
     expect(must('no-issues').textContent).toBe('No issues found.');
     expect(byId('pass-picker')).toBeTruthy();
     expect(must('tokens').textContent).toBe('Regular pass: 1,200 input and 300 output tokens in 3 call(s)');
@@ -309,7 +285,7 @@ describe('the review board page: passes and runs', () => {
     await loadBoard(boardState(view({
       stage,
       results: results({
-        hasReview: false, picker: undefined, coverage: undefined, findings: [], passesRun: [],
+        hasReview: false, picker: undefined, findings: [], passesRun: [],
         statuses: ['The regular pass failed: The model is overloaded No batch gave a readable reply, so there are no findings. Run again tries once more.'],
       }),
     })));
@@ -318,65 +294,6 @@ describe('the review board page: passes and runs', () => {
     expect(byId('run-again')).toBeTruthy();
   });
 
-  it('shows a failed requirements check in the coverage position with Re-check, locked only while the re-check runs', async () => {
-    const p = { ...picker({ canRun: true }), runBlocker: undefined };
-    const r = results({ picker: p, coverage: undefined, requirementsLine: 'The requirements check did not run: the ticket PROJ-12 could not be read (Issue does not exist). The findings stand.', canRecheck: true });
-    await loadBoard(boardState(view({ stage, results: r })));
-    const order = page.root.elements().map(el => el.id).filter(id => ['pass-picker', 'requirements-failure', 'findings'].includes(id));
-    expect(order).toEqual(['pass-picker', 'requirements-failure', 'findings']);
-    expect(must('requirements-line').textContent).toMatch(/ticket PROJ-12 could not be read/);
-    await click(must('recheck'));
-    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'recheck' } }]);
-
-    await push({ running: [{ size: 'call', what: 'recheck', label: 'the requirements re-check', done: 0, total: 1 }] });
-    expect(must('recheck').disabled).toBe(true);
-    expect(must('recheck').textContent).toBe('Re-checking…');
-    expect(must('run-selected').disabled).toBeFalsy();
-  });
-
-  it('after a review the requirements source can be changed and the goal edited and reworded; Re-check sends a typed goal first', async () => {
-    const form = (extra: Partial<NonNullable<ReviewResultsView['requirementsForm']>> = {}): NonNullable<ReviewResultsView['requirementsForm']> => ({
-      sources: [
-        { id: 'ticket', label: 'Jira ticket', available: true },
-        { id: 'goal', label: 'A goal', available: true },
-        { id: 'none', label: 'None', available: true },
-      ],
-      source: 'ticket', ticketKey: 'PROJ-12', goal: '', points: '', pointsFromOtherGoal: false, canReword: false, ...extra,
-    });
-    await loadBoard(boardState(view({ stage, results: results({ requirementsForm: form(), canRecheck: true }) })));
-    const order = page.root.elements().map(el => el.id).filter(id => ['pass-picker', 'requirements-source', 'recheck', 'coverage', 'findings'].includes(id));
-    expect(order).toEqual(['pass-picker', 'requirements-source', 'recheck', 'coverage', 'findings']);
-    expect(must('source-ticket').checked).toBe(true);
-    expect(must('ticket-key').value).toBe('PROJ-12');
-    must('source-goal').dispatch('change');
-    await settle();
-    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'source', source: 'goal' } }]);
-
-    await push({ view: view({ stage, results: results({ requirementsForm: form({ source: 'goal', canReword: false, rewordBlocker: 'Type the goal first.', recheckBlocker: 'Type the goal.' }), canRecheck: false }) }) });
-    expect(byId('ticket-key')).toBeFalsy();
-    expect(must('recheck').disabled).toBe(true);
-    expect(must('requirements-source').textContent).toMatch(/Type the goal\./);
-
-    await push({ view: view({ stage, results: results({ requirementsForm: form({ source: 'goal', goal: 'only backend', canReword: true }), canRecheck: true }) }) });
-    await type(must('goal'), 'only the backend endpoint', false);
-    await click(must('reword'));
-    expect(posted('action').at(-1)).toEqual({ revision: 1, action: { type: 'goal', text: 'only the backend endpoint' } });
-    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'reword' } }]);
-
-    await push({ running: [{ size: 'call', what: 'reword', label: 'the goal rewording', done: 0, total: 1 }] });
-    expect(must('recheck').disabled).toBe(true);
-    expect(must('reword').textContent).toBe('Rewording…');
-
-    await push({
-      running: undefined,
-      view: view({ stage, results: results({ requirementsForm: form({ source: 'goal', goal: 'only the backend endpoint', points: 'In scope:\n- The backend endpoint', canReword: true }), canRecheck: true }) }),
-    });
-    expect(must('points').value).toBe('In scope:\n- The backend endpoint');
-    await type(must('points'), 'In scope:\n- The backend endpoint only', false);
-    await click(must('recheck'));
-    expect(posted('action').at(-1)).toEqual({ revision: 1, action: { type: 'points', text: 'In scope:\n- The backend endpoint only' } });
-    expect(posted('run').at(-1)).toEqual({ revision: 1, request: { type: 'recheck' } });
-  });
 
   it('a board restored after a restart mid-pass shows the interrupted banner and no running state', async () => {
     await loadBoard(boardState(view({
@@ -639,13 +556,7 @@ describe('the review start screen page', () => {
   });
 });
 
-describe('the review board page: what was not reviewed, the finding detail and the title\'s ticket key', () => {
-  const SOURCES = [
-    { id: 'ticket' as const, label: 'Jira ticket', available: true },
-    { id: 'goal' as const, label: 'A goal', available: true },
-    { id: 'none' as const, label: 'None', available: true },
-  ];
-
+describe('the review board page: what was not reviewed and the finding detail', () => {
   it('lists what the passes did not review and the findings they dropped under the banners, as text', async () => {
     const crafted = '<b>src/evil.ts</b>';
     await loadBoard(boardState(view({
@@ -688,28 +599,5 @@ describe('the review board page: what was not reviewed, the finding detail and t
     expect(must('description-2').textContent).toBe(`The id reaches the query unchecked. ${crafted}`);
     expect(must('recommendation-2').textContent).toBe('Recommendation: Use a bound parameter.');
     expect(page.document.body.elements().some(el => el.tagName === 'img' || el.tagName === 'a')).toBe(false);
-  });
-
-  it('on the results, offers the key the pull request title names when the ticket in use was not found, and Use sends it as the ticket key', async () => {
-    await loadBoard(boardState(view({
-      stage: 'review',
-      results: results({
-        requirementsLine: 'The requirements check did not run: the ticket PROJ-99 could not be read (Issue does not exist). The findings stand. The pull request title names PROJ-12 instead.',
-        requirementsForm: { sources: SOURCES, source: 'ticket', ticketKey: 'PROJ-99', goal: '', points: '', pointsFromOtherGoal: false, canReword: false, titleKey: 'PROJ-12' },
-        canRecheck: true,
-      }),
-    })));
-    expect(must('title-key').textContent).toBe('PROJ-99 was not found. The pull request title names PROJ-12. Use PROJ-12');
-    await click(must('use-title-key'));
-    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'ticket-key', key: 'PROJ-12' } }]);
-  });
-
-  it('on the first step, offers the title\'s key the same way, and offers nothing without one', async () => {
-    await loadBoard(boardState(view({ firstStep: firstStep({ sources: SOURCES, source: 'ticket', ticketKey: 'PROJ-99', titleKey: 'PROJ-12' }) })));
-    await click(must('use-title-key'));
-    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'ticket-key', key: 'PROJ-12' } }]);
-
-    await push({ view: view({ firstStep: firstStep({ sources: SOURCES, source: 'ticket', ticketKey: 'PROJ-12' }) }) });
-    expect(byId('title-key')).toBeNull();
   });
 });

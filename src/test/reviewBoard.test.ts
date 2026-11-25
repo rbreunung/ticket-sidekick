@@ -1,8 +1,6 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ModelRequestCancelledError, type BoardModelHandle } from '../boards/boardModels';
 import type { ReviewBoardDeps } from '../boards/review/deps';
@@ -41,12 +39,11 @@ function findingLine(file: number, line: number, title: string, severity: string
   });
 }
 
-type CallKind = 'reword' | 'review' | 'requirements';
+type CallKind = 'review' | 'other';
 
+/** Every review call carries the pull request's diff; any other call is not part of the review. */
 function kindOf(prompt: string): CallKind {
-  if (prompt.startsWith('A developer typed the goal')) return 'reword';
-  if (prompt.startsWith('You are checking whether a pull request')) return 'requirements';
-  return 'review';
+  return prompt.includes('### File: src/f') ? 'review' : 'other';
 }
 
 let dir: string;
@@ -64,13 +61,7 @@ let recorded: string[];
 let completed: number;
 let clock: number;
 
-function requirementsReply(): string {
-  return readFileSync(resolve(process.cwd(), 'src/test/fixtures/requirements-reply-clean-spec.json'), 'utf-8');
-}
-
-const defaultRespond = async (kind: CallKind): Promise<string> => {
-  if (kind === 'reword') return JSON.stringify({ inScope: ['The backend export endpoint'], outOfScope: ['The export button'], openPoints: [] });
-  if (kind === 'requirements') return requirementsReply();
+const defaultRespond = async (_kind: CallKind): Promise<string> => {
   return [findingLine(1, 2, 'Unchecked input', 'suggestion'), findingLine(1, 4, 'SQL built from input', 'critical'), JSON.stringify({ additionalFilesNeeded: [] })].join('\n');
 };
 
@@ -241,7 +232,7 @@ describe('the model on the first step', () => {
     setting = 'gone-model';
     const view = viewOf(await open(manager()));
     expect(view.model.askReason).toMatch(/"gone-model" .* is not available/);
-    expect(view.firstStep?.canReword).toBe(false);
+    expect(view.firstStep?.canStart).toBe(false);
   });
 });
 
@@ -301,113 +292,20 @@ describe('the requirements source', () => {
     expect(step.sources[0]).toMatchObject({ id: 'ticket', available: false, reason: expect.stringMatching(/Jira is not configured/) });
   });
 
-  it('reads the ticket and shows the coverage when the ticket is the source', async () => {
-    client.prOverride.title = 'PROJ-12 Add export';
-    const m = manager();
-    const state = await runAndWait(m, await open(m), { type: 'start' });
-    expect(ticketReads).toEqual(['PROJ-12']);
-    expect(viewOf(state).results?.coverage).toMatch(/Requirements coverage \(PROJ-12\)/);
-    expect(viewOf(state).results?.requirements).toBe('Jira ticket PROJ-12');
-  });
-
-  it('with none picked, reads no ticket and shows no coverage', async () => {
+  it('a Start with the ticket as the source reads no ticket, makes no requirements call and shows no coverage', async () => {
     client.prOverride.title = 'PROJ-12 Add export';
     const m = manager();
     let state = await open(m);
-    state = await act(m, state, { type: 'source', source: 'none' });
+    expect(viewOf(state).firstStep).toMatchObject({ source: 'ticket', ticketKey: 'PROJ-12' });
     state = await runAndWait(m, state, { type: 'start' });
+
     expect(ticketReads).toEqual([]);
-    expect(calls.map(c => c.kind)).not.toContain('requirements');
-    expect(viewOf(state).results?.coverage).toBeUndefined();
-  });
-});
-
-describe('the goal and its rewording', () => {
-  async function onGoal(m: SessionManager, goal: string): Promise<BoardState> {
-    let state = await open(m);
-    state = await act(m, state, { type: 'source', source: 'goal' });
-    return act(m, state, { type: 'goal', text: goal });
-  }
-
-  it('typing the goal makes no model call; Reword makes one, shows the points, and Start waits until it ends', async () => {
-    const m = manager();
-    const state = await onGoal(m, 'only backend endpoint, export button later');
-    expect(calls).toEqual([]);
-
-    let release!: () => void;
-    respond = async (kind, prompt) => {
-      if (kind === 'reword') await new Promise<void>(r => { release = r; });
-      return defaultRespond(kind);
-    };
-    const started = await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'reword' });
-    expect(started.running).toEqual([expect.objectContaining({ size: 'call', what: 'reword' })]);
-    await expect(m.startRun(REVIEW_KIND, state.id, started.revision, { type: 'start' })).rejects.toThrow(/the goal rewording is running/);
-    await new Promise(r => setTimeout(r, 10));
-    release();
-    const after = await idle(m, state.id);
-
-    expect(calls.map(c => c.kind)).toEqual(['reword']);
-    expect(calls[0].prompt).toContain('only backend endpoint, export button later');
-    expect(viewOf(after).firstStep?.points).toBe('In scope:\n- The backend export endpoint\n\nOut of scope:\n- The export button');
-    expect(recorded).toEqual([MODEL.id]);
-  });
-
-  it('Start without a rewording checks the diff against the typed words', async () => {
-    const m = manager();
-    const state = await runAndWait(m, await onGoal(m, 'only backend endpoint, export button later'), { type: 'start' });
-    const check = calls.find(c => c.kind === 'requirements');
-    expect(check?.prompt).toContain('only backend endpoint, export button later');
-    expect(viewOf(state).results?.requirements).toBe('the stated goal');
-  });
-
-  it('Start checks against the points as the developer corrected them', async () => {
-    const m = manager();
-    let state = await runAndWait(m, await onGoal(m, 'only backend endpoint, export button later'), { type: 'reword' });
-    state = await act(m, state, { type: 'points', text: 'In scope:\n- The CSV export endpoint only' });
-    await runAndWait(m, state, { type: 'start' });
-    expect(calls.find(c => c.kind === 'requirements')?.prompt).toContain('The CSV export endpoint only');
-  });
-
-  it('a failed rewording keeps the typed words, shows an error line, and Start uses the typed words', async () => {
-    respond = async (kind) => (kind === 'reword' ? 'I cannot do that.' : defaultRespond(kind));
-    const m = manager();
-    let state = await runAndWait(m, await onGoal(m, 'only backend endpoint'), { type: 'reword' });
-    const step = viewOf(state).firstStep!;
-    expect(step.goal).toBe('only backend endpoint');
-    expect(step.points).toBe('');
-    expect(step.rewordError).toMatch(/could not be reworded.*Start uses your words as they stand/);
-    expect(step.canStart).toBe(true);
-
-    state = await runAndWait(m, state, { type: 'start' });
-    expect(calls.find(c => c.kind === 'requirements')?.prompt).toContain('only backend endpoint');
-  });
-
-  it('changing the typed goal after the points were corrected asks before Reword replaces the corrections', async () => {
-    const m = manager();
-    let state = await runAndWait(m, await onGoal(m, 'only backend endpoint'), { type: 'reword' });
-    state = await act(m, state, { type: 'points', text: 'In scope:\n- My corrected point' });
-    state = await act(m, state, { type: 'goal', text: 'backend endpoint and the button' });
-    expect(viewOf(state).firstStep?.pointsFromOtherGoal).toBe(true);
-
-    confirmAnswer = false;
-    state = await runAndWait(m, state, { type: 'reword' });
-    expect(confirms).toEqual(['Replace your corrected points?']);
-    expect(calls.map(c => c.kind)).toEqual(['reword']);
-    expect(viewOf(state).firstStep).toMatchObject({ points: 'In scope:\n- My corrected point', notice: expect.stringMatching(/corrected points were kept/) });
-
-    confirmAnswer = true;
-    state = await runAndWait(m, state, { type: 'reword' });
-    expect(calls.map(c => c.kind)).toEqual(['reword', 'reword']);
-    expect(viewOf(state).firstStep?.points).toMatch(/The backend export endpoint/);
-  });
-
-  it('Reword is not offered before a model is chosen', async () => {
-    setting = '';
-    const m = manager();
-    const state = await onGoal(m, 'only backend endpoint');
-    expect(viewOf(state).firstStep).toMatchObject({ canReword: false, rewordBlocker: 'Pick the model first.' });
-    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'reword' })).rejects.toThrow('Pick the model first.');
-    expect(calls).toEqual([]);
+    expect(calls.map(c => c.kind)).toEqual(['review']);
+    const results = viewOf(state).results!;
+    expect(results).not.toHaveProperty('coverage');
+    expect(results).not.toHaveProperty('requirementsForm');
+    expect(results).not.toHaveProperty('requirements');
+    expect(results.findings).toHaveLength(2);
   });
 });
 
@@ -424,7 +322,7 @@ describe('Start and the regular pass', () => {
       [2, 'critical', 'src/f1.ts:4', 'SQL built from input'],
       [1, 'suggestion', 'src/f1.ts:2', 'Unchecked input'],
     ]);
-    expect(results).toMatchObject({ model: 'GPT Review (copilot)', passesRun: ['Regular'], requirements: 'none' });
+    expect(results).toMatchObject({ model: 'GPT Review (copilot)', passesRun: ['Regular'] });
     expect(calls.filter(c => c.kind === 'review').every(c => c.prompt.includes('does this handle retries?'))).toBe(true);
     expect(recorded.length).toBe(calls.length);
     expect(completed).toBe(1);
@@ -503,6 +401,31 @@ describe('a stored review', () => {
     const results = viewOf(state).results!;
     expect(results.outOfDate).toEqual({ reviewed: HEAD.slice(0, 12), head: 'fff000fff000' });
     expect(results.findings).toHaveLength(2);
+    expect(calls).toEqual([]);
+    expect(client.getPullRequestDiffCalls).toEqual([]);
+  });
+
+  it('a review stored by the earlier format, with its requirements coverage, reopens on the first step with the rebuilt notice and runs nothing', async () => {
+    const first = manager();
+    const done = await runAndWait(first, await open(first), { type: 'start' });
+    const file = path.join(dir, `${done.id}.json`);
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    stored.formatVersion = 1;
+    stored.working.review.requirements = { kind: 'ticket', key: 'PROJ-12' };
+    stored.working.review.coverage = { ticketKey: 'PROJ-12', reading: 'old', requirements: [], outOfScope: [], noClearRequirements: true, unseenFileCount: 0 };
+    fs.writeFileSync(file, JSON.stringify(stored));
+    calls = [];
+    client.getPullRequestDiffCalls = [];
+
+    const state = await open(manager());
+
+    expect(state.id).toBe(done.id);
+    expect(state.notice).toMatch(/rebuilt after an update/);
+    expect(state.running ?? []).toEqual([]);
+    const view = viewOf(state);
+    expect(view.stage).toBe('first-step');
+    expect(view.pr.label).toBe('PROJ/app#482');
+    expect(view.firstStep?.storedReview).toBe(false);
     expect(calls).toEqual([]);
     expect(client.getPullRequestDiffCalls).toEqual([]);
   });

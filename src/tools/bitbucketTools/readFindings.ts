@@ -2,8 +2,6 @@ import { z } from 'zod';
 import { STEP_LABELS, reviewNotes } from '../../boards/review/runs';
 import { parseReviewUrl, reviewSessionId } from '../../boards/review/recipe';
 import type { StoredFinding } from '../../review/engine';
-import type { RequirementsCoverage } from '../../review/requirementsCoverage';
-import { renderCoverageText } from '../../review/requirementsCoverage';
 import { DEFAULT_CONFIDENCE_THRESHOLD } from '../../boards/review/deps';
 import { normalizeShareText, SHARE_SEVERITY_ORDER } from '../../review/reviewSessionState';
 import { markdownToPlain } from '../../review/shareFormat';
@@ -13,12 +11,12 @@ import { OPEN_REVIEW_TOOL, READ_FINDINGS_TOOL } from './toolNames';
 
 // Reads the stored review of a pull request for the agent: the summary (with what the passes did not
 // review and the findings they dropped), the findings list, or one finding with its code and explanation. It reads the session as it is stored, so no check starts
-// and nothing is asked of Bitbucket or a model. Finding, explanation and coverage text is model
+// and nothing is asked of Bitbucket or a model. Finding and explanation text is model
 // output and goes out as plain text: Markdown is taken out of it, and code is indented.
 
 const readFindingsShape = {
   url: z.string().describe('The pull request\'s link, as given to the review, e.g. https://bitbucket.org/workspace/repo/pull-requests/42.'),
-  list: z.boolean().optional().describe('true: every finding, one line each, plus the requirements coverage. Leave out for the summary.'),
+  list: z.boolean().optional().describe('true: every finding, one line each. Leave out for the summary.'),
   finding: z.number().int().positive().optional().describe('One finding by its number, e.g. 3: its location, text, code from the diff and explanation.'),
 };
 
@@ -58,15 +56,6 @@ function markersOf(f: StoredFinding, threshold: number): string[] {
   return markers;
 }
 
-function coverageSummary(coverage: RequirementsCoverage): string {
-  const key = oneLine(coverage.ticketKey);
-  if (coverage.noClearRequirements) return `Requirements coverage (${key}): no clear requirements found, so the check was skipped.`;
-  const count = (status: string) => coverage.requirements.filter(r => r.status === status).length;
-  const outOfScope = coverage.outOfScope.length;
-  return `Requirements coverage (${key}): ${count('met')} met, ${count('not-evident')} not evident, ${count('unclear')} unclear`
-    + `; ${outOfScope} change${outOfScope === 1 ? '' : 's'} not accounted for by the ticket.`;
-}
-
 function sorted(findings: StoredFinding[]): StoredFinding[] {
   return findings.slice().sort((a, b) => SHARE_SEVERITY_ORDER.indexOf(a.severity) - SHARE_SEVERITY_ORDER.indexOf(b.severity) || a.id - b.id);
 }
@@ -79,7 +68,7 @@ function header(session: StoredReview): string[] {
 function runningLine(session: StoredReview): string | undefined {
   const active = session.working.active;
   if (!active) return undefined;
-  const step = active.step === 'requirements' ? 'the requirements check' : active.step === 'critic' ? 'the critic' : `the ${STEP_LABELS[active.step].toLowerCase()} pass`;
+  const step = active.step === 'critic' ? 'the critic' : `the ${STEP_LABELS[active.step].toLowerCase()} pass`;
   return `A pass is running on the board now (${step}); this is the review as it stood before it. Read again when it finishes.`;
 }
 
@@ -104,7 +93,6 @@ function summary(session: StoredReview): string {
   const labelled = findings.filter(f => f.probablyFalseAlarm).length;
   lines.push(`Findings: ${findings.length} (${counts})${labelled > 0 ? `; ${labelled} labelled probably a false alarm` : ''}`);
   lines.push(`Verdict: ${reviewVerdict(findings)}`);
-  lines.push(review.coverage ? coverageSummary(review.coverage) : 'Requirements coverage: not checked');
   // File paths come from the pull request: only control characters are taken out.
   const notes = reviewNotes(session.working.passes).map(note => `- ${note.replace(/[\u0000-\u001F\u007F]/g, ' ')}`);
   if (notes.length > 0) lines.push('Not reviewed or dropped:', ...notes);
@@ -141,7 +129,6 @@ function findingsList(session: StoredReview): string {
     const notes = [...markersOf(f, threshold), ...(session.working.explanations[String(f.id)] ? ['explained'] : []), ...draftMarkers(session, f.id)];
     lines.push(`#${f.id} ${f.severity} ${locationOf(f)}: ${oneLine(f.title)}${notes.length > 0 ? ` (${notes.join(', ')})` : ''}`);
   }
-  if (review.coverage) lines.push('', renderCoverageText(review.coverage));
   return lines.join('\n');
 }
 
@@ -180,7 +167,7 @@ export const readFindingsTool = defineTool<BitbucketToolDeps, typeof readFinding
   title: 'Read a pull request review',
   description:
     'Reads the stored review of a Bitbucket pull request from its review board. Without list or finding: the summary, with the findings by '
-    + 'severity, the passes run, the verdict (the highest severity found) and the requirements coverage. With list true: every finding by number, '
+    + 'severity, the passes run and the verdict (the highest severity found). With list true: every finding by number, '
     + 'severity, location and title, marked when its comment is drafted, posted or failed to post. With finding: that finding with its code from the '
     + 'diff, its explanation and its draft comment, posted or not. Use it after a review ran on the '
     + 'board, to tell the user the result, to explain a finding, to work out which finding a question means from the list, or to fix a finding '

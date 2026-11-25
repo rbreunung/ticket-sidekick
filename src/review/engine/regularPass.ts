@@ -1,32 +1,27 @@
 import { aggregateRecommendedPersonas, buildAdaptiveChunks } from '../reviewSessionState';
 import { logAborted, logFindingsFunnel, runPass, writeRunRecord } from './diagnostics';
-import type { RequirementsCoverage } from '../requirementsCoverage';
 import { reviewBatch } from './batchReview';
 import { addFindings, emptyStore, markStepRun, type NewFinding } from './findingStore';
 import { emptyOutcome, extraInstructionsOf, isStop, serviceFor, throwIfStopped, type PassContext } from './plumbing';
-import { checkRequirements } from './requirementsCheck';
-import { readReviewDiff, snapshotFiles } from './snapshot';
+import { readReviewDiff } from './snapshot';
 import type {
   EngineDeps,
   EngineSettings,
   PassOutcome,
   PassSuggestion,
-  RequirementsChoice,
-  RequirementsOutcome,
   ReviewBatch,
   ReviewTarget,
   StagedReview,
 } from './types';
 
 // The regular pass every review starts with: pass 1 on every batch (asking which persona passes are
-// worth running), the call with the whole files a batch asked for, then the requirements check when
-// a source is chosen. It builds the snapshot later passes work on. vscode-free.
+// worth running) and the call with the whole files a batch asked for. It builds the snapshot later
+// passes work on. vscode-free.
 
 export interface RegularPassResult {
   /** Undefined when nothing could be reviewed: no file to review, or no batch got a readable reply. */
   review?: StagedReview;
   outcome: PassOutcome;
-  requirements: RequirementsOutcome;
 }
 
 /** The suggestion from the finished batches' recommendations: undefined for a batch with no readable one. */
@@ -37,14 +32,14 @@ export function suggestionOf(perBatch: Array<string[] | undefined>): PassSuggest
 }
 
 export async function runRegularPass(
-  input: { target: ReviewTarget; requirements: RequirementsChoice; settings: EngineSettings },
+  input: { target: ReviewTarget; settings: EngineSettings },
   deps: EngineDeps,
 ): Promise<RegularPassResult> {
   return runPass(deps, input.settings, input.target, 'regular', (ctx, tokenBudget) => regularPass(input, deps, ctx, tokenBudget));
 }
 
 async function regularPass(
-  input: { target: ReviewTarget; requirements: RequirementsChoice; settings: EngineSettings },
+  input: { target: ReviewTarget; settings: EngineSettings },
   deps: EngineDeps,
   ctx: PassContext,
   tokenBudget: number,
@@ -52,7 +47,6 @@ async function regularPass(
   const { target, settings } = input;
   const service = serviceFor(deps);
   const extra = extraInstructionsOf(settings);
-  const notRun: RequirementsOutcome = { status: 'not-run' };
 
   let diff;
   ctx.stage = 'fetching PR';
@@ -63,13 +57,13 @@ async function regularPass(
   } catch (err) {
     logAborted(ctx, err);
     writeRunRecord(ctx, '(no findings: the pull request could not be read)');
-    return { outcome: { ...emptyOutcome('regular', 0), status: 'failed', error: err instanceof Error ? err.message : String(err) }, requirements: notRun };
+    return { outcome: { ...emptyOutcome('regular', 0), status: 'failed', error: err instanceof Error ? err.message : String(err) } };
   }
   const { pr, files } = diff;
   if (files.length === 0) {
     ctx.log('info', `Nothing to review after the filters — ${ctx.runTag}`, { notes: diff.notes });
     writeRunRecord(ctx, '(no findings: nothing to review)');
-    return { outcome: { ...emptyOutcome('regular', 0), status: 'nothing-to-review', notes: diff.notes }, requirements: notRun };
+    return { outcome: { ...emptyOutcome('regular', 0), status: 'nothing-to-review', notes: diff.notes } };
   }
 
   const chunks = buildAdaptiveChunks(files, tokenBudget);
@@ -83,7 +77,6 @@ async function regularPass(
     snapshot: { target, pr, reviewedCommit: pr.fromCommitHash, batches: batches.map((b) => ({ ...b })) },
     store: addFindings(emptyStore(), findings).store,
     suggestion: suggestionOf(recommendations),
-    requirements: input.requirements,
   });
   let reviewedFiles = 0;
   let failedFiles = 0;
@@ -138,28 +131,15 @@ async function regularPass(
     writeRunRecord(ctx, stopped ? '(no findings: stopped before a batch finished)' : '(no findings: no file could be reviewed)');
     return {
       outcome: { ...outcome, status: stopped ? 'stopped' : 'failed', tokens: ctx.meter.totals(), ...(firstFailure ? { error: firstFailure } : {}) },
-      requirements: notRun,
     };
   }
 
   const added = addFindings(emptyStore(), findings);
   const snapshot = { target, pr, reviewedCommit: pr.fromCommitHash, batches };
-  let requirements: RequirementsOutcome = notRun;
-  let coverage: RequirementsCoverage | undefined;
-  if (!stopped) {
-    ctx.stage = 'requirements check';
-    const checked = await checkRequirements({
-      ctx, deps, service, pr, target, files: snapshotFiles(snapshot), choice: input.requirements, tokenBudget, cache,
-    });
-    requirements = checked.outcome;
-    coverage = checked.coverage;
-  }
   const review: StagedReview = {
     snapshot,
     store: stopped ? added.store : markStepRun(added.store, 'regular'),
     suggestion: suggestionOf(recommendations),
-    requirements: input.requirements,
-    ...(coverage ? { coverage } : {}),
   };
   ctx.log('info', `Regular pass ${stopped ? 'stopped' : 'finished'} — ${review.store.findings.length} finding(s)`, {
     batchesDone: outcome.batchesDone, batchesTotal: chunks.length, failedBatches: outcome.failedBatches,
@@ -174,6 +154,5 @@ async function regularPass(
   return {
     review,
     outcome: { ...outcome, status: stopped ? 'stopped' : 'finished', added: added.added, tokens: ctx.meter.totals() },
-    requirements,
   };
 }
