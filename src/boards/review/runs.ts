@@ -1,10 +1,11 @@
 import {
   addFindings, addTokenTotals, markStepRun, runCritic, runPersonaPass, runRegularPass, uncheckedFindings,
-  type EngineDeps, type EngineProgress, type FoldResult, type PassOutcome, type PersonaBatch, type ReviewStep, type StagedReview,
+  type EngineDeps, type EngineProgress, type FoldResult, type PassOutcome, type PersonaBatch, type ReviewStep, type StagedReview, type TokenTotals,
 } from '../../review/engine';
 import { PERSONAS, type PersonaId } from '../../services/PrReviewService';
 import type { RunFinished, RunProgress } from '../../sessions/boardKind';
 import { REVIEW_MODEL_SETTING, type BoardModelHandle } from '../boardModels';
+import type { TokenFigures } from '../../utils/tokenUsage';
 import { DEFAULT_CONFIDENCE_THRESHOLD, type ReviewBoardDeps } from './deps';
 import type { Background } from './firstStep';
 import type { ActivePass, PassRecord, ReviewSession, ReviewWorking, StartedWith, StepProgress } from './kind';
@@ -94,11 +95,12 @@ export async function modelFor(session: ReviewSession, deps: ReviewBoardDeps): P
 /** The engine's dependencies for one run, with progress turned into the board's progress reports. */
 async function engineDeps(
   deps: ReviewBoardDeps, model: BoardModelHandle, client: EngineDeps['client'], signal: AbortSignal, onProgress?: (p: EngineProgress) => void,
+  tally?: TokenTally,
 ): Promise<EngineDeps> {
   const onDiag = deps.reviewDiag ?? deps.onDiag;
   return {
     model,
-    recordTokens: (id, figures) => deps.recordTokens(id, figures),
+    recordTokens: (id, figures) => { tally?.add(figures); return deps.recordTokens(id, figures); },
     client,
     signal,
     ...(onProgress ? { onProgress } : {}),
@@ -130,15 +132,30 @@ function withPartialChanges(review: StagedReview, changes: NonNullable<ActivePas
   };
 }
 
+/** The tokens of one run's calls as they are counted, for the band's "tokens so far". */
+interface TokenTally {
+  add(figures: TokenFigures): void;
+  readonly totals: TokenTotals | undefined;
+}
+
+function tokenTally(): TokenTally {
+  let totals: TokenTotals | undefined;
+  return {
+    add: figures => { totals = addTokenTotals(totals, { ...figures, calls: 1 }); },
+    get totals() { return totals; },
+  };
+}
+
 /** Reports the regular pass's progress in order: each report waits for the one before it, and saves the review as it stands. */
-function progressReporter(progress: RunProgress<ReviewWorking>) {
+function progressReporter(progress: RunProgress<ReviewWorking>, tally: TokenTally) {
   let reported = Promise.resolve();
   return {
     report(p: EngineProgress) {
+      const tokensSoFar = tally.totals;
       reported = reported.then(() => progress({
         update: w => {
           if (!w.active) return w;
-          const active: ActivePass = { ...w.active, step: p.step, done: p.batchesDone, total: p.batchesTotal };
+          const active: ActivePass = { ...w.active, step: p.step, done: p.batchesDone, total: p.batchesTotal, ...(tokensSoFar ? { tokensSoFar } : {}) };
           if (p.review) active.partial = p.review;
           return { ...w, active };
         },
@@ -188,11 +205,12 @@ export async function regularRun(
   };
   // From here a restart finds the pass cut off, and the review it replaces is gone.
   await progress({ update: w => ({ ...w, active }), done: 0, total: 0 });
-  const reporter = progressReporter(progress);
+  const tally = tokenTally();
+  const reporter = progressReporter(progress, tally);
   const result = await runRegularPass({
     target: { project: recipe.project, repo: recipe.repo, prId: recipe.prId },
     settings: { ...settings, ...(begun.background ? { background: begun.background } : {}) },
-  }, await engineDeps(deps, model.handle, bitbucket.client, signal, reporter.report));
+  }, await engineDeps(deps, model.handle, bitbucket.client, signal, reporter.report, tally));
   await reporter.settled();
   if (result.outcome.status === 'finished') await deps.onReviewCompleted?.();
   const record: PassRecord = { ...result.outcome, modelId: model.handle.id, run: 1 };
@@ -297,7 +315,8 @@ export async function extraPassesRun(
   else signal.addEventListener('abort', abort, { once: true });
   const runSignal = controller.signal;
   // One cache for the run, so the steps after the first do not read the same context files again.
-  const engine: EngineDeps = { ...await engineDeps(deps, model.handle, bitbucket.client, runSignal), runCache: new Map() };
+  const tally = tokenTally();
+  const engine: EngineDeps = { ...await engineDeps(deps, model.handle, bitbucket.client, runSignal, undefined, tally), runCache: new Map() };
   const sleep = deps.sleep ?? realSleep;
   const worked = workedOn(working);
 
@@ -318,10 +337,13 @@ export async function extraPassesRun(
     const head = list.find(e => e.state === 'running' || e.state === 'waiting') ?? list.find(e => e.state === 'queued') ?? list[list.length - 1];
     const done = list.reduce((n, e) => n + e.done, 0);
     const total = list.reduce((n, e) => n + e.total, 0);
+    const tokensSoFar = tally.totals;
     saved = saved.then(() => progress({
       update: w => {
         if (!w.active) return w;
-        const active: ActivePass = { ...w.active, step: head.step, done: head.done, total: head.total, stepsProgress: list, ...(slow ? { oneAtATime: true } : {}) };
+        const active: ActivePass = {
+          ...w.active, step: head.step, done: head.done, total: head.total, stepsProgress: list, ...(slow ? { oneAtATime: true } : {}), ...(tokensSoFar ? { tokensSoFar } : {}),
+        };
         delete active.partial;
         const next: ReviewWorking = { ...w, active };
         if (ended.length > 0) {
@@ -505,6 +527,7 @@ function withoutResultsState(working: ReviewWorking): void {
   delete working.selected;
   delete working.failures;
   delete working.callTokens;
+  delete working.bandFolded;
 }
 
 /** The working state of a board whose pass a restart cut off: the steps saved so far stay. */

@@ -110,4 +110,50 @@ describe('a board page during a model run', () => {
     await settle();
     expect(page.root.textContent).toContain('Not now: the regular pass is running.');
   });
+
+  it('a board whose view shows its own run line gets no run line, progress or Stop in the header', async () => {
+    state = { ...base(), view: { ownRunLine: true }, running: [{ size: 'pass', what: 'pass', label: 'the regular pass', done: 1, total: 3 }] };
+    await loadPage(async () => { throw { status: 404, message: 'Unknown request.' }; });
+    expect(page.root.textContent).not.toContain('Running the regular pass');
+    expect(byId('run-progress')).toBeNull();
+    expect(byId('stop-run')).toBeNull();
+    expect(disabled('pass')).toBe(true);
+  });
+});
+
+describe('a board page drawn again', () => {
+  it('keeps the scroll position of a box and the caret in the field being typed in', async () => {
+    state = base();
+    closed = false;
+    waiting = [];
+    page = installFakePage({ kind: 'runs', session: SESSION, title: 'Review' }, async (op, body) => {
+      if (closed) return new Promise(() => undefined);
+      if (op === 'state' && typeof body.tick === 'number' && body.tick === state.tick) {
+        await new Promise<void>(resolve => waiting.push(resolve));
+        if (closed) return new Promise(() => undefined);
+      }
+      return state;
+    });
+    vi.resetModules();
+    const { startBoard, h } = await import('../../board-pages/shared/board.js' as string);
+    startBoard({
+      root: page.root,
+      render: (view: { items: number }) => h('div', {},
+        h('ul', { id: 'list' }, Array.from({ length: view.items ?? 1 }, (_, i) => h('li', {}, `Item ${i + 1}`))),
+        h('input', { type: 'text', id: 'question', value: 'Is it reachable?' })),
+    });
+    await settle();
+    byId('list')!.scrollTop = 240;
+    const field = byId('question')!;
+    field.focus();
+    field.selectionStart = 3;
+    field.selectionEnd = 5;
+
+    await push({ view: { items: 3 } });
+    expect(byId('list')!.textContent).toBe('Item 1Item 2Item 3');
+    expect(byId('list')!.scrollTop).toBe(240);
+    expect(byId('question')).not.toBe(field);
+    expect(page.document.activeElement?.id).toBe('question');
+    expect([byId('question')!.selectionStart, byId('question')!.selectionEnd]).toEqual([3, 5]);
+  });
 });

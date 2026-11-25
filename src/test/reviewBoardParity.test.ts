@@ -423,7 +423,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
       [RUNS, 'lists the batch that failed with its file, the finding outside the pull request and the findings the critic removed'],
       [RUNS, 'names the files left out by the exclude patterns'],
       [ENGINE, 'names files that failed after retrying only for a transient error'],
-      [PAGE, 'lists what the passes did not review and the findings they dropped under the banners, as text'],
+      [PAGE, 'lists what the passes did not review and the findings they dropped in the band, as text'],
       [TOOLS, 'names in the summary what the review did not review and the findings it dropped'],
     ],
   },
@@ -431,7 +431,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     actions: ['start'],
     tests: [
       [RUNS, 'shows its description, recommendation, line with the related lines, provenance, confidence and source'],
-      [PAGE, 'shows each finding\'s line, provenance, confidence and source, its description and its recommendation, as text'],
+      [PAGE, 'shows the finding\'s line, provenance, confidence and source, its description and recommendation, as text'],
     ],
   },
 

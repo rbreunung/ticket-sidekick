@@ -316,7 +316,7 @@ describe('Run selected', () => {
     expect(results.passesRun).toEqual(['Regular', 'Security', 'Critic']);
     expect(results.findings.map(f => [f.title, f.markers])).toEqual([
       ['Token logged in f1', ['probably a false alarm']],
-      ['Unchecked input in f2', ['probably a false alarm']],
+      ['Unchecked input in f2', ['probably a false alarm', 'draft']],
     ]);
     expect(results.findings.map(f => f.number)).toEqual([numbers['Token logged in f1'], numbers['Unchecked input in f2']]);
   });
@@ -986,5 +986,59 @@ describe('the diagnostic timeline of a board review', () => {
     await runAndWait(m, await open(m), { type: 'again' });
     expect(reviewLines).toContain('Configuration:');
     expect(reviewLines).toContain('Run: pr=PROJ/app#482');
+  });
+});
+
+describe('the summary band above the findings', () => {
+  it('after the regular pass the band is open with the counts and the suggested pass preselected; it folds, opens again, and a run of extra passes opens it', async () => {
+    const m = manager();
+    let state = await reviewed(m, 2);
+    const results = resultsOf(state);
+    expect(results.band).toMatchObject({
+      state: 'open', counts: { total: 2, critical: 0, warning: 2, suggestion: 0, againstGoal: 0 }, background: 'None', notReviewed: [],
+    });
+    expect(results.band.tokens).toMatch(/input and .* output tokens/);
+    expect(results.picker!.choices.find(c => c.step === 'security')?.picked).toBe(true);
+
+    state = await act(m, state, { type: 'band', open: false });
+    expect(resultsOf(state).band.state).toBe('folded');
+    state = await act(m, state, { type: 'band', open: true });
+    expect(resultsOf(state).band.state).toBe('open');
+    state = await act(m, state, { type: 'band', open: false });
+
+    state = await runAndWait(m, state, { type: 'passes' });
+    expect(resultsOf(state).band.state).toBe('open');
+    expect(resultsOf(state).band.counts).toMatchObject({ total: 4, critical: 2 });
+  });
+
+  it('Not now folds the band', async () => {
+    const m = manager();
+    let state = await reviewed(m, 2);
+    state = await act(m, state, { type: 'keep-as-is' });
+    expect(resultsOf(state).band.state).toBe('folded');
+  });
+
+  it('while a pass runs the band is running, with the tokens of the run so far', async () => {
+    const m = manager();
+    let state = await reviewed(m, 5);
+    const release = hold(call => call.kind === 'security' && call.file === 3);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'passes' });
+    state = await until(m, state.id, s => viewOf(s).progress === 'Security pass: 2 of 5 batches');
+    const band = resultsOf(state).band;
+    expect(band.state).toBe('running');
+    expect(band.tokens).toMatch(/^[1-9][\d,]* input and \d[\d,]* output tokens in 2 call\(s\)/);
+    expect(resultsOf(state).running?.passes).toEqual([{ step: 'security', text: 'Security pass: 2 of 5 batches', done: 2, total: 5 }]);
+    release();
+    await idle(m, state.id);
+  });
+
+  it('the review board leaves the run line and Stop of the shared header to its band', async () => {
+    const state = await reviewed(manager(), 1);
+    expect(viewOf(state).ownRunLine).toBe(true);
+  });
+
+  it('says what was reviewed: the files, the batches and the reviewed commit', async () => {
+    const state = await reviewed(manager(), 2);
+    expect(resultsOf(state).reviewed).toEqual({ files: ['src/f1.ts', 'src/f2.ts'], batches: 2, commit: HEAD.slice(0, 12) });
   });
 });

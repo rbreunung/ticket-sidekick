@@ -1,9 +1,11 @@
 import {
-  type FindingStore, type PassOutcome, type PassStatus, type ReviewStep, type StagedReview, type StoredFinding, type TokenTotals,
+  addTokenTotals, type FindingStore, type PassOutcome, type PassStatus, type ReviewStep, type StagedReview, type StoredFinding, type TokenTotals,
 } from '../../review/engine';
 import type { BoardKind, Reduced, RunBegun, RunFinished, RunProgress } from '../../sessions/boardKind';
 import type { DerivedPart, Session } from '../../sessions/sessionTypes';
 import { SHARE_SEVERITY_ORDER, type ThreadTurn } from '../../review/reviewSessionState';
+import { renderMarkdown, type MdBlock } from '../../review/markdownTree';
+import { codeExcerpt, type CodeLine } from './codeExcerpt';
 import { findJiraKeyInText } from '../../utils/branchParser';
 import { capitalised } from '../../utils/textCase';
 import { modelLabel, reviewModelState, REVIEW_MODEL_SETTING, type BoardModelInfo } from '../boardModels';
@@ -93,6 +95,8 @@ export interface ActivePass {
   stepsProgress?: StepProgress[];
   /** The model limited the requests, so the passes not started run one after another. */
   oneAtATime?: true;
+  /** The tokens of this run's calls so far, as of its last progress report. */
+  tokensSoFar?: TokenTotals;
 }
 
 /** What the regular pass was started with. */
@@ -144,6 +148,11 @@ export interface ReviewWorking {
   failures?: Record<string, { thread?: string; rewrite?: string }>;
   /** Tokens of the discussions, rewrites and regenerated comments since the regular pass. */
   callTokens?: TokenTotals;
+  /**
+   * The summary band is folded to one line: the run it was folded after. A later run ends with
+   * another run number, so the band opens again by itself when a run ends.
+   */
+  bandFolded?: number;
 }
 
 /** A review board's session. */
@@ -155,6 +164,7 @@ export type ReviewAction =
   | { type: 'back-to-review' }
   | { type: 'pick-pass'; step: ReviewStep; picked: boolean }
   | { type: 'keep-as-is' }
+  | { type: 'band'; open: boolean }
   | FindingAction
   | PostAction;
 
@@ -170,6 +180,8 @@ export interface DraftView {
   posted?: string;
   postError?: string;
   rewriteError?: string;
+  /** The saved text rendered as Markdown, for the Preview of the comment as Bitbucket shows it. */
+  preview: MdBlock[];
 }
 
 export interface FindingView {
@@ -184,11 +196,26 @@ export interface FindingView {
   /** Low confidence, location unverified, probably a false alarm, against goal. */
   markers: string[];
   selected: boolean;
-  /** The discussion, oldest first; the first question is Explain's, shown as "Explain". */
-  thread?: Array<{ question: string; answer: string }>;
+  /** The discussion, oldest first; the first question is Explain's, shown as "Explain". Each answer also rendered as Markdown. */
+  thread?: Array<{ question: string; answer: string; tree: MdBlock[] }>;
   /** Why the last question failed. */
   threadError?: string;
   draft?: DraftView;
+  /** The code around the finding's line, numbered, its line marked; absent when `excerptNote` says why. */
+  excerpt?: CodeLine[];
+  excerptNote?: string;
+}
+
+/** The summary band above the findings: while a pass runs, open after a run, or folded to one line. */
+export interface BandView {
+  state: 'running' | 'open' | 'folded';
+  counts: { total: number; critical: number; warning: number; suggestion: number; againstGoal: number };
+  /** The background the review was started with, in words. */
+  background: string;
+  /** What the passes could not review. */
+  notReviewed: string[];
+  /** All tokens of the review; while a pass runs, the tokens of its run so far. Empty when none were counted. */
+  tokens: string;
 }
 
 export interface TicketBoxView {
@@ -265,9 +292,12 @@ export interface ReviewResultsView {
    */
   running?: {
     what: ActivePass['what']; step: ReviewStep; done: number; total: number;
-    passes?: Array<{ step: ReviewStep; text: string }>;
+    passes?: Array<{ step: ReviewStep; text: string; done: number; total: number }>;
     note?: string;
   };
+  band: BandView;
+  /** What the review covered: its files, its batches and the reviewed commit; absent before the first batch. */
+  reviewed?: { files: string[]; batches: number; commit: string };
 }
 
 export interface ReviewView {
@@ -283,6 +313,8 @@ export interface ReviewView {
   results?: ReviewResultsView;
   /** The pass running now, e.g. "Security pass: 2 of 5 batches". */
   progress?: string;
+  /** The board shows its own run line and Stop, so the shared header leaves them out. */
+  ownRunLine: true;
 }
 
 
@@ -335,7 +367,21 @@ function draftView(working: ReviewWorking, number: number): DraftView | undefine
     ...(draft.posted ? { posted: `Posted as comment ${draft.posted.commentId}.` } : {}),
     ...(draft.postError && !draft.posted ? { postError: `Not posted: ${draft.postError}` } : {}),
     ...(rewriteError ? { rewriteError } : {}),
+    preview: renderedMarkdown(draft.text),
   };
+}
+
+/** Rendered trees by text, so a view drawn on every progress tick does not render the same text again. */
+const renderedTrees = new Map<string, MdBlock[]>();
+const MAX_RENDERED_TREES = 200;
+
+function renderedMarkdown(text: string): MdBlock[] {
+  const known = renderedTrees.get(text);
+  if (known) return known;
+  const tree = renderMarkdown(text);
+  if (renderedTrees.size >= MAX_RENDERED_TREES) renderedTrees.delete(renderedTrees.keys().next().value!);
+  renderedTrees.set(text, tree);
+  return tree;
 }
 
 const PROVENANCE_TEXT: Record<NonNullable<StoredFinding['provenance']>, string> = { new: 'new code', existing: 'existing code', removed: 'removed code' };
@@ -352,12 +398,16 @@ function findingFacts(f: StoredFinding): string[] {
   return facts;
 }
 
-function findingView(f: StoredFinding, threshold: number, working: ReviewWorking, selected: number[]): FindingView {
+function findingView(f: StoredFinding, threshold: number, working: ReviewWorking, selected: number[], review: StagedReview): FindingView {
   const markers: string[] = [];
   if (f.locationUnverified) markers.push('location unverified');
   else if (f.confidence !== undefined && f.confidence < threshold) markers.push('low confidence');
   if (f.probablyFalseAlarm) markers.push('probably a false alarm');
   if (f.againstGoal) markers.push('against goal');
+  const draft = working.drafts[String(f.id)];
+  if (draft?.posted) markers.push('posted');
+  else if (draft) markers.push('draft');
+  const excerpt = codeExcerpt(f, fileDiffOf(review, f));
   return {
     number: f.id,
     severity: f.severity,
@@ -368,10 +418,18 @@ function findingView(f: StoredFinding, threshold: number, working: ReviewWorking
     facts: findingFacts(f),
     markers,
     selected: selected.includes(f.id),
-    ...(working.threads[String(f.id)]?.length ? { thread: working.threads[String(f.id)].map(t => ({ question: t.question ?? 'Explain', answer: t.answer })) } : {}),
+    ...(working.threads[String(f.id)]?.length
+      ? { thread: working.threads[String(f.id)].map(t => ({ question: t.question ?? 'Explain', answer: t.answer, tree: renderedMarkdown(t.answer) })) } : {}),
     ...(working.failures?.[String(f.id)]?.thread ? { threadError: working.failures[String(f.id)].thread } : {}),
     ...(selected.includes(f.id) || working.drafts[String(f.id)] ? { draft: draftView(working, f.id) } : {}),
+    ...('lines' in excerpt ? { excerpt: excerpt.lines } : { excerptNote: excerpt.note }),
   };
+}
+
+/** The diff of the finding's file in the batch it was found in, else in any batch. */
+function fileDiffOf(review: StagedReview, f: StoredFinding) {
+  const { batches } = review.snapshot;
+  return batches[f.batch]?.files.find(d => d.path === f.file) ?? batches.flatMap(b => b.files).find(d => d.path === f.file);
 }
 
 function tokenText(t: TokenTotals): string {
@@ -412,6 +470,7 @@ function resultsView(session: ReviewSession, label: (id: string) => string): Rev
   const selected = selectedNumbers(working);
   const postCount = postableNumbers(working).length;
   const findingCount = review?.store.findings.length ?? 0;
+  const findings = (review?.store.findings ?? []).slice().sort(byListOrder).map(f => findingView(f, threshold, working, selected, review!));
   return {
     model: startedWith ? label(startedWith.modelId) : '',
     passesRun: (review?.store.stepsRun ?? []).map(step => STEP_LABELS[step]),
@@ -424,10 +483,7 @@ function resultsView(session: ReviewSession, label: (id: string) => string): Rev
     ...(review && working.active?.what !== 'regular' ? { picker: pickerView(working, review) } : {}),
     tokens,
     canRunAgain: startedWith !== undefined,
-    findings: (review?.store.findings ?? [])
-      .slice()
-      .sort(byListOrder)
-      .map(f => findingView(f, threshold, working, selected)),
+    findings,
     selectedCount: selected.length,
     post: {
       count: postCount,
@@ -435,7 +491,50 @@ function resultsView(session: ReviewSession, label: (id: string) => string): Rev
     },
     copy: selected.length > 0 ? { scope: 'selected', count: selected.length } : { scope: 'all', count: findingCount },
     ...(working.active ? { running: runningView(working.active) } : {}),
+    band: bandView(working, review, lastRun),
+    ...(review ? { reviewed: reviewedView(review) } : {}),
   };
+}
+
+function bandView(working: ReviewWorking, review: StagedReview | undefined, lastRun: number | undefined): BandView {
+  const found = review?.store.findings ?? [];
+  const bySeverity = (severity: StoredFinding['severity']) => found.filter(f => f.severity === severity).length;
+  const { active } = working;
+  const running = active !== undefined;
+  const total = running ? active.tokensSoFar : totalTokens(working);
+  return {
+    state: running ? 'running' : review && working.bandFolded !== undefined && working.bandFolded === (lastRun ?? 0) ? 'folded' : 'open',
+    counts: {
+      total: found.length, critical: bySeverity('critical'), warning: bySeverity('warning'), suggestion: bySeverity('suggestion'),
+      againstGoal: found.filter(f => f.againstGoal).length,
+    },
+    background: backgroundText(active?.startedWith ?? working.startedWith),
+    notReviewed: working.passes.flatMap(p => p.notes),
+    tokens: total && total.calls > 0 ? tokenText(total) : '',
+  };
+}
+
+/** Every token of the review: its passes and the calls on its findings. */
+function totalTokens(working: ReviewWorking): TokenTotals | undefined {
+  return [...working.passes.map(p => p.tokens), ...(working.callTokens ? [working.callTokens] : [])]
+    .reduce<TokenTotals | undefined>((sum, t) => addTokenTotals(sum, t), undefined);
+}
+
+const BACKGROUND_TEXT_CHARS = 80;
+
+function backgroundText(startedWith: Pick<StartedWith, 'background' | 'backgroundReason'> | undefined): string {
+  const background = startedWith?.background;
+  if (background?.kind === 'ticket') return `Jira ticket ${background.key}`;
+  if (background?.kind === 'text') {
+    const line = background.text.replace(/\s+/g, ' ').trim();
+    return `Your text: “${line.length > BACKGROUND_TEXT_CHARS ? `${line.slice(0, BACKGROUND_TEXT_CHARS - 1)}…` : line}”`;
+  }
+  return startedWith?.backgroundReason ? `None: ${startedWith.backgroundReason}` : 'None';
+}
+
+function reviewedView(review: StagedReview): NonNullable<ReviewResultsView['reviewed']> {
+  const files = [...new Set(review.snapshot.batches.flatMap(b => b.files.map(f => f.path)))];
+  return { files, batches: review.snapshot.batches.length, commit: shortCommit(review.snapshot.reviewedCommit) };
 }
 
 /** The list order: severity, then confidence from highest (a finding without one after those with one), then number. */
@@ -470,11 +569,16 @@ function stepProgressText(step: ReviewStep, done: number, total: number, waiting
 }
 
 /** The progress line of each extra pass running or waiting; undefined for the regular pass. */
-function passLines(active: ActivePass): Array<{ step: ReviewStep; text: string }> | undefined {
+function passLines(active: ActivePass): Array<{ step: ReviewStep; text: string; done: number; total: number }> | undefined {
   if (!active.stepsProgress) return undefined;
   return active.stepsProgress
     .filter(e => e.state === 'running' || e.state === 'waiting')
-    .map(e => ({ step: e.step, text: stepProgressText(e.step, e.done, e.total, e.state === 'waiting') }));
+    .map(e => ({ step: e.step, text: stepProgressText(e.step, e.done, e.total, e.state === 'waiting'), done: e.done, total: e.total }));
+}
+
+/** The number of the last run of this review; 0 before any. */
+function lastRunOf(working: ReviewWorking): number {
+  return working.passes[working.passes.length - 1]?.run ?? 0;
 }
 
 function runningView(active: ActivePass): NonNullable<ReviewResultsView['running']> {
@@ -730,9 +834,19 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
       if (!working.review && working.passes.length === 0) return { ok: false, reason: 'There is no stored review.' };
       return { ok: true, working: { ...working, stage: 'review' } };
     }
+    if (type === 'band') {
+      const { open } = action as { open?: unknown };
+      if (typeof open !== 'boolean') return { ok: false, reason: 'Unknown band change.' };
+      if (working.stage !== 'review' || !working.review) return { ok: false, reason: 'There is no review to sum up.' };
+      const next: ReviewWorking = { ...working };
+      if (open) delete next.bandFolded;
+      else next.bandFolded = lastRunOf(working);
+      return { ok: true, working: next };
+    }
     if (type === 'pick-pass' || type === 'keep-as-is') {
       if (working.stage !== 'review' || !working.review) return { ok: false, reason: 'There is no review to add a pass to.' };
-      if (type === 'keep-as-is') return { ok: true, working: { ...working, picked: [] } };
+      // Not now: nothing is picked, and the band folds to one line until the next run ends.
+      if (type === 'keep-as-is') return { ok: true, working: { ...working, picked: [], bandFolded: lastRunOf(working) } };
       const { step, picked } = action as { step?: unknown; picked?: unknown };
       if (!EXTRA_STEPS.includes(step as ReviewStep) || typeof picked !== 'boolean') return { ok: false, reason: 'Unknown pass.' };
       const reason = stepBlocker(working.review, step as ReviewStep);
@@ -793,6 +907,7 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
       model: modelView(session, label),
       ...(stage === 'first-step' ? { firstStep: firstStepView(session) } : { results: resultsView(live ?? session, label) }),
       ...(working.active ? { progress: progressText(working) } : {}),
+      ownRunLine: true,
     };
   },
 };

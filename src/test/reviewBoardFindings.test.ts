@@ -12,6 +12,7 @@ import { SessionManager, type BoardState } from '../sessions/sessionManager';
 import { SessionStore } from '../sessions/sessionStore';
 import type { InlineAnchor } from '../bitbucket/IBitbucketClient';
 import type { TokenFigures } from '../utils/tokenUsage';
+import { renderMarkdown } from '../review/markdownTree';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 
 // What the developer does with the findings on the review board: discuss one (Explain, then
@@ -226,7 +227,7 @@ describe('Explain and the discussion', () => {
     expect(calls[0].prompt).toContain('Exports the report as CSV.');
     expect(calls[0].prompt).toContain('You may use Markdown');
     expect(calls[0].prompt).not.toContain('without Markdown');
-    expect(finding(state, 3).thread).toEqual([{ question: 'Explain', answer: 'Answer 1 about f3' }]);
+    expect(finding(state, 3).thread).toMatchObject([{ question: 'Explain', answer: 'Answer 1 about f3' }]);
     expect(finding(state, 2).thread).toBeUndefined();
 
     // A second Explain would replace the discussion; a follow-up continues it instead.
@@ -262,7 +263,7 @@ describe('Explain and the discussion', () => {
     expect(outside).not.toContain('Answer 1 about f1');
     expect(outside).toContain('1. Explain this finding');
     expect(outside).toContain("Developer's question: Is the value ever user input?");
-    expect(finding(state, 1).thread).toEqual([
+    expect(finding(state, 1).thread).toMatchObject([
       { question: 'Explain', answer: 'Answer 1 about f1' },
       { question: 'Is the value ever user input?', answer: 'Answer 2 about f1' },
     ]);
@@ -374,7 +375,7 @@ describe('Explain and the discussion', () => {
     state = await runAndWait(m, state, { type: 'follow-up', number: 1, question: 'Is it reachable?' });
     m = manager();
     state = await idle(m, (await m.open(REVIEW_KIND, { url: PR_URL }) as { id: string }).id);
-    expect(finding(state, 1).thread).toEqual([
+    expect(finding(state, 1).thread).toMatchObject([
       { question: 'Explain', answer: 'Answer 1 about f1' },
       { question: 'Is it reachable?', answer: 'Answer 2 about f1' },
     ]);
@@ -834,5 +835,53 @@ describe('Copy through the tab', () => {
     clipboardFails = true;
     expect(await ask(state.id, 'copy', { format: 'teams', numbers: [] })).toMatchObject({ ok: true, data: { outcome: 'failed', reason: 'clipboard unavailable' } });
     expect(await ask(state.id, 'copy', { format: 'html', numbers: [] })).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+describe('what the detail pane is given', () => {
+  it('each finding comes with the code around its line from the stored diff, numbered, with its line marked', async () => {
+    const state = await reviewed(manager(), 2);
+    const excerpt = finding(state, 1).excerpt!;
+    expect(excerpt[0]).toEqual({ line: 1, kind: 'added', text: codeLine(1, 1) });
+    expect(excerpt[1]).toEqual({ line: 2, kind: 'added', text: codeLine(1, 2), marked: true });
+    expect(excerpt.filter(l => l.marked)).toHaveLength(1);
+    expect(excerpt.length).toBeLessThanOrEqual(13);
+    expect(finding(state, 1).excerptNote).toBeUndefined();
+  });
+
+  it('a finding whose location could not be verified has no code and says so', async () => {
+    respond = call => (call.kind === 'review' && call.file === 2
+      ? [JSON.stringify({ file: 'src/f2.ts', line: 2, anchorCode: 'not in this diff at all', severity: 'warning', confidence: 0.9, title: 'Somewhere', description: 'd', recommendation: 'r' }),
+        JSON.stringify({ additionalFilesNeeded: [], recommendedPersonas: [] })].join('\n')
+      : defaultRespond(call));
+    const state = await reviewed(manager(), 2);
+    const unverified = resultsOf(state).findings.find(f => f.title === 'Somewhere')!;
+    expect(unverified.markers).toContain('location unverified');
+    expect(unverified.excerpt).toBeUndefined();
+    expect(unverified.excerptNote).toBe('The location could not be verified, so no code is shown.');
+  });
+
+  it('a discussion answer and the saved draft come with their Markdown rendered to the safe tree', async () => {
+    const m = manager();
+    let state = await reviewed(m, 1);
+    respond = call => (call.kind === 'explain' ? 'It is **unsafe**:\n\n```diff\n+const id = input;\n```' : defaultRespond(call));
+    state = await runAndWait(m, state, { type: 'explain', number: 1 });
+    const turn = finding(state, 1).thread![0];
+    expect(turn.tree).toEqual(renderMarkdown(turn.answer));
+    expect(turn.tree.map(b => b.type)).toEqual(['paragraph', 'code-block']);
+    state = await act(m, state, { type: 'select', numbers: [1], selected: true });
+    state = await act(m, state, { type: 'draft', number: 1, text: 'See `id`.' });
+    expect(draftOf(state, 1).preview).toEqual(renderMarkdown('See `id`.'));
+  });
+
+  it('a drafted comment and a posted comment are marked in words', async () => {
+    const m = manager();
+    let state = await reviewed(m, 2);
+    state = await act(m, state, { type: 'select', numbers: [1], selected: true });
+    expect(finding(state, 1).markers).toContain('draft');
+    expect(finding(state, 2).markers).not.toContain('draft');
+    const reopened = await storeAndReopen(state.id, w => ({ ...w, drafts: { ...w.drafts, '1': { ...w.drafts['1'], posted: { commentId: 7 } } } }));
+    expect(finding(reopened.state, 1).markers).toContain('posted');
+    expect(finding(reopened.state, 1).markers).not.toContain('draft');
   });
 });
