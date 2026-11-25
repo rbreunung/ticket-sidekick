@@ -240,6 +240,22 @@ describe('bitbucket_read_findings', () => {
     expect(result.text).toContain(`Recommendation: Fix ${three.title}`);
   });
 
+  it('names the "against goal" mark in the list and in one finding', async () => {
+    const id = await reviewOnBoard();
+    const working = await storedWorking(id);
+    const marked = numberOf(working, 'Unchecked input');
+    await storeWork(id, w => ({
+      ...w,
+      review: { ...w.review!, store: { ...w.review!.store, findings: w.review!.store.findings.map(f => (f.id === marked ? { ...f, againstGoal: true as const } : f)) } },
+    }));
+    const deps = toolDeps(manager());
+
+    const list = await callTool(tool('bitbucket_read_findings'), { url: PR_URL, list: true }, deps);
+    expect(list.text).toContain(`#${marked} warning src/f1.ts:2: Unchecked input (against goal)`);
+    const one = await callTool(tool('bitbucket_read_findings'), { url: PR_URL, finding: marked }, deps);
+    expect(one.text).toContain('Marked: against goal');
+  });
+
   it('lists every finding by severity, and leaves a finding labelled probably a false alarm out of the verdict', async () => {
     const id = await reviewOnBoard();
     const working = await storedWorking(id);

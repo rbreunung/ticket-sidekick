@@ -51,6 +51,8 @@ export interface ReviewFinding {
    * finding is kept but carries no line, renders muted as "location unverified", and can only be
    * posted to the activity feed. */
   locationUnverified?: true;
+  /** The change goes against the background the review was given. Only set when a background was given. */
+  againstGoal?: true;
   /** Transient model-output fields, consumed by resolveFindingAnchors and then dropped. */
   anchorCode?: string;
   relatedCode?: string[];
@@ -1000,12 +1002,14 @@ export function dedupeFindings(
     // just its severity. The plan's documented contract (KTD3/U2) only lets severity move to the
     // stronger finding; every other descriptive field stays with the first-encountered one.
     const severity = stronger(target, incoming) ? target.severity : incoming.severity;
+    // Either side's "against goal" mark survives the merge.
     return {
       ...target,
       severity,
       sources: [...sources],
       confidence,
       ...(provenance ? { provenance } : {}),
+      ...(target.againstGoal || incoming.againstGoal ? { againstGoal: true as const } : {}),
     };
   };
   for (const f of findings) {
@@ -1025,10 +1029,20 @@ export function dedupeFindings(
   // normalized title. A merely similar title may be a different issue ("…on user" vs "…on response"),
   // and a near-duplicate row is better than a lost finding.
   const normalizeTitle = (t: string) => t.trim().toLowerCase().replace(/\s+/g, ' ');
-  return deduped.filter((f) => !f.locationUnverified || !deduped.some(
+  const locatedTwinOf = (f: Omit<ReviewFinding, 'id'>) => deduped.find(
     (other) => other !== f && !other.locationUnverified && other.line !== undefined
       && other.file === f.file && normalizeTitle(other.title) === normalizeTitle(f.title),
-  ));
+  );
+  // A dropped unverified copy hands its "against goal" mark to the located twin that replaces it.
+  const marked = new Set<Omit<ReviewFinding, 'id'>>();
+  for (const f of deduped) {
+    if (!f.locationUnverified || !f.againstGoal) continue;
+    const twin = locatedTwinOf(f);
+    if (twin) marked.add(twin);
+  }
+  return deduped
+    .filter((f) => !f.locationUnverified || !locatedTwinOf(f))
+    .map((f) => (marked.has(f) && !f.againstGoal ? { ...f, againstGoal: true as const } : f));
 }
 
 /**
@@ -1055,15 +1069,22 @@ function resolveDiffPath(file: string, diffs: FileDiff[]): string | undefined {
  * - no `anchorCode` → a file-level observation: kept, with no line or provenance;
  * - `anchorCode` not locatable → kept as `locationUnverified`, with no line (R13);
  * - file names nothing in the diff → dropped and counted in `droppedOutsidePr` (R14).
+ * A reply's `"againstGoal":true` is kept only with `keepAgainstGoal`.
  */
 export function resolveFindingAnchors(
   findings: Array<Omit<ReviewFinding, 'id'>>,
   diffs: FileDiff[],
+  /** `keepAgainstGoal`: the prompt asked for the "against goal" mark, so a reply's `"againstGoal":true` is kept. */
+  options: { keepAgainstGoal?: boolean } = {},
 ): { findings: Array<Omit<ReviewFinding, 'id'>>; droppedOutsidePr: number } {
   const out: Array<Omit<ReviewFinding, 'id'>> = [];
   let droppedOutsidePr = 0;
   for (const f of findings) {
-    const { anchorCode, relatedCode, ...rest } = f;
+    const { anchorCode, relatedCode, againstGoal, ...unmarked } = f;
+    // Only a literal true counts, and only when the prompt asked for it; any other value is dropped.
+    const rest: Omit<ReviewFinding, 'id' | 'anchorCode' | 'relatedCode'> = options.keepAgainstGoal && (againstGoal as unknown) === true
+      ? { ...unmarked, againstGoal: true }
+      : unmarked;
     const path = typeof rest.file === 'string' ? resolveDiffPath(rest.file, diffs) : undefined;
     if (!path) { droppedOutsidePr++; continue; }
     if (typeof anchorCode !== 'string' || anchorCode.trim() === '') {

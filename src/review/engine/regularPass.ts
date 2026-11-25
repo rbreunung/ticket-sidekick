@@ -2,7 +2,7 @@ import { aggregateRecommendedPersonas, buildAdaptiveChunks } from '../reviewSess
 import { logAborted, logFindingsFunnel, runPass, writeRunRecord } from './diagnostics';
 import { reviewBatch } from './batchReview';
 import { addFindings, emptyStore, markStepRun, type NewFinding } from './findingStore';
-import { emptyOutcome, extraInstructionsOf, isStop, serviceFor, throwIfStopped, type PassContext } from './plumbing';
+import { backgroundOf, emptyOutcome, extraInstructionsOf, isStop, serviceFor, throwIfStopped, type PassContext } from './plumbing';
 import { readReviewDiff } from './snapshot';
 import type {
   EngineDeps,
@@ -47,6 +47,7 @@ async function regularPass(
   const { target, settings } = input;
   const service = serviceFor(deps);
   const extra = extraInstructionsOf(settings);
+  const background = backgroundOf(settings);
 
   let diff;
   ctx.stage = 'fetching PR';
@@ -95,7 +96,8 @@ async function regularPass(
       const result = await reviewBatch({
         ctx, service, pr, target, commit: pr.fromCommitHash, files: chunks[i], label: `regular batch ${i + 1}/${chunks.length}`,
         pass: 'pass1', batch: i + 1, totalBatches: chunks.length, source: 'general', cache, tokenBudget,
-        buildPrompt: (items, contents, options) => service.buildPrompt(pr, items, contents, extra, !options?.priorFindings, options),
+        keepAgainstGoal: background !== undefined,
+        buildPrompt: (items, contents, options) => service.buildPrompt(pr, items, contents, extra, !options?.priorFindings, { ...options, ...(background ? { background } : {}) }),
       });
       batches[i].contextPaths = result.contextPaths;
       findings.push(...result.findings.map((f) => ({ ...f, batch: i })));

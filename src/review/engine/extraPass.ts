@@ -5,6 +5,7 @@ import { addFindings, markStepRun, type NewFinding } from './findingStore';
 import {
   budgetStoredContext,
   emptyOutcome,
+  backgroundOf,
   extraInstructionsOf,
   isStop,
   keepInRunCache,
@@ -48,6 +49,7 @@ async function extraPass(
 
   const service = serviceFor(deps);
   const extra = extraInstructionsOf(settings);
+  const background = backgroundOf(settings);
   const cache = new Map(read.files);
   const contextPaths = batches.map((b) => [...b.contextPaths]);
   const findings: NewFinding[] = [];
@@ -71,7 +73,8 @@ async function extraPass(
         ctx, service, pr, target, commit: reviewedCommit, files: batch.files, label: `${persona.id} batch ${i + 1}/${batches.length}`,
         pass: persona.id, batch: i + 1, totalBatches: batches.length, source: persona.id, cache, tokenBudget,
         initialContext: budgetStoredContext(batch.contextPaths, cache, tokenBudget, batch.files),
-        buildPrompt: (items, contents, options) => service.buildPersonaPrompt(persona, pr, items, contents, extra, options),
+        keepAgainstGoal: background !== undefined,
+        buildPrompt: (items, contents, options) => service.buildPersonaPrompt(persona, pr, items, contents, extra, { ...options, ...(background ? { background } : {}) }),
       });
       for (const path of result.contextPaths) if (!contextPaths[i].includes(path)) contextPaths[i].push(path);
       findings.push(...result.findings.map((f) => ({ ...f, batch: i })));

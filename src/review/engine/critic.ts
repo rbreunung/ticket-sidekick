@@ -7,6 +7,7 @@ import {
   callWithRetry,
   describeError,
   emptyOutcome,
+  backgroundOf,
   extraInstructionsOf,
   fetchAndBudgetContextFiles,
   isStop,
@@ -66,6 +67,7 @@ async function critic(
 
   const service = serviceFor(deps);
   const extra = extraInstructionsOf(settings);
+  const background = backgroundOf(settings);
   const cache = new Map(read.files);
   const worked = new Set(workedOn);
   let store = review.store;
@@ -92,7 +94,7 @@ async function critic(
         buildPrompt: (items) => {
           const diffs = diffsFor(items);
           const context = budgetStoredContext(batch?.contextPaths ?? [], cache, tokenBudget, diffs);
-          return service.buildCriticPrompt(pr, diffs, items.map(forCritic), extra, context.size > 0 ? context : undefined);
+          return service.buildCriticPrompt(pr, diffs, items.map(forCritic), extra, context.size > 0 ? context : undefined, background);
         },
         statusOf: () => 'ok',
       });
@@ -115,7 +117,7 @@ async function critic(
             });
             if (contents.size > 0) {
               const round2 = await callWithRetry(
-                ctx, service.buildCriticPrompt(pr, diffs, part.items.map(forCritic), extra ? `${FINAL_ROUND_NOTE}\n${extra}` : FINAL_ROUND_NOTE, contents),
+                ctx, service.buildCriticPrompt(pr, diffs, part.items.map(forCritic), extra ? `${FINAL_ROUND_NOTE}\n${extra}` : FINAL_ROUND_NOTE, contents, background),
                 `${label} round 2`, undefined,
                 { site: { pass: 'critic-r2', ...where, itemCount: part.items.length } },
               );

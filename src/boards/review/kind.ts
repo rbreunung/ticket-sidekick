@@ -169,7 +169,7 @@ export interface FindingView {
   recommendation: string;
   /** The line with its related lines ("L19 (also L12, L15)"), the provenance, the confidence and the source. */
   facts: string[];
-  /** Low confidence, location unverified, probably a false alarm. */
+  /** Low confidence, location unverified, probably a false alarm, against goal. */
   markers: string[];
   selected: boolean;
   explanation?: string;
@@ -330,6 +330,7 @@ function findingView(f: StoredFinding, threshold: number, working: ReviewWorking
   if (f.locationUnverified) markers.push('location unverified');
   else if (f.confidence !== undefined && f.confidence < threshold) markers.push('low confidence');
   if (f.probablyFalseAlarm) markers.push('probably a false alarm');
+  if (f.againstGoal) markers.push('against goal');
   return {
     number: f.id,
     severity: f.severity,

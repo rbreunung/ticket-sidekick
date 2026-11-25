@@ -646,7 +646,7 @@ describe('regular pass: the rules every review pass keeps', () => {
       },
     });
     t.client.fileContents.set('src/ctx.ts', 'export const ctx = 1;');
-    const settings: EngineSettings = { ...ONE_FILE_PER_BATCH, reviewInstructions: 'Follow the house style guide.', focus: 'Is the retry loop bounded?' };
+    const settings: EngineSettings = { ...ONE_FILE_PER_BATCH, reviewInstructions: 'Follow the house style guide.', background: { kind: 'text', text: 'Is the retry loop bounded?' } };
 
     const first = await runRegularPass({ target: TARGET, settings }, t.deps);
     const withSecurity = await runExtraPass(first.review!, 'security', settings, t.deps);
@@ -657,6 +657,90 @@ describe('regular pass: the rules every review pass keeps', () => {
       expect(call.prompt, call.kind).toContain('Follow the house style guide.');
       expect(call.prompt, call.kind).toContain('Is the retry loop bounded?');
     }
+  });
+
+  describe('the background in every review call', () => {
+    const TICKET_TEXT = 'Summary: Sessions must expire after the configured TTL';
+    /** First call cut off, so a continuation runs; it asks for a whole file, so the whole-file call runs. */
+    const respond = (c: Call) => {
+      if (c.kind === 'critic') return '{"keep":[1,2]}';
+      if (c.prompt.includes('Already reported for these files')) return reviewReply([{ file: 1, line: 6, title: 'Second issue' }], { additionalFilesNeeded: ['src/ctx.ts'] });
+      if (c.kind === 'regular') return `${findingLine({ file: 1, line: 2, title: 'First issue' })}\n{"file":"src/f1.ts","line":6,"anchorCo`;
+      return reviewReply([]);
+    };
+    async function runAll(settings: EngineSettings) {
+      const t = setup({ files: 1, respond });
+      t.client.fileContents.set('src/ctx.ts', 'export const ctx = 1;');
+      const first = await runRegularPass({ target: TARGET, settings }, t.deps);
+      const withSecurity = await runExtraPass(first.review!, 'security', settings, t.deps);
+      await runCritic(withSecurity.review, [], settings, t.deps);
+      return t;
+    }
+    const fenceOf = (prompt: string) => {
+      const start = prompt.indexOf('«UNTRUSTED-CONTENT»\n');
+      const end = prompt.indexOf('\n«END-UNTRUSTED-CONTENT»');
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      return { inside: prompt.slice(start, end), outside: prompt.slice(0, start) + prompt.slice(end) };
+    };
+
+    it('sends a ticket background as fenced data to the regular pass, its continuation and whole-file call, a persona pass and the critic', async () => {
+      const t = await runAll({ ...ONE_FILE_PER_BATCH, background: { kind: 'ticket', key: 'PROJ-123', text: TICKET_TEXT } });
+
+      expect(t.calls.map((c) => c.kind)).toEqual(['regular', 'regular', 'regular-whole-files', 'security', 'critic']);
+      expect(t.calls[1].prompt).toContain('Already reported for these files');
+      for (const call of t.calls) {
+        const { inside, outside } = fenceOf(call.prompt);
+        expect(inside, call.kind).toContain(`Background ticket PROJ-123`);
+        expect(inside, call.kind).toContain(TICKET_TEXT);
+        expect(outside, call.kind).not.toContain(TICKET_TEXT);
+        expect(outside, call.kind).not.toContain('ADDITIONAL INSTRUCTIONS');
+      }
+    });
+
+    it('sends an own-text background as additional instructions to every call, with no ticket block', async () => {
+      const t = await runAll({ ...ONE_FILE_PER_BATCH, background: { kind: 'text', text: 'Sessions must expire after the configured TTL' } });
+
+      expect(t.calls).toHaveLength(5);
+      for (const call of t.calls) {
+        const { inside, outside } = fenceOf(call.prompt);
+        expect(outside, call.kind).toContain('ADDITIONAL INSTRUCTIONS:\nSessions must expire after the configured TTL');
+        expect(inside, call.kind).not.toContain('Background ticket');
+      }
+    });
+
+    it('gives the persona pass no earlier findings, with a background too', async () => {
+      const t = await runAll({ ...ONE_FILE_PER_BATCH, background: { kind: 'text', text: 'Keep sessions short' } });
+      const persona = t.calls.find((c) => c.kind === 'security')!;
+      expect(persona.prompt).not.toContain('First issue');
+      expect(persona.prompt).not.toContain('Second issue');
+    });
+  });
+
+  describe('findings that go against the background', () => {
+    const marked = (c: Call) => c.kind === 'critic' ? '{"keep":[1]}' : [
+      JSON.stringify({ ...JSON.parse(findingLine({ file: 1, line: 3, title: 'Expiry set to 0' })), againstGoal: true }),
+      JSON.stringify({ additionalFilesNeeded: [] }),
+    ].join('\n');
+
+    it('keeps the "against goal" mark a reply gives when the review has a background', async () => {
+      const t = setup({ files: 1, respond: marked });
+      const result = await regular(t, { ...ONE_FILE_PER_BATCH, background: { kind: 'text', text: 'sessions must expire after the configured TTL' } });
+
+      expect(t.calls[0].prompt).toContain('"againstGoal":true');
+      expect(result.review!.store.findings).toHaveLength(1);
+      expect(result.review!.store.findings[0]).toMatchObject({ title: 'Expiry set to 0', line: 3, againstGoal: true });
+    });
+
+    it('asks for nothing and drops a stray mark when the review has no background', async () => {
+      const t = setup({ files: 1, respond: marked });
+      const first = await regular(t);
+      const withSecurity = await runExtraPass(first.review!, 'security', ONE_FILE_PER_BATCH, t.deps);
+
+      for (const call of t.calls) expect(call.prompt).not.toContain('againstGoal');
+      expect(withSecurity.review.store.findings).toHaveLength(1);
+      expect(withSecurity.review.store.findings[0]).not.toHaveProperty('againstGoal');
+    });
   });
 
 });

@@ -3,9 +3,12 @@ import {
   neutralizeMarkdownLinks,
   ALL_PERSONA_IDS,
   formatReviewForSharing,
+  resolveFindingAnchors,
+  dedupeFindings,
   type ReviewFinding,
   type ReviewSession,
 } from '../review/reviewSessionState';
+import { addFindings, emptyStore } from '../review/engine/findingStore';
 
 describe('neutralizeMarkdownLinks', () => {
   it('replaces [ and ] with visually similar full-width brackets, leaving other characters untouched', () => {
@@ -162,5 +165,56 @@ describe('formatReviewForSharing (Copy for Teams)', () => {
 
     const order = [3, 2, 1].map((id) => text.indexOf(`#${id} `));
     expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+});
+
+describe('the "against goal" mark on findings', () => {
+  const diffs = [{ path: 'src/session.ts', diff: '@@ -1,1 +1,2 @@\n const a = 1;\n+const ttl = 0;' }];
+  type Raw = Omit<ReviewFinding, 'id'> & { againstGoal?: unknown };
+  const reply = (extra: Record<string, unknown> = {}): Raw => ({
+    file: 'src/session.ts', line: 2, anchorCode: 'const ttl = 0;', severity: 'warning',
+    title: 'Sessions never expire', description: 'TTL 0', recommendation: 'Use the configured TTL', ...extra,
+  });
+
+  it('keeps againstGoal on a reply finding after its anchor is resolved, when the prompt asked for it', () => {
+    const { findings } = resolveFindingAnchors([reply({ againstGoal: true })], diffs, { keepAgainstGoal: true });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ line: 2, provenance: 'new', againstGoal: true });
+  });
+
+  it('drops a stray againstGoal when no background asked for it, and any value other than true', () => {
+    const stray = resolveFindingAnchors([reply({ againstGoal: true })], diffs).findings[0];
+    expect(stray).not.toHaveProperty('againstGoal');
+    const odd = resolveFindingAnchors([reply({ againstGoal: 'yes' })], diffs, { keepAgainstGoal: true }).findings[0];
+    expect(odd).not.toHaveProperty('againstGoal');
+  });
+
+  it('merges two duplicate findings, one marked against goal, into one finding that keeps the mark, either way round', () => {
+    const plain = { ...reply(), sources: ['general' as const] };
+    const marked = { ...reply(), againstGoal: true as const, sources: ['security' as const] };
+    for (const pair of [[plain, marked], [marked, plain]]) {
+      const merged = dedupeFindings(resolveFindingAnchors(pair, diffs, { keepAgainstGoal: true }).findings);
+      expect(merged).toHaveLength(1);
+      expect(merged[0].againstGoal).toBe(true);
+    }
+  });
+
+  it('keeps the mark when the marked copy is the unlocated one dropped for its located twin', () => {
+    const located = { ...reply(), sources: ['general' as const] };
+    const unlocated = { ...reply({ anchorCode: 'no such line' }), againstGoal: true as const, sources: ['general' as const] };
+    const merged = dedupeFindings(resolveFindingAnchors([located, unlocated], diffs, { keepAgainstGoal: true }).findings);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ line: 2, againstGoal: true });
+  });
+
+  it('marks a numbered finding against goal when a later duplicate carries the mark', () => {
+    const first = addFindings(emptyStore(), [{ ...resolveFindingAnchors([reply()], diffs).findings[0], sources: ['general'], batch: 0 }]);
+    const later = addFindings(first.store, [{
+      ...resolveFindingAnchors([reply({ againstGoal: true, description: 'Expiry is zero' })], diffs, { keepAgainstGoal: true }).findings[0],
+      sources: ['security'], batch: 0,
+    }]);
+    expect(later.merged).toEqual([1]);
+    expect(later.store.findings).toHaveLength(1);
+    expect(later.store.findings[0]).toMatchObject({ id: 1, description: 'TTL 0', againstGoal: true });
   });
 });

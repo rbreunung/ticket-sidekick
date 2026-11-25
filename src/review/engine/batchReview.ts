@@ -41,6 +41,8 @@ export interface BatchReviewParams {
   batch: number;
   totalBatches: number;
   source: SourceTag;
+  /** The prompt asked for findings that go against the background; without it a reply's mark is dropped. */
+  keepAgainstGoal: boolean;
   /** Builds the prompt; `contents` are the whole files to show, `options` the earlier findings. */
   buildPrompt: (files: FileDiff[], contents: Map<string, string> | undefined, options?: { priorFindings?: Finding[]; alreadyReported?: Finding[] }) => string;
   /** Files already read for this batch (the stored context of a later pass); shown on the first call. */
@@ -71,6 +73,7 @@ export interface BatchReviewResult {
 export async function reviewBatch(p: BatchReviewParams): Promise<BatchReviewResult> {
   const { ctx, files, label, batch, totalBatches } = p;
   const initial = p.initialContext && p.initialContext.size > 0 ? p.initialContext : undefined;
+  const anchorOptions = { keepAgainstGoal: p.keepAgainstGoal };
   const parts = await callBatchWithSplit(ctx, {
     items: files, pass: p.pass, batch, totalBatches, label,
     buildPrompt: (items) => p.buildPrompt(items, initial),
@@ -97,7 +100,7 @@ export async function reviewBatch(p: BatchReviewParams): Promise<BatchReviewResu
     result.reviewedFiles += part.items.length;
     const reply = parseReviewReply(part.result!);
     if (reply.hasMetaLine) { anyMeta = true; reply.recommendedPersonas.forEach((id) => recommended.add(id)); }
-    const first = resolveFindingAnchors(reply.findings as Finding[], part.items);
+    const first = resolveFindingAnchors(reply.findings as Finding[], part.items, anchorOptions);
     let partFindings = first.findings;
     let rawCount = reply.findings.length;
     let droppedOutsidePr = first.droppedOutsidePr;
@@ -121,7 +124,7 @@ export async function reviewBatch(p: BatchReviewParams): Promise<BatchReviewResu
         ));
         if (cont.hasMetaLine) { anyMeta = true; cont.recommendedPersonas.forEach((id) => recommended.add(id)); }
         filesNeeded = [...new Set([...filesNeeded, ...cont.additionalFilesNeeded])];
-        const resolved = resolveFindingAnchors(cont.findings as Finding[], part.items);
+        const resolved = resolveFindingAnchors(cont.findings as Finding[], part.items, anchorOptions);
         rawCount += cont.findings.length;
         droppedOutsidePr += resolved.droppedOutsidePr;
         partFindings = [...partFindings, ...resolved.findings];
@@ -146,7 +149,7 @@ export async function reviewBatch(p: BatchReviewParams): Promise<BatchReviewResu
             ctx, p.buildPrompt(part.items, contents, { priorFindings: partFindings }), `${label} with whole files`, assertReadableReply,
             { site: { pass: 'pass2', batch, totalBatches, itemCount: part.items.length } },
           ));
-          const resolved = resolveFindingAnchors(second.findings as Finding[], part.items);
+          const resolved = resolveFindingAnchors(second.findings as Finding[], part.items, anchorOptions);
           const merged = mergePass2Findings(partFindings, resolved.findings, second.retract);
           rawCount += second.findings.length;
           droppedOutsidePr += resolved.droppedOutsidePr;

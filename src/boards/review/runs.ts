@@ -64,10 +64,7 @@ export function pickedSteps(working: ReviewWorking): ReviewStep[] {
   return EXTRA_STEPS.filter(step => picks.includes(step) && !stepBlocker(review, step));
 }
 
-/**
- * The text the review calls take as the developer's focus: the own-text background. A ticket's text
- * is kept with the review but not given to the calls yet.
- */
+/** The own-text background as Explain takes it, as its focus question; a ticket's text is not given to Explain yet. */
 export function focusOf(startedWith: Pick<StartedWith, 'background'>): string {
   return startedWith.background?.kind === 'text' ? startedWith.background.text : '';
 }
@@ -192,7 +189,6 @@ export async function regularRun(
     ...(choices.background ? { background: choices.background } : {}),
     ...(choices.backgroundReason ? { backgroundReason: choices.backgroundReason } : {}),
   };
-  const focus = focusOf(begun);
   const active: ActivePass = {
     what: 'regular', steps: ['regular'], step: 'regular', done: 0, total: 0, modelId: model.handle.id, run: 1, startedWith: begun,
   };
@@ -201,7 +197,7 @@ export async function regularRun(
   const reporter = progressReporter(progress);
   const result = await runRegularPass({
     target: { project: recipe.project, repo: recipe.repo, prId: recipe.prId },
-    settings: { ...settings, ...(focus ? { focus } : {}) },
+    settings: { ...settings, ...(begun.background ? { background: begun.background } : {}) },
   }, await engineDeps(deps, model.handle, bitbucket.client, signal, reporter.report));
   await reporter.settled();
   if (result.outcome.status === 'finished') await deps.onReviewCompleted?.();
@@ -235,8 +231,8 @@ export async function extraPassesRun(
   const bitbucket = await deps.bitbucket();
   if (!bitbucket.configured) return withNotice(bitbucket.hint, false);
   const { confidenceThreshold: _threshold, ...settings } = await deps.settings();
-  const focus = working.startedWith ? focusOf(working.startedWith) : '';
-  const engineSettings = { ...settings, ...(focus ? { focus } : {}) };
+  const background = working.startedWith?.background;
+  const engineSettings = { ...settings, ...(background ? { background } : {}) };
   const run = nextRun(working);
   const modelId = model.handle.id;
   await progress({ update: w => ({ ...w, active: { what: 'passes', steps, step: steps[0], done: 0, total: 0, modelId, run } }), done: 0, total: 0 });

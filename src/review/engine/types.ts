@@ -1,6 +1,6 @@
 import type { BitbucketPR, IBitbucketClient } from '../../bitbucket/IBitbucketClient';
 import type { BoardModelHandle } from '../../boards/boardModels';
-import type { PersonaId } from '../../services/PrReviewService';
+import type { PersonaId, ReviewBackground } from '../../services/PrReviewService';
 import type { DiagLogger } from '../../utils/diagTypes';
 import type { TokenFigures } from '../../utils/tokenUsage';
 import type { FileDiff, ReviewFinding } from '../reviewSessionState';
@@ -122,10 +122,14 @@ export interface PassOutcome {
 
 /** The review settings the passes read. */
 export interface EngineSettings {
-  /** The developer's own review instructions; joined with `focus` and given to every review prompt. */
+  /** The developer's own review instructions; given to every review prompt as additional instructions. */
   reviewInstructions?: string;
-  /** A focus question for this review. */
-  focus?: string;
+  /**
+   * What the change is meant to do. Own text joins the additional instructions of every call; a
+   * ticket's text goes into every call inside the untrusted fence. Either way the review passes are
+   * asked to mark findings that go against it.
+   */
+  background?: ReviewBackground;
   contextLines?: number;
   excludePatterns?: string[];
   /** The model's context size when set; else the model's own, else 60000. */

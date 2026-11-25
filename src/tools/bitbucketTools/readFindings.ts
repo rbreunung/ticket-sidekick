@@ -53,6 +53,7 @@ function markersOf(f: StoredFinding, threshold: number): string[] {
   const markers: string[] = [];
   if (!f.locationUnverified && f.confidence !== undefined && f.confidence < threshold) markers.push('low confidence');
   if (f.probablyFalseAlarm) markers.push('probably a false alarm');
+  if (f.againstGoal) markers.push('against goal');
   return markers;
 }
 

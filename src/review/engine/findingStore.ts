@@ -3,7 +3,8 @@ import type { FindingStore, ReviewStep, StoredFinding } from './types';
 
 // The numbered findings of one review. A finding gets the next unused number once; a later
 // duplicate is merged into the numbered finding under the review-wide dedupe rule (stronger
-// severity, combined sources, the corroboration bump, the better provenance) and the numbered
+// severity, combined sources, the corroboration bump, the better provenance, either side's
+// "against goal" mark) and the numbered
 // finding keeps its number, title, description and recommendation. A removed finding leaves a gap.
 // Pure and vscode-free.
 
@@ -45,6 +46,8 @@ export function addFindings(store: FindingStore, incoming: NewFinding[]): { stor
           ...(survivor.provenance ? { provenance: survivor.provenance } : {}),
         };
       }
+      // Either side's "against goal" mark survives, also when the pair collapsed to the candidate.
+      if (candidate.againstGoal && !findings[i].againstGoal) findings[i] = { ...findings[i], againstGoal: true };
       duplicateOf = existing.id;
       break;
     }

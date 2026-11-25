@@ -380,6 +380,17 @@ describe('the background on the first step', () => {
     expect(viewOf(state).firstStep!.ticket.edited).toBe(true);
     state = await runAndWait(m, state, { type: 'start' });
     expect((await storedWorking(state.id)).startedWith?.background).toEqual({ kind: 'ticket', key: 'PROJ-12', text: 'Ticket PROJ-12: Add export\nOnly the CSV part.' });
+    // The review calls get what was left in the box, inside the untrusted fence and not as instructions.
+    const reviews = calls.filter(c => c.kind === 'review');
+    expect(reviews.length).toBeGreaterThan(0);
+    for (const { prompt } of reviews) {
+      const start = prompt.indexOf('«UNTRUSTED-CONTENT»\n');
+      const inside = prompt.slice(start, prompt.indexOf('\n«END-UNTRUSTED-CONTENT»'));
+      expect(start).toBeGreaterThan(-1);
+      expect(inside).toContain('Background ticket PROJ-12');
+      expect(inside).toContain('Only the CSV part.');
+      expect(prompt.slice(0, start)).not.toContain('Only the CSV part.');
+    }
   });
 
   it('Start with an emptied ticket box runs with no background, and says why', async () => {
@@ -483,6 +494,18 @@ describe('Start and the regular pass', () => {
     const m = manager();
     const state = await runAndWait(m, await open(m), { type: 'start' });
     expect(viewOf(state).results?.findings[0].markers).toEqual(['low confidence']);
+  });
+
+  it('marks a finding the reviewer says goes against the background', async () => {
+    respond = async kind => kind === 'review'
+      ? [JSON.stringify({ ...JSON.parse(findingLine(1, 2, 'Expiry set to 0', 'warning')), againstGoal: true }), JSON.stringify({ additionalFilesNeeded: [] })].join('\n')
+      : defaultRespond(kind);
+    const m = manager();
+    let state = await open(m);
+    state = await act(m, state, { type: 'background', choice: 'text' });
+    state = await act(m, state, { type: 'own-text', text: 'sessions must expire after the configured TTL' });
+    state = await runAndWait(m, state, { type: 'start' });
+    expect(viewOf(state).results?.findings[0].markers).toEqual(['against goal']);
   });
 });
 

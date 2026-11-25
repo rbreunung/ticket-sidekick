@@ -1,5 +1,5 @@
 import { ModelRequestCancelledError, type BoardModelHandle } from '../../boards/boardModels';
-import { PrReviewService } from '../../services/PrReviewService';
+import { PrReviewService, type ReviewBackground } from '../../services/PrReviewService';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { isTransientLmError, PartialLmResponseError, UnparseableReplyError, withEasierRetry, withLmRetry, type SplitBatch } from '../../utils/lmRetry';
 import { sanitizeDetails } from '../../utils/logRedaction';
@@ -221,9 +221,15 @@ export function tokenBudgetOf(settings: EngineSettings, model: Pick<BoardModelHa
   return { contextTokens, ratio, tokens: Math.floor(contextTokens * ratio) };
 }
 
-/** The text every review prompt gets as additional instructions. */
+/** The text every review prompt gets as additional instructions: the review instructions and an own-text background. */
 export function extraInstructionsOf(settings: EngineSettings): string {
-  return [settings.reviewInstructions, settings.focus].filter((s) => s && s.trim()).join('\n\n');
+  const ownText = settings.background?.kind === 'text' ? settings.background.text : undefined;
+  return [settings.reviewInstructions, ownText].filter((s) => s && s.trim()).join('\n\n');
+}
+
+/** The background a review prompt is built with; an empty one counts as none. */
+export function backgroundOf(settings: EngineSettings): ReviewBackground | undefined {
+  return settings.background?.text.trim() ? settings.background : undefined;
 }
 
 export function describeError(err: unknown): string {
