@@ -41,7 +41,7 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 - **The ticket's text is shown for trimming before it is sent.** (session-settled: user-directed — chosen over sending only the summary and description, and over sending the full capped text untouched: the developer controls what goes into every call.) Governs R11.
 - **A request with both a ticket key and text preselects the text.** (session-settled: user-directed — chosen over preselecting the ticket and over preselecting neither; the first step always waits for Start, so the developer can still switch.) Governs R12.
 - **Picked persona passes run at the same time, not one after another.** Faster on a large pull request; the critic still runs last because it checks the other passes' findings. Governs R20, R21, R22, R23, R25.
-- **A finding can be discussed on the board and in Copilot Chat.** A short thread in the detail pane for quick follow-ups, and a hand-off to Copilot Chat for a longer investigation. (session-settled: user-directed — chosen over a board thread only and over a Copilot hand-off only.) Governs R26, R27, R28, R29, R30.
+- **A finding can be discussed on the board and in Copilot Chat.** A short thread in the detail pane for quick follow-ups, and a hand-off to Copilot Chat for a longer investigation. (session-settled: user-directed — chosen over a board thread only and over a Copilot hand-off only.) Governs R26, R27, R28, R29, R30, R34, R35, R36.
 - **The board renders discussion answers and a draft preview as Markdown with highlighted code.** (session-settled: user-directed — chosen over rendering the thread only and over keeping plain text: the developer sees what they will post.) Governs R31, R32, R33.
 - **A narrow tab shows the finding as an overlay over the list.** (session-settled: user-directed — chosen over stacking the detail below the list and over a wide-only layout.) Governs R9.
 
@@ -99,13 +99,19 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 - R27. Each call of the thread receives the finding, its code, the pull request title and description, the background and the thread so far; it runs on the review model and counts toward the token usage.
 - R28. The thread is kept with the review and survives a restart; a finding with a thread counts as worked on, so the critic keeps it as a probable false alarm instead of removing it.
 - R29. When the thread has grown since the draft comment was made, the draft says so and Regenerate rebuilds it from the finding and the whole thread; the developer's edits are lost only on Regenerate.
-- R30. Discuss in chat opens Copilot Chat with a prompt that names the review and the finding number; the agent reads the finding, its thread and the diff through `bitbucket_read_findings` and `bitbucket_getPullRequestDiff`, and the conversation stays in Copilot without changing the board's draft.
+- R30. Discuss in chat opens Copilot Chat with a short prompt that names the pull request link and the finding number and asks the agent to read that finding first; the developer adds their question and sends it, and the conversation stays in Copilot without changing the board's draft.
 
 **Markdown on the board**
 
 - R31. Discussion answers may use Markdown, and the board renders them with headings, lists and code blocks highlighted by language.
 - R32. The draft comment has a Preview toggle that shows it rendered as Markdown, as Bitbucket will show it after Post; editing stays in the plain text box.
 - R33. Rendered Markdown never runs raw HTML, scripts, images or command links, since answers and drafts are model output derived from pull request content; web links open only after VS Code's own confirmation.
+
+**The hand-off to Copilot Chat**
+
+- R34. For one finding, `bitbucket_read_findings` returns its thread and the review's background as full text, along with what it returns today.
+- R35. `bitbucket_read_findings` names the commit the review read, and says so when the pull request has a newer commit, so the agent does not mix the reviewed code with the current one.
+- R36. A new read-only Bitbucket tool returns one file of the pull request at the reviewed commit, so the agent can read whole files as the review did, independent of the developer's local checkout.
 
 ### Key Flows
 
@@ -147,6 +153,7 @@ flowchart TB
 - AE11. **Covers R30.** Given finding #12, when the developer presses Discuss in chat, then Copilot Chat opens with a prompt naming the review and #12, and the agent's first step is to read that finding with `bitbucket_read_findings`.
 - AE12. **Covers R31, R33.** Given a follow-up answer containing a fenced Java block and an HTML `<script>` tag, when it is shown, then the Java block is highlighted and the tag appears as text, not run.
 - AE13. **Covers R32.** Given a draft with a fenced diff block, when the developer turns on Preview, then the block is shown highlighted as it will look in Bitbucket, and turning Preview off returns to the text box with the same text.
+- AE14. **Covers R34, R35, R36.** Given a review at commit 4f2a91c and a pull request that has since moved to 7b10e02, when the agent reads finding #12, then the reply carries its thread, the background text and a note that the review read 4f2a91c and the pull request is now at 7b10e02, and the agent can read `TransferController.java` at 4f2a91c through the new tool.
 
 ### Scope Boundaries
 
@@ -171,6 +178,7 @@ flowchart TB
 
 ### Sources / Research
 
+- File at a commit: `IBitbucketClient.getFileContent(project, repo, path, commitHash)` in `src/bitbucket/IBitbucketClient.ts`, which the review passes already use for context files.
 - Current page: `board-pages/review/page.js` (one column of sections; `results()` renders the header line, token list, notes, pass picker, requirements block and findings in order).
 - First step and its source choice: `src/boards/review/firstStep.ts` (`SourceId` is `ticket`, `goal` or `none`; a separate `question`).
 - The question goes into every review call and the ticket text only into the requirements call: `docs/review-process.md` "Upfront question" and "Requirements check".
