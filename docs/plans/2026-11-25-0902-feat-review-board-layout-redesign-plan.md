@@ -42,6 +42,7 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 - **A request with both a ticket key and text preselects the text.** (session-settled: user-directed — chosen over preselecting the ticket and over preselecting neither; the first step always waits for Start, so the developer can still switch.) Governs R12.
 - **Picked persona passes run at the same time, not one after another.** Faster on a large pull request; the critic still runs last because it checks the other passes' findings. Governs R20, R21, R22, R23, R25.
 - **A finding can be discussed on the board and in Copilot Chat.** A short thread in the detail pane for quick follow-ups, and a hand-off to Copilot Chat for a longer investigation. (session-settled: user-directed — chosen over a board thread only and over a Copilot hand-off only.) Governs R26, R27, R28, R29, R30.
+- **The board renders discussion answers and a draft preview as Markdown with highlighted code.** (session-settled: user-directed — chosen over rendering the thread only and over keeping plain text: the developer sees what they will post.) Governs R31, R32, R33.
 - **A narrow tab shows the finding as an overlay over the list.** (session-settled: user-directed — chosen over stacking the detail below the list and over a wide-only layout.) Governs R9.
 
 ### Requirements
@@ -100,6 +101,12 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 - R29. When the thread has grown since the draft comment was made, the draft says so and Regenerate rebuilds it from the finding and the whole thread; the developer's edits are lost only on Regenerate.
 - R30. Discuss in chat opens Copilot Chat with a prompt that names the review and the finding number; the agent reads the finding, its thread and the diff through `bitbucket_read_findings` and `bitbucket_getPullRequestDiff`, and the conversation stays in Copilot without changing the board's draft.
 
+**Markdown on the board**
+
+- R31. Discussion answers may use Markdown, and the board renders them with headings, lists and code blocks highlighted by language.
+- R32. The draft comment has a Preview toggle that shows it rendered as Markdown, as Bitbucket will show it after Post; editing stays in the plain text box.
+- R33. Rendered Markdown never runs raw HTML, scripts, images or command links, since answers and drafts are model output derived from pull request content; web links open only after VS Code's own confirmation.
+
 ### Key Flows
 
 - F1. A review on a wide tab
@@ -138,6 +145,8 @@ flowchart TB
 - AE9. **Covers R25.** Given Security and Performance have run and the critic has not, when the run ends, then the band offers Reliability, Maintainability and the Critic; after the critic runs, it is offered again only once a later pass adds findings.
 - AE10. **Covers R26, R27, R29.** Given finding #1 has a draft and one answer, when the developer asks a follow-up, then the answer appears below the first one, the call receives both earlier messages, and the draft says the discussion changed since it was made.
 - AE11. **Covers R30.** Given finding #12, when the developer presses Discuss in chat, then Copilot Chat opens with a prompt naming the review and #12, and the agent's first step is to read that finding with `bitbucket_read_findings`.
+- AE12. **Covers R31, R33.** Given a follow-up answer containing a fenced Java block and an HTML `<script>` tag, when it is shown, then the Java block is highlighted and the tag appears as text, not run.
+- AE13. **Covers R32.** Given a draft with a fenced diff block, when the developer turns on Preview, then the block is shown highlighted as it will look in Bitbucket, and turning Preview off returns to the text box with the same text.
 
 ### Scope Boundaries
 
@@ -156,6 +165,7 @@ flowchart TB
 - How much code around the finding the detail pane shows (R3), and whether it comes from the stored diff or the whole file.
 - Whether the coverage engine code is deleted or kept unused (R17, R18).
 - Whether a refused parallel request is retried before R23's fallback.
+- Whether "Copy for Teams" keeps stripping Markdown from drafts that now contain code blocks, or keeps code blocks as indented plain text.
 - How long a thread may grow before the oldest turns are left out of a call (R27), and how Discuss in chat behaves where Copilot Chat cannot be opened with a prompt.
 - Which documents change: the user manual pages on the review board, `docs/review-process.md` ("Upfront question", "Requirements check"), the `/ts-bitbucket` help, the review board parity ledger in `docs/architecture/migration-status.md`, and the manual checklist's Step 3.
 
