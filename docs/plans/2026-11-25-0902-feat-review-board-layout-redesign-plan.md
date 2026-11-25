@@ -13,7 +13,7 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** A developer reviewing a pull request on a wide screen sees the finding they are working on next to its code and its draft comment, without scrolling between sections. One background (a Jira ticket or their own text) tells the reviewer what the change is meant to do.
-- **Means:** A list-and-detail layout with a summary band that follows the stage of the review. One background on the first step replaces the requirements source and the upfront question. The requirements coverage check is removed for now.
+- **Means:** A list-and-detail layout with a summary band that follows the stage of the review. One background on the first step replaces the requirements source and the upfront question. The requirements coverage check is removed for now. Picked extra passes run at the same time. A finding can be discussed in a thread on the board or handed to Copilot Chat with everything the review saw.
 - **Product authority:** The maintainer's decisions in Key Decisions below. Where this plan and [`2026-11-19-0828-feat-pr-review-board-and-bitbucket-removal-plan.md`](2026-11-19-0828-feat-pr-review-board-and-bitbucket-removal-plan.md) disagree on the review board's layout, first step or requirements check, this plan wins. The staged review itself (regular pass, persona passes, critic, Explain, Post, Copy) stays as that plan defined it.
 - **Open blockers:** None.
 
@@ -23,7 +23,7 @@ execution: code
 
 ### Summary
 
-The review board becomes a two-column page: the findings list on the left, the selected finding in full on the right. A summary band above both columns shows the running pass, then the next passes to run, then folds to one line. The first step asks for one background, a Jira ticket or the developer's own text, which every review call receives. A change that goes against the background shows up as a finding marked "against goal".
+The review board becomes a two-column page: the findings list on the left, the selected finding in full on the right. A summary band above both columns shows the running pass, then the next passes to run, then folds to one line. The first step asks for one background, a Jira ticket or the developer's own text, which every review call receives. A change that goes against the background shows up as a finding marked "against goal". Picked extra passes run at the same time, capped on large reviews. Each finding has a discussion thread rendered as Markdown, a draft preview, and Discuss in chat, which hands the finding to Copilot with its thread, the background, the reviewed commit and its files.
 
 ### Problem Frame
 
@@ -184,4 +184,4 @@ flowchart TB
 - The question goes into every review call and the ticket text only into the requirements call: `docs/review-process.md` "Upfront question" and "Requirements check".
 - The ticket text caps: `src/utils/requirementsSource.ts` (`REQUIREMENTS_TEXT_MAX_CHARS` 6000, comments 8000, one comment 1500).
 - Coverage in the tool and Copy: `src/tools/bitbucketTools/readFindings.ts`, `src/review/shareFormat.ts`.
-- Directional sketches from this brainstorm (machine-local, best effort; a missing sketch is not a blocker and the requirements above govern any disagreement): `/tmp/claude-0/-home-user-ticket-sidekick/1a078609-124a-5997-84ea-b3dad766d2e7/scratchpad/sketches/`, chiefly `004-band-through-flow.html` (the chosen layout through the stages) and `003-no-coverage.html` (the first step).
+- Directional sketches from this brainstorm (machine-local, best effort; a missing sketch is not a blocker and the requirements above govern any disagreement): `/tmp/claude-0/-home-user-ticket-sidekick/1a078609-124a-5997-84ea-b3dad766d2e7/scratchpad/sketches/`, chiefly `005-mockups-dummy-data.html` (eight use cases with dummy data: first step with ticket and with own text, regular pass running, regular pass done, two passes running together, working on findings with a thread and draft preview, no findings, narrow tab), `004-band-through-flow.html` and `003-no-coverage.html`.
