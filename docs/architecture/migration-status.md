@@ -134,7 +134,7 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 | `add` | Carry over | `add … to review`: select the findings, edit one draft comment each, Post after the native confirmation; inline on a verified line, else on the activity feed; each comment reported, only the failed ones offered again |
 | `post it` | Carry over | The comment preview's confirmation is Post's preview and native confirmation |
 | `refinement` | Carry over | A refinement instruction in the comment preview is Rewrite with a typed instruction, with Undo |
-| `goal` | Dropped | The requirements coverage check was removed; a background for the review replaces it in a later change |
+| `goal` | Dropped | The requirements coverage check was removed; a goal is now given as the own-text background on the first step |
 | `finding-not-found` | Carry over | An unknown finding number is refused on the board; the read-findings tool names the numbers the review has |
 | `diff-question` | Carry over | A general question about the PR: the agent reads the findings and the diff through the tools |
 | `follow-up-failure` | Carry over | A failed follow-up or refinement keeps what was there: the earlier explanation or the hand-edited draft stays, with an error line |
@@ -214,9 +214,9 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 | `critic` | Carry over | Removes what it cannot confirm, or labels it probably a false alarm when the developer worked on it; checks only unchecked findings |
 | `partial-results` | Carry over | A pass with failed batches shows the other batches' findings under a banner |
 | `failed-review` | Carry over | No batch readable: a failure banner, no findings, Run again |
-| `upfront-question` | Carry over | The question goes into every review call; the agent passes it to the board instead of the prompt syntax (`question:`, `--`, a sentence ending in `?`) |
-| `ticket-choice` | Carry over | An explicit key wins over the PR title's, none without a key, the ticket unavailable with a reason while Jira is not configured; the title-key pause (Use / Skip) is the first step, which always stops before Start, and the quick/standard hint chip goes with the chips |
-| `ticket-read` | Dropped | The requirements coverage check was removed; a background for the review replaces it in a later change |
+| `upfront-question` | Carry over | The question becomes the developer's own text as the background on the first step, which goes into every review call; the agent passes it to the board as `background` instead of the prompt syntax (`question:`, `--`, a sentence ending in `?`) |
+| `ticket-choice` | Carry over | The background choice on the first step: an explicit key wins over the PR title's, none without a key, own text preselected when the request also names text, the ticket unavailable with a reason while Jira is not configured; the title-key pause (Use / Skip) is the first step, which always stops before Start, and the quick/standard hint chip goes with the chips |
+| `ticket-read` | Carry over | The ticket is read before Start into an editable box (summary, description, newest comments, within the size caps), with the reason shown when it cannot be read; it is background for the reviewer, not a coverage check |
 | `requirements-call` | Dropped | The requirements coverage check was removed; a background for the review replaces it in a later change |
 | `coverage-block` | Dropped | The requirements coverage check was removed; a background for the review replaces it in a later change |
 | `token-meter` | Carry over | Every model call is metered, a frozen host model included, and recorded toward the counters |

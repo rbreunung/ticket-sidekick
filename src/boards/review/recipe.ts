@@ -4,18 +4,18 @@ import { findJiraKeyInText } from '../../utils/branchParser';
 
 // What a pull request review board is asked for: the pull request, by its address. Two addresses of
 // the same pull request (one ending in /overview, one in /diff, one with a query) are one source, so
-// asking again finds the stored review. What the request names for the first step (a Jira key, an
-// upfront question) rides along; it does not change which session the board is. vscode-free.
+// asking again finds the stored review. What the request names for the first step (a Jira key, the
+// developer's own background text) rides along; it does not change which session the board is. vscode-free.
 
 export const REVIEW_KIND = 'review';
 
-const MAX_QUESTION_CHARS = 2000;
+const MAX_BACKGROUND_CHARS = 2000;
 
 export interface ReviewPrefill {
-  /** A Jira key the request named for the requirements check. */
+  /** A Jira key the request named as the background. */
   ticketKey?: string;
-  /** A question the developer asked with the request. */
-  question?: string;
+  /** The developer's own background text (a goal or a focus) the request named. */
+  background?: string;
 }
 
 export interface ReviewRecipe {
@@ -47,14 +47,14 @@ export function parseReviewUrl(input: unknown): { ok: true; recipe: Omit<ReviewR
 }
 
 function prefillOf(input: unknown): ReviewPrefill | undefined {
-  const v = (typeof input === 'object' && input !== null ? input : {}) as { ticketKey?: unknown; question?: unknown };
+  const v = (typeof input === 'object' && input !== null ? input : {}) as { ticketKey?: unknown; background?: unknown };
   const ticketKey = typeof v.ticketKey === 'string' ? findJiraKeyInText(v.ticketKey.trim().toUpperCase()) : undefined;
-  const question = typeof v.question === 'string' ? v.question.trim().slice(0, MAX_QUESTION_CHARS) : '';
-  if (!ticketKey && !question) return undefined;
-  return { ...(ticketKey ? { ticketKey } : {}), ...(question ? { question } : {}) };
+  const background = typeof v.background === 'string' ? v.background.trim().slice(0, MAX_BACKGROUND_CHARS) : '';
+  if (!ticketKey && !background) return undefined;
+  return { ...(ticketKey ? { ticketKey } : {}), ...(background ? { background } : {}) };
 }
 
-/** The recipe of an open request `{ url, ticketKey?, question? }`, or why the board cannot open. */
+/** The recipe of an open request `{ url, ticketKey?, background? }`, or why the board cannot open. */
 export function reviewRecipeOf(input: unknown): { ok: true; recipe: ReviewRecipe } | { ok: false; reason: string } {
   const v = (typeof input === 'object' && input !== null ? input : {}) as { url?: unknown; prefill?: unknown };
   const parsed = parseReviewUrl(v.url);

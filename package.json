@@ -213,7 +213,7 @@
       {
         "name": "bitbucket_open_review",
         "displayName": "Open a pull request review",
-        "modelDescription": "Opens the review board of a Bitbucket pull request in its own editor tab, where the user starts the review and decides how deep it goes. Use it whenever the user asks to review a pull request or pastes a pull request link: a plain chat request with a pull request link means opening a review. Pass a Jira key or a question the user named. The answer says only whether the board opened, not the review's result: the review runs on the board, and bitbucket_read_findings reads its findings afterwards. Changes nothing in Bitbucket.",
+        "modelDescription": "Opens the review board of a Bitbucket pull request in its own editor tab, where the user starts the review and decides how deep it goes. Use it whenever the user asks to review a pull request or pastes a pull request link: a plain chat request with a pull request link means opening a review. Pass a Jira key the user named as ticketKey and any goal or focus text as background. The answer says only whether the board opened, not the review's result: the review runs on the board, and bitbucket_read_findings reads its findings afterwards. Changes nothing in Bitbucket.",
         "userDescription": "Opens the review board of a Bitbucket pull request in its own editor tab, where the user starts the review and decides how deep it goes.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "bitbucketOpenReview",
@@ -229,11 +229,11 @@
               "description": "The pull request's link, e.g. https://bitbucket.example.com/projects/KEY/repos/repo/pull-requests/42 or https://bitbucket.org/workspace/repo/pull-requests/42."
             },
             "ticketKey": {
-              "description": "A Jira key the user named to check the pull request against, e.g. PROJ-123.",
+              "description": "A Jira key the user named as the background for the reviewer, e.g. PROJ-123. The board reads the ticket before the review starts.",
               "type": "string"
             },
-            "question": {
-              "description": "A question the user asked about the pull request, to answer with the review.",
+            "background": {
+              "description": "A goal or focus text the user gave for the review, e.g. \"watch thread safety\"; it is the background for the reviewer. A Jira key goes in ticketKey, not here.",
               "type": "string"
             }
           },

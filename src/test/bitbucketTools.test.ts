@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BitbucketConfig, BitbucketPR } from '../bitbucket/IBitbucketClient';
 import type { BoardModelHandle } from '../boards/boardModels';
 import type { ReviewBoardDeps } from '../boards/review/deps';
-import { reviewKind, type ReviewWorking } from '../boards/review/kind';
-import { REVIEW_KIND } from '../boards/review/recipe';
+import { reviewKind, type ReviewView, type ReviewWorking } from '../boards/review/kind';
+import { REVIEW_KIND, reviewSessionId } from '../boards/review/recipe';
 import { registerKind } from '../sessions/boardKind';
 import { SessionManager, type BoardState } from '../sessions/sessionManager';
 import { SessionStore } from '../sessions/sessionStore';
@@ -340,14 +340,22 @@ describe('bitbucket_read_findings', () => {
 });
 
 describe('bitbucket_open_review', () => {
-  it('answers "opened" without waiting for the review: the board stops on its first step and nothing is reviewed', async () => {
+  it('answers "opened" without waiting for the review: the board stops on its first step with the background text, and nothing is reviewed', async () => {
     const m = manager();
-    const result = await callTool(tool('bitbucket_open_review'), { url: PR_URL, ticketKey: 'PROJ-12', question: 'Is the export safe?' }, toolDeps(m));
+    const result = await callTool(tool('bitbucket_open_review'), { url: PR_URL, ticketKey: 'PROJ-12', background: 'watch thread safety' }, toolDeps(m));
 
     expect(result.text).toMatch(/^Opened in an editor tab: .+\. The review runs on the board when the user starts it; read its result with bitbucket_read_findings\.$/);
-    expect(opened).toEqual([{ url: PR_URL, ticketKey: 'PROJ-12', question: 'Is the export safe?' }]);
+    expect(opened).toEqual([{ url: PR_URL, ticketKey: 'PROJ-12', background: 'watch thread safety' }]);
+    const state = await idle(m, reviewSessionId({ url: PR_URL }));
+    expect((state.view as ReviewView).firstStep).toMatchObject({ choice: 'text', ownText: 'watch thread safety', ticketKey: 'PROJ-12' });
     expect(client.getPullRequestDiffCalls).toEqual([]);
     expect(modelCalls).toBe(0);
+  });
+
+  it('on a review past the first step, says the board keeps its background and New review starts over', async () => {
+    await reviewOnBoard();
+    const result = await callTool(tool('bitbucket_open_review'), { url: PR_URL, background: 'watch thread safety' }, toolDeps());
+    expect(result.text).toContain('A review of this pull request is shown already, so the board keeps its background; New review on the board starts over on the first step, where the background can be changed.');
   });
 
   it('answers the reason when the link is not a pull request', async () => {

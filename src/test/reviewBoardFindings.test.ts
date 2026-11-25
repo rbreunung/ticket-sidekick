@@ -143,13 +143,14 @@ async function runAndWait(m: SessionManager, state: BoardState, request: Record<
   return idle(m, state.id);
 }
 
-/** A review of `files` files, one finding per file, numbered #1 to #n by file, started with an upfront question. */
+/** A review of `files` files, one finding per file, numbered #1 to #n by file, started with the developer's own text as the background. */
 async function reviewed(m: SessionManager, files: number): Promise<BoardState> {
   client.rawDiff = prDiff(files);
   const opened = await m.open(REVIEW_KIND, { url: PR_URL });
   if (!opened.ok) throw new Error(opened.reason);
   let state = await idle(m, opened.id);
-  state = await act(m, state, { type: 'question', text: 'Is the export safe for large reports?' });
+  state = await act(m, state, { type: 'background', choice: 'text' });
+  state = await act(m, state, { type: 'own-text', text: 'Is the export safe for large reports?' });
   state = await runAndWait(m, state, { type: 'start' });
   calls = [];
   recorded = [];
@@ -189,7 +190,7 @@ afterEach(() => {
 });
 
 describe('Explain', () => {
-  it('explaining #3 makes one model call with its code, the pull request and the upfront question, and shows the answer; explaining again replaces it', async () => {
+  it('explaining #3 makes one model call with its code, the pull request and the own-text background, and shows the answer; explaining again replaces it', async () => {
     const m = manager();
     let state = await reviewed(m, 3);
     state = await runAndWait(m, state, { type: 'explain', number: 3 });

@@ -1,7 +1,8 @@
 import { announce, api, h, startBoard } from '../shared/board.js';
 
-// The pull request review board, one column. The first step: the model, the source (a Jira ticket,
-// a goal or none) and an optional question; nothing runs before Start. After the regular pass: a
+// The pull request review board, one column. The first step: the model and one background for the
+// reviewer (a Jira ticket read into an editable box, the developer's own text, or none); only the
+// ticket read runs before Start, and Start waits for it. After the regular pass: a
 // header line (pull request, model, passes run) with the token usage per pass, the banners of the
 // last run, the pass suggestion and picker, the findings, and Run again. Under the banners, what the
 // passes did not review and the findings they dropped. Each finding shows its line, provenance, confidence and source, its description and
@@ -22,8 +23,8 @@ const SEVERITY_TEXT = { critical: 'Critical', warning: 'Warning', suggestion: 'S
 
 /** The action that sends a field's text, by field id. */
 const FIELD_ACTIONS = {
-  goal: text => ({ type: 'goal', text }),
-  question: text => ({ type: 'question', text }),
+  'own-text': text => ({ type: 'own-text', text }),
+  'ticket-text': text => ({ type: 'ticket-text', text }),
   'ticket-key': key => ({ type: 'ticket-key', key }),
 };
 
@@ -102,37 +103,65 @@ function modelRow(view, board, off) {
     model.problem ? h('p', { class: 'banner' }, model.problem) : null);
 }
 
-function sourceRow(step, board, off) {
-  return h('fieldset', { id: 'source', class: 'sources' },
-    h('legend', {}, 'Requirements source'),
-    step.sources.map(s => h('label', { class: 'source' },
+function backgroundRow(step, board, off) {
+  return h('fieldset', { id: 'background', class: 'sources' },
+    h('legend', {}, 'Background for the reviewer'),
+    step.choices.map(c => h('label', { class: 'source' },
       h('input', {
-        type: 'radio', name: 'source', id: `source-${s.id}`, value: s.id, checked: s.id === step.source, disabled: off || !s.available,
-        onChange: () => whenSaved(board, () => board.act({ type: 'source', source: s.id })),
-      }), ` ${s.label}`,
-      s.reason ? h('span', { class: 'muted', id: `source-${s.id}-reason` }, ` ${s.reason}`) : null)));
+        type: 'radio', name: 'background', id: `background-${c.id}`, value: c.id, checked: c.id === step.choice, disabled: off || !c.available,
+        onChange: () => whenSaved(board, () => board.act({ type: 'background', choice: c.id })),
+      }), ` ${c.label}`,
+      c.reason ? h('span', { class: 'muted', id: `background-${c.id}-reason` }, ` ${c.reason}`) : null)));
 }
 
-function ticketRow(step, board, off) {
-  return h('div', { class: 'bar' },
-    h('label', {}, 'Ticket key', fieldInput('input', 'ticket-key', step.ticketKey, board, off, { type: 'text', size: 16, placeholder: 'PROJ-123', 'aria-label': 'Ticket key' })));
+/** A ticket read for the key in the field is going on. */
+const readingTicket = (step, board) => step.ticket.state === 'reading' || Boolean(board.running(`read-ticket:${step.ticketKey}`));
+
+const TICKET_STATE_TEXT = {
+  idle: 'Not read yet.',
+  reading: 'Reading the ticket…',
+  read: 'Read from Jira. What you leave in the box is what the reviewer gets.',
+};
+
+function ticketBlock(step, board, off) {
+  const { ticket } = step;
+  const reading = readingTicket(step, board);
+  return [
+    h('div', { class: 'bar' },
+      h('label', {}, 'Ticket key', fieldInput('input', 'ticket-key', step.ticketKey, board, off, { type: 'text', size: 16, placeholder: 'PROJ-123', 'aria-label': 'Ticket key' }))),
+    ticket.state === 'failed'
+      ? h('p', { id: 'ticket-reason', class: 'banner', role: 'status' }, ticket.reason ?? 'The ticket could not be read.')
+      : h('p', { id: 'ticket-state', class: 'muted', role: 'status' }, TICKET_STATE_TEXT[ticket.state] ?? ''),
+    textField('ticket-text', 'Ticket text', ticket.text, board, off || reading, 10),
+  ];
+}
+
+/** The key whose read this page asked for and the session has not taken up yet, so a repaint does not ask twice. */
+let readAsked;
+
+/** Starts the ticket read the session asks for, once: when the ticket is picked, its key changes, or on open. */
+function readTicketWhenNeeded(step, board, off) {
+  if (!step.ticket.readNeeded) { readAsked = undefined; return; }
+  if (off || readAsked === step.ticketKey || board.running(`read-ticket:${step.ticketKey}`)) return;
+  readAsked = step.ticketKey;
+  queueMicrotask(() => { void whenSaved(board, () => board.run({ type: 'read-ticket' })); });
 }
 
 function firstStep(view, board, off) {
   const step = view.firstStep;
-  const fields = { goal: step.goal, question: step.question, 'ticket-key': step.ticketKey };
+  const fields = { 'own-text': step.ownText, 'ticket-text': step.ticket.text, 'ticket-key': step.ticketKey };
+  const reading = step.choice === 'ticket' && readingTicket(step, board);
+  readTicketWhenNeeded(step, board, off);
   return h('section', { id: 'first-step', 'aria-label': 'First step' },
     modelRow(view, board, off),
-    h('h2', {}, 'Requirements'),
-    sourceRow(step, board, off),
-    step.source === 'ticket' ? ticketRow(step, board, off) : null,
-    step.source === 'goal' ? textField('goal', 'Goal', step.goal, board, off, 3) : null,
-    h('h2', {}, 'Question'),
-    textField('question', 'An optional question for the review', step.question, board, off, 2),
+    h('h2', {}, 'Background'),
+    backgroundRow(step, board, off),
+    step.choice === 'ticket' ? ticketBlock(step, board, off) : null,
+    step.choice === 'text' ? textField('own-text', 'Your text: a goal, or what the reviewer should watch for', step.ownText, board, off, 4) : null,
     step.notice ? h('p', { id: 'first-step-notice', class: 'banner', role: 'status' }, step.notice) : null,
     h('div', { class: 'bar' },
       h('vscode-button', {
-        id: 'start', disabled: off || !step.canStart,
+        id: 'start', disabled: off || reading || !step.canStart,
         onClick: () => afterSaving(board, fields, () => board.run({ type: 'start' })),
       }, 'Start'),
       step.storedReview ? h('vscode-button', { id: 'back-to-review', secondary: true, disabled: off, onClick: () => whenSaved(board, () => board.act({ type: 'back-to-review' })) }, 'Back to the review') : null,

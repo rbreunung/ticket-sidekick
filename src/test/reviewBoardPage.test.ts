@@ -5,7 +5,7 @@ import type { BoardState } from '../sessions/sessionManager';
 import { installFakePage, removeFakePage, settle, type FakeElement, type FakePage } from './helpers/fakeDom';
 
 // The pull request review board's page in its editor tab, and the review start screen's page: the
-// first step (model, requirements source, goal, question, Start), and after the regular pass the
+// first step (model, background: Jira ticket with its box, own text or none, Start), and after the regular pass the
 // one-column results (header line, findings). The extension side is a
 // canned state. Everything from Bitbucket, Jira or the model must reach the page as text.
 
@@ -46,12 +46,13 @@ async function type(el: FakeElement, text: string, leave = true): Promise<void> 
 
 function firstStep(extra: Partial<FirstStepView> = {}): FirstStepView {
   return {
-    sources: [
+    choices: [
       { id: 'ticket', label: 'Jira ticket', available: true },
-      { id: 'goal', label: 'A goal', available: true },
+      { id: 'text', label: 'My own text', available: true },
       { id: 'none', label: 'None', available: true },
     ],
-    source: 'none', ticketKey: '', goal: '', question: '',
+    choice: 'none', ticketKey: '', ownText: '',
+    ticket: { text: '', state: 'idle', edited: false, readNeeded: false },
     canStart: true, storedReview: false, ...extra,
   };
 }
@@ -151,32 +152,63 @@ describe('the review board page: first step', () => {
     expect(posted('run')).toEqual([]);
   });
 
-  it('shows the ticket source as unavailable with its reason', async () => {
+  it('shows the ticket choice as unavailable with its reason, and own text and none can still be picked', async () => {
     await loadBoard(boardState(view({
-      firstStep: firstStep({ sources: [
+      firstStep: firstStep({ choices: [
         { id: 'ticket', label: 'Jira ticket', available: false, reason: 'Jira is not configured, so no ticket can be read.' },
-        { id: 'goal', label: 'A goal', available: true },
+        { id: 'text', label: 'My own text', available: true },
         { id: 'none', label: 'None', available: true },
       ] }),
     })));
-    expect(must('source-ticket').disabled).toBe(true);
-    expect(must('source-none').checked).toBe(true);
-    expect(must('source-ticket-reason').textContent).toMatch(/Jira is not configured/);
+    expect(must('background-ticket').disabled).toBe(true);
+    expect(must('background-none').checked).toBe(true);
+    expect(must('background-ticket-reason').textContent).toMatch(/Jira is not configured/);
+    must('background-text').dispatch('change');
+    await settle();
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'background', choice: 'text' } }]);
   });
 
-  it('leaving the goal field sends only the goal, and the first step has no Reword or reworded points', async () => {
-    await loadBoard(boardState(view({ firstStep: firstStep({ source: 'goal' }) })));
-    await type(must('goal'), 'only backend endpoint, export button later');
-    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'goal', text: 'only backend endpoint, export button later' } }]);
+  it('leaving the own text box sends only the text, and the first step has no goal, question or Reword', async () => {
+    await loadBoard(boardState(view({ firstStep: firstStep({ choice: 'text' }) })));
+    await type(must('own-text'), 'only backend endpoint, export button later');
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'own-text', text: 'only backend endpoint, export button later' } }]);
     expect(posted('run')).toEqual([]);
-    for (const id of ['reword', 'points', 'reword-error']) expect(byId(id), id).toBeNull();
+    for (const id of ['goal', 'question', 'reword', 'points', 'reword-error']) expect(byId(id), id).toBeNull();
   });
 
-  it('Start sends a typed question first, then starts the regular pass; nothing else is posted', async () => {
-    await loadBoard(boardState(view()));
-    await type(must('question'), 'does this handle retries?', false);
+  it('starts the ticket read the session asks for once, shows the box as being read and keeps Start waiting', async () => {
+    await loadBoard(boardState(view({ firstStep: firstStep({ choice: 'ticket', ticketKey: 'PROJ-12', ticket: { text: '', state: 'idle', edited: false, readNeeded: true } }) })));
+    expect(posted('run')).toEqual([{ revision: 1, request: { type: 'read-ticket' } }]);
+
+    await push({ running: [{ size: 'call', what: 'read-ticket:PROJ-12', label: 'the read of PROJ-12', done: 0, total: 1 }],
+      view: view({ firstStep: firstStep({ choice: 'ticket', ticketKey: 'PROJ-12', ticket: { text: '', state: 'reading', edited: false, readNeeded: false } }) }) });
+    expect(must('ticket-state').textContent).toBe('Reading the ticket…');
+    expect(must('ticket-text').disabled).toBe(true);
+    expect(must('start').disabled).toBe(true);
+    expect(posted('run')).toHaveLength(1);
+
+    await push({ running: [], view: view({ firstStep: firstStep({ choice: 'ticket', ticketKey: 'PROJ-12', ticket: { text: 'Ticket PROJ-12: Add export', state: 'read', edited: false, readNeeded: false } }) }) });
+    expect(must('ticket-text').value).toBe('Ticket PROJ-12: Add export');
+    expect(must('start').disabled).toBeFalsy();
+    await type(must('ticket-text'), 'Ticket PROJ-12: only the CSV part');
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'ticket-text', text: 'Ticket PROJ-12: only the CSV part' } }]);
+  });
+
+  it('shows why the ticket could not be read, and Start stays available', async () => {
+    await loadBoard(boardState(view({ firstStep: firstStep({
+      choice: 'ticket', ticketKey: 'PROJ-123',
+      ticket: { text: '', state: 'failed', reason: 'The ticket PROJ-123 was not found in Jira, or you have no access to it.', edited: false, readNeeded: false },
+    }) })));
+    expect(must('ticket-reason').textContent).toBe('The ticket PROJ-123 was not found in Jira, or you have no access to it.');
+    expect(must('start').disabled).toBeFalsy();
+    expect(posted('run')).toEqual([]);
+  });
+
+  it('Start sends a typed own text first, then starts the regular pass; nothing else is posted', async () => {
+    await loadBoard(boardState(view({ firstStep: firstStep({ choice: 'text' }) })));
+    await type(must('own-text'), 'does this handle retries?', false);
     await click(must('start'));
-    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'question', text: 'does this handle retries?' } }]);
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'own-text', text: 'does this handle retries?' } }]);
     expect(posted('run')).toEqual([{ revision: 1, request: { type: 'start' } }]);
     for (const message of page.posted) {
       expect(ACCEPTED_OPS.has(message.op), message.op).toBe(true);
@@ -426,13 +458,13 @@ describe('the review board page: a field left by pressing a button', () => {
     selectedCount: 1, post: { count: 1 }, copy: { scope: 'selected', count: 1 },
   });
 
-  it('a mouse press on Start after typing the question saves the question first and starts once; the button is not replaced under the pointer', async () => {
-    await loadBoard(boardState(view()));
+  it('a mouse press on Start after typing the own text saves it first and starts once; the button is not replaced under the pointer', async () => {
+    await loadBoard(boardState(view({ firstStep: firstStep({ choice: 'text' }) })));
     const start = must('start');
-    const question = must('question');
+    const question = must('own-text');
     question.value = 'does this handle retries?';
     question.dispatch('input');
-    // The press: the pointer goes down on Start, which takes the focus from the question.
+    // The press: the pointer goes down on Start, which takes the focus from the text box.
     page.document.dispatch('pointerdown');
     question.dispatch('change');
     await settle();
@@ -441,7 +473,7 @@ describe('the review board page: a field left by pressing a button', () => {
     page.document.dispatch('pointerup');
     start.dispatch('click');
     await settle();
-    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'question', text: 'does this handle retries?' } }]);
+    expect(posted('action')).toEqual([{ revision: 1, action: { type: 'own-text', text: 'does this handle retries?' } }]);
     expect(posted('run')).toEqual([{ revision: 1, request: { type: 'start' } }]);
   });
 

@@ -430,7 +430,8 @@ describe('Run again', () => {
     const m = manager();
     let state = await open(m);
     client.rawDiff = prDiff(2);
-    state = await act(m, state, { type: 'question', text: 'does this handle retries?' });
+    state = await act(m, state, { type: 'background', choice: 'text' });
+    state = await act(m, state, { type: 'own-text', text: 'does this handle retries?' });
     state = await runAndWait(m, state, { type: 'start' });
     state = await runAndWait(m, state, { type: 'passes' });
     await storeWork(state.id, { explanations: { 1: { text: 'Explained.' } }, drafts: {} });
@@ -476,14 +477,15 @@ describe('the results of a review', () => {
     expect(results.tokens.map(t => t.pass)).toEqual(['Regular pass']);
     await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'recheck' })).rejects.toThrow('Unknown run.');
     await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'reword' })).rejects.toThrow('Unknown run.');
-    await expect(act(m, state, { type: 'source', source: 'none' })).rejects.toThrow(/New review/);
+    await expect(act(m, state, { type: 'background', choice: 'none' })).rejects.toThrow(/New review/);
     await expect(act(m, state, { type: 'ticket-key', key: 'PROJ-99' })).rejects.toThrow(/New review/);
   });
 
-  it('the question and the model stay as the review was started', async () => {
+  it('the background and the model stay as the review was started', async () => {
     const m = manager();
     const state = await reviewed(m, 2);
-    await expect(act(m, state, { type: 'question', text: 'other question' })).rejects.toThrow(/New review/);
+    await expect(act(m, state, { type: 'own-text', text: 'other text' })).rejects.toThrow(/New review/);
+    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'read-ticket' })).rejects.toThrow(/New review/);
   });
 });
 

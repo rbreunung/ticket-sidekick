@@ -8,9 +8,11 @@ import { findJiraKeyInText } from '../../utils/branchParser';
 import { capitalised } from '../../utils/textCase';
 import { modelLabel, reviewModelState, REVIEW_MODEL_SETTING, type BoardModelInfo } from '../boardModels';
 import { DEFAULT_CONFIDENCE_THRESHOLD, type ReviewBoardDeps } from './deps';
+import { readTicketGuarded } from '../../review/ticketRead';
 import {
-  FIRST_STEP_ACTIONS, JIRA_NOT_CONFIGURED_REASON, emptyFirstStep, reduceFirstStep, sourceOf, startBlocker, ticketKeyOf,
-  type FirstStep, type FirstStepAction, type FirstStepContext, type SourceId,
+  FIRST_STEP_ACTIONS, JIRA_NOT_CONFIGURED_REASON, applyTicketRead, choiceOf, emptyFirstStep, readBlocker, reduceFirstStep, resolveBackground,
+  startBlocker, ticketEdited, ticketKeyOf, ticketReadNeeded, withoutTicketRead,
+  type Background, type BackgroundChoice, type FirstStep, type FirstStepAction, type FirstStepContext, type TicketReadState,
 } from './firstStep';
 import { REVIEW_KIND, reviewRecipeOf, type ReviewRecipe } from './recipe';
 import {
@@ -83,7 +85,10 @@ export interface ActivePass {
 /** What the regular pass was started with. */
 export interface StartedWith {
   modelId: string;
-  question: string;
+  /** The ticket box or the own text as Start found it; none when nothing usable was given. */
+  background?: Background;
+  /** Why the review has no background though a ticket was chosen: unreadable, not read, or an empty box. */
+  backgroundReason?: string;
   confidenceThreshold: number;
 }
 
@@ -141,7 +146,7 @@ export type ReviewAction =
   | FindingAction
   | PostAction;
 
-export type ReviewRunRequest = { type: 'start' } | { type: 'passes' } | { type: 'again' } | FindingRunRequest;
+export type ReviewRunRequest = { type: 'read-ticket' } | { type: 'start' } | { type: 'passes' } | { type: 'again' } | FindingRunRequest;
 
 export interface DraftView {
   text: string;
@@ -172,12 +177,23 @@ export interface FindingView {
   draft?: DraftView;
 }
 
+export interface TicketBoxView {
+  text: string;
+  state: TicketReadState;
+  /** Why the last read failed. */
+  reason?: string;
+  /** The developer changed the box since it was filled; a new read asks before replacing it. */
+  edited: boolean;
+  /** The ticket should be read now; the page starts the read. */
+  readNeeded: boolean;
+}
+
 export interface FirstStepView {
-  sources: Array<{ id: SourceId; label: string; available: boolean; reason?: string }>;
-  source: SourceId;
+  choices: Array<{ id: BackgroundChoice; label: string; available: boolean; reason?: string }>;
+  choice: BackgroundChoice;
   ticketKey: string;
-  goal: string;
-  question: string;
+  ticket: TicketBoxView;
+  ownText: string;
   notice?: string;
   canStart: boolean;
   startBlocker?: string;
@@ -397,19 +413,24 @@ function progressText(working: ReviewWorking): string | undefined {
   return active.total > 0 ? `${name}: ${active.done} of ${active.total} batches` : `${name}: starting`;
 }
 
-/** The source as the first step shows it. */
-function sourceFields(session: ReviewSession): Pick<FirstStepView, 'sources' | 'source' | 'ticketKey' | 'goal'> {
+/** The background as the first step shows it. */
+function backgroundFields(session: ReviewSession): Pick<FirstStepView, 'choices' | 'choice' | 'ticketKey' | 'ticket' | 'ownText'> {
   const step = session.working.firstStep;
   const ctx = contextOf(session);
+  const { ticket } = step;
   return {
-    sources: [
+    choices: [
       { id: 'ticket', label: 'Jira ticket', available: ctx.jiraConfigured, ...(ctx.jiraConfigured ? {} : { reason: JIRA_NOT_CONFIGURED_REASON }) },
-      { id: 'goal', label: 'A goal', available: true },
+      { id: 'text', label: 'My own text', available: true },
       { id: 'none', label: 'None', available: true },
     ],
-    source: sourceOf(step, ctx),
+    choice: choiceOf(step, ctx),
     ticketKey: ticketKeyOf(step, ctx),
-    goal: step.goal,
+    ticket: {
+      text: ticket.text, state: ticket.state, ...(ticket.reason ? { reason: ticket.reason } : {}),
+      edited: ticketEdited(ticket), readNeeded: ticketReadNeeded(step, ctx),
+    },
+    ownText: step.ownText,
   };
 }
 
@@ -418,8 +439,7 @@ function firstStepView(session: ReviewSession): FirstStepView {
   const ctx = contextOf(session);
   const start = startBlocker(step, ctx);
   return {
-    ...sourceFields(session),
-    question: step.question,
+    ...backgroundFields(session),
     ...(step.notice ? { notice: step.notice } : {}),
     canStart: !start,
     ...(start ? { startBlocker: start } : {}),
@@ -457,7 +477,7 @@ async function readModels(deps: ReviewBoardDeps): Promise<ReviewModels> {
   return { setting, state: state.state, options: listed.map(m => ({ id: m.id, label: modelLabel(m) })) };
 }
 
-const RUN_TYPES = new Set(['start', 'passes', 'again']);
+const RUN_TYPES = new Set(['read-ticket', 'start', 'passes', 'again']);
 
 function isRunRequest(request: unknown): request is ReviewRunRequest {
   const type = (request as { type?: unknown } | null)?.type;
@@ -468,12 +488,59 @@ function workCount(working: ReviewWorking): string {
   return `${Object.keys(working.explanations).length} explanation(s) and ${Object.keys(working.drafts).length} draft comment(s)`;
 }
 
+/** The ticket read before Start: it fills the box, after asking when the developer edited it. */
+function beginReadTicket(session: ReviewSession): RunBegun<ReviewWorking> {
+  const { working } = session;
+  if (working.stage !== 'first-step') return { ok: false, reason: 'Press New review to change the background.' };
+  const ctx = contextOf(session);
+  const blocker = readBlocker(working.firstStep, ctx);
+  if (blocker) return { ok: false, reason: blocker };
+  const key = ticketKeyOf(working.firstStep, ctx);
+  const ticket = { ...working.firstStep.ticket, state: 'reading' as const, key };
+  delete ticket.reason;
+  return {
+    ok: true, size: 'call', what: `read-ticket:${key}`, label: `the read of ${key}`, total: 1,
+    working: { ...working, firstStep: { ...working.firstStep, ticket } },
+  };
+}
+
+async function readTicketRun(session: ReviewSession, deps: ReviewBoardDeps): Promise<RunFinished<ReviewWorking>> {
+  const { ticket } = session.working.firstStep;
+  const key = ticket.key ?? '';
+  /** The read was declined: the box keeps the developer's text, with the notice saying why. */
+  const kept = (notice: string): RunFinished<ReviewWorking> => ({
+    update: w => {
+      if (w.firstStep.ticket.key !== key) return w;
+      return { ...w, firstStep: { ...w.firstStep, ticket: { ...w.firstStep.ticket, state: 'read' }, notice } };
+    },
+  });
+  if (ticketEdited(ticket)) {
+    const replace = await deps.confirm({
+      title: `Replace the text in the ticket box with ${key}?`,
+      detail: 'You changed the text in the ticket box. Reading the ticket replaces it, and your changes are lost.',
+      button: 'Replace',
+    });
+    // The developer's text stays the ticket background, so it is not read again by itself.
+    if (!replace) return kept('Not read: your text in the ticket box was kept.');
+  }
+  const jira = await deps.jira();
+  if (!jira) {
+    return { update: w => (w.firstStep.ticket.key === key
+      ? { ...w, firstStep: { ...w.firstStep, ticket: { state: 'failed', key, text: '', readText: '', reason: JIRA_NOT_CONFIGURED_REASON } } } : w) };
+  }
+  const result = await readTicketGuarded(() => jira.readRequirements(key));
+  if (!result.ok) deps.onDiag?.('warn', 'Review board: the background ticket could not be read', { key, reason: result.reason });
+  return { update: w => ({ ...w, firstStep: applyTicketRead(w.firstStep, key, result) }) };
+}
+
 function startRun(
   session: ReviewSession, deps: ReviewBoardDeps, progress: RunProgress<ReviewWorking>, signal: AbortSignal,
 ): Promise<RunFinished<ReviewWorking>> {
   const { working } = session;
+  const resolved = resolveBackground(working.firstStep, contextOf(session));
   return regularRun(session, deps, progress, signal, {
-    question: working.firstStep.question.trim(),
+    ...(resolved.background ? { background: resolved.background } : {}),
+    ...(resolved.reason ? { backgroundReason: resolved.reason } : {}),
     confirm: {
       title: 'Replace the stored review?',
       detail: `The stored review has ${workCount(working)}. A new review replaces them.`,
@@ -490,7 +557,8 @@ function runAgainRun(
   const { working } = session;
   const startedWith = working.startedWith!;
   return regularRun(session, deps, progress, signal, {
-    question: startedWith.question,
+    ...(startedWith.background ? { background: startedWith.background } : {}),
+    ...(startedWith.backgroundReason ? { backgroundReason: startedWith.backgroundReason } : {}),
     confirm: {
       title: 'Run the whole review again?',
       detail: `The review has ${workCount(working)}. Running it again from the regular pass loses them.`,
@@ -518,8 +586,8 @@ function beginResultsRun(session: ReviewSession, request: ReviewRunRequest): Run
 
 export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, ReviewAction, ReviewView, ReviewBoardDeps> = {
   kind: REVIEW_KIND,
-  // 2: the requirements check and the goal rewording were removed; a review stored before is rebuilt
-  // from its recipe and opens on the first step.
+  // 2: the requirements check and the goal rewording were removed, and the first step has one
+  // background; a review stored before is rebuilt from its recipe and opens on the first step.
   formatVersion: 2,
   title: recipe => `Review: ${recipe.project}/${recipe.repo}#${recipe.prId}`,
   validate: async input => reviewRecipeOf(input),
@@ -528,21 +596,27 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
   sourceLabel: recipe => recipe.url,
   initialWorking: recipe => ({ stage: 'first-step', firstStep: emptyFirstStep(recipe.prefill), passes: [], explanations: {}, drafts: {} }),
 
-  // The board asked for again with a ticket key or a question: laid over the first step as a new
-  // board would take them, the model picked kept. A review that is shown stays as it is; New review
-  // goes back to the first step.
+  // The board asked for again with a ticket key or background text: laid over the first step as a
+  // new board would take them, the model picked kept. Text preselects the own text and the key stays
+  // in the ticket field; a key alone preselects the ticket when Jira is configured. A review that is
+  // shown stays as it is; New review goes back to the first step.
   reopen(session, recipe) {
     const { working } = session;
     const prefill = recipe.prefill;
     if (!prefill || working.stage !== 'first-step') return working;
-    const step = { ...working.firstStep };
-    if (prefill.question) step.question = prefill.question;
-    if (prefill.ticketKey) {
-      step.ticketKey = prefill.ticketKey;
-      if (session.derived.data.jiraConfigured) step.source = 'ticket';
-    }
     const before = working.firstStep;
-    if (step.question === before.question && step.ticketKey === before.ticketKey && step.source === before.source) return working;
+    let step: FirstStep = { ...before };
+    if (prefill.ticketKey && prefill.ticketKey !== ticketKeyOf(before, contextOf(session))) {
+      const reduced = reduceFirstStep(step, { type: 'ticket-key', key: prefill.ticketKey }, contextOf(session));
+      if (reduced.ok) step = reduced.working;
+    }
+    if (prefill.background) {
+      step.ownText = prefill.background;
+      step.choice = 'text';
+    } else if (prefill.ticketKey && session.derived.data.jiraConfigured) {
+      step.choice = 'ticket';
+    }
+    if (step.ownText === before.ownText && step.ticketKey === before.ticketKey && step.choice === before.choice) return working;
     delete step.notice;
     return { ...working, firstStep: step };
   },
@@ -600,6 +674,7 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
     if (!isRunRequest(request)) return { ok: false, reason: 'Unknown run.' };
     if (isFindingRun(request)) return beginFindingRun(session, request);
     if (request.type === 'passes' || request.type === 'again') return beginResultsRun(session, request);
+    if (request.type === 'read-ticket') return beginReadTicket(session);
     if (session.working.stage !== 'first-step') return { ok: false, reason: 'Press New review to start another review.' };
     const blocker = startBlocker(session.working.firstStep, contextOf(session));
     return blocker ? { ok: false, reason: blocker } : { ok: true, size: 'pass', what: 'regular', label: 'the regular pass' };
@@ -609,13 +684,14 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
     if (!isRunRequest(request)) throw new Error('Unknown run.');
     if (isFindingRun(request)) return findingRun(session, request, deps, signal);
     switch (request.type) {
+      case 'read-ticket': return readTicketRun(session, deps);
       case 'start': return startRun(session, deps, progress, signal);
       case 'again': return runAgainRun(session, deps, progress, signal);
       case 'passes': return extraPassesRun(session, pickedSteps(session.working), deps, progress, signal);
     }
   },
 
-  interrupted: interruptedWorking,
+  interrupted: working => interruptedWorking({ ...working, firstStep: withoutTicketRead(working.firstStep) }),
 
   // Post is the board's one write: the selected drafts as they are, after the native confirmation.
   plan(session, action) {

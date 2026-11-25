@@ -20,7 +20,7 @@ Follow only these rules, and never invoke a skill from here. Use the first case 
 Usage: /ts-bitbucket <command> [arguments]
 ------------------------------------------------------------------
   help [command]              show this help, or one command's help
-  review <url> [question]     open a pull request's review in its own tab
+  review <url> [PROJ-123] [text]  open a pull request's review in its own tab
   check                       check the Bitbucket connection
   usage                       show the monthly token usage per model
 ------------------------------------------------------------------
@@ -30,7 +30,7 @@ How a review works: help review
 | Command | Call |
 | --- | --- |
 | help [command] | none; see case 2 |
-| review <url> [question] | `bitbucket_open_review` with the link as `url`; a Jira key the user typed as `ticketKey`; the rest of the text as `question` |
+| review <url> [PROJ-123] [text] | `bitbucket_open_review` with the link as `url`; a Jira key the user typed as `ticketKey`; the rest of the text as `background` |
 | check | `bitbucket_check_connection` |
 | usage | `bitbucket_token_usage` |
 

@@ -7,7 +7,7 @@ import type { Applied, ApplyProgress, Planned, Reduced, RunBegun, RunFinished } 
 import type { ApplyLineResult, WritePlan } from '../../sessions/sessionTypes';
 import { DEFAULT_CONFIDENCE_THRESHOLD, type ReviewBoardDeps } from './deps';
 import type { Draft, ReviewDerived, ReviewSession, ReviewWorking } from './kind';
-import { modelFor } from './runs';
+import { focusOf, modelFor } from './runs';
 
 // What the developer does with the findings of a review: Explain one (one model call that answers
 // under the finding and replaces an earlier answer), select findings, which drafts one comment per
@@ -174,7 +174,7 @@ export async function findingRun(
   const callDeps = { model: model.handle, recordTokens: deps.recordTokens, signal, ...(deps.onDiag ? { onDiag: deps.onDiag } : {}) };
   let result: CallResult;
   if (what === 'explain') {
-    result = await explainFinding({ pr: started.review!.snapshot.pr, finding, upfrontQuestion: started.startedWith?.question ?? '' }, callDeps);
+    result = await explainFinding({ pr: started.review!.snapshot.pr, finding, upfrontQuestion: started.startedWith ? focusOf(started.startedWith) : '' }, callDeps);
   } else {
     result = await rewriteComment(started.drafts[String(number)].text, (request as { instruction: string }).instruction.trim(), callDeps);
   }

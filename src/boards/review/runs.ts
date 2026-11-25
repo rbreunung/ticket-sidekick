@@ -6,6 +6,7 @@ import { PERSONAS, type PersonaId } from '../../services/PrReviewService';
 import type { RunFinished, RunProgress } from '../../sessions/boardKind';
 import { REVIEW_MODEL_SETTING, type BoardModelHandle } from '../boardModels';
 import { DEFAULT_CONFIDENCE_THRESHOLD, type ReviewBoardDeps } from './deps';
+import type { Background } from './firstStep';
 import type { ActivePass, PassRecord, ReviewSession, ReviewWorking, StartedWith } from './kind';
 
 // The review board's model runs after the first step: the regular pass (Start and Run again) and the
@@ -61,6 +62,14 @@ export function pickedSteps(working: ReviewWorking): ReviewStep[] {
   if (!review) return [];
   const picks = working.picked ?? (review.suggestion.kind === 'suggested' ? review.suggestion.personas : []);
   return EXTRA_STEPS.filter(step => picks.includes(step) && !stepBlocker(review, step));
+}
+
+/**
+ * The text the review calls take as the developer's focus: the own-text background. A ticket's text
+ * is kept with the review but not given to the calls yet.
+ */
+export function focusOf(startedWith: Pick<StartedWith, 'background'>): string {
+  return startedWith.background?.kind === 'text' ? startedWith.background.text : '';
 }
 
 /** A run that did nothing: the notice says why, on the first step or on the results. */
@@ -155,7 +164,9 @@ function nextRun(working: ReviewWorking): number {
 }
 
 export interface RegularRunChoices {
-  question: string;
+  background?: Background;
+  /** Why there is no background though a ticket was chosen. */
+  backgroundReason?: string;
   /** Asked before the review is replaced when it has explanations or drafts. */
   confirm: { title: string; detail: string; button: string; declined: string };
   /** Run from the first step (Start) or from the results (Run again). */
@@ -176,22 +187,26 @@ export async function regularRun(
   const bitbucket = await deps.bitbucket();
   if (!bitbucket.configured) return withNotice(bitbucket.hint, choices.fromFirstStep);
   const { confidenceThreshold, ...settings } = await deps.settings();
-  const { question } = choices;
+  const begun: Omit<StartedWith, 'confidenceThreshold'> = {
+    modelId: model.handle.id,
+    ...(choices.background ? { background: choices.background } : {}),
+    ...(choices.backgroundReason ? { backgroundReason: choices.backgroundReason } : {}),
+  };
+  const focus = focusOf(begun);
   const active: ActivePass = {
-    what: 'regular', steps: ['regular'], step: 'regular', done: 0, total: 0, modelId: model.handle.id, run: 1,
-    startedWith: { modelId: model.handle.id, question },
+    what: 'regular', steps: ['regular'], step: 'regular', done: 0, total: 0, modelId: model.handle.id, run: 1, startedWith: begun,
   };
   // From here a restart finds the pass cut off, and the review it replaces is gone.
   await progress({ update: w => ({ ...w, active }), done: 0, total: 0 });
   const reporter = progressReporter(progress);
   const result = await runRegularPass({
     target: { project: recipe.project, repo: recipe.repo, prId: recipe.prId },
-    settings: { ...settings, ...(question ? { focus: question } : {}) },
+    settings: { ...settings, ...(focus ? { focus } : {}) },
   }, await engineDeps(deps, model.handle, bitbucket.client, signal, reporter.report));
   await reporter.settled();
   if (result.outcome.status === 'finished') await deps.onReviewCompleted?.();
   const record: PassRecord = { ...result.outcome, modelId: model.handle.id, run: 1 };
-  const startedWith: StartedWith = { modelId: model.handle.id, question, confidenceThreshold };
+  const startedWith: StartedWith = { ...begun, confidenceThreshold };
   return {
     update: w => {
       const next: ReviewWorking = {
@@ -220,8 +235,8 @@ export async function extraPassesRun(
   const bitbucket = await deps.bitbucket();
   if (!bitbucket.configured) return withNotice(bitbucket.hint, false);
   const { confidenceThreshold: _threshold, ...settings } = await deps.settings();
-  const question = working.startedWith?.question ?? '';
-  const engineSettings = { ...settings, ...(question ? { focus: question } : {}) };
+  const focus = working.startedWith ? focusOf(working.startedWith) : '';
+  const engineSettings = { ...settings, ...(focus ? { focus } : {}) };
   const run = nextRun(working);
   const modelId = model.handle.id;
   await progress({ update: w => ({ ...w, active: { what: 'passes', steps, step: steps[0], done: 0, total: 0, modelId, run } }), done: 0, total: 0 });

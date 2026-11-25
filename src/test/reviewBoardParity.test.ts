@@ -154,7 +154,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
   // Follow-up intents and reply words
   explain: {
     actions: ['explain'],
-    tests: [[FINDINGS, 'explaining #3 makes one model call with its code, the pull request and the upfront question, and shows the answer; explaining again replaces it']],
+    tests: [[FINDINGS, 'explaining #3 makes one model call with its code, the pull request and the own-text background, and shows the answer; explaining again replaces it']],
   },
   copy: {
     requests: ['copy'],
@@ -210,7 +210,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     actions: ['open'],
     tools: ['bitbucket_open_review'],
     tests: [
-      [TOOLS, 'answers "opened" without waiting for the review: the board stops on its first step and nothing is reviewed'],
+      [TOOLS, 'answers "opened" without waiting for the review: the board stops on its first step with the background text, and nothing is reviewed'],
       [START, 'opens the review board for a pull request link, by its normalised address'],
     ],
   },
@@ -225,7 +225,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
   // Review modes
   standard: {
     actions: ['start'],
-    tests: [[BOARD, 'runs the regular pass with the upfront question and shows the findings by severity, with the passes run and the model']],
+    tests: [[BOARD, 'runs the regular pass with the own text and shows the findings by severity, with the passes run and the model']],
   },
   smart: {
     actions: ['pick-pass', 'passes'],
@@ -340,20 +340,28 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     tests: [[RUNS, 'whose batches all failed shows the failure banner and Run again, and no picker or findings']],
   },
   'upfront-question': {
-    actions: ['question', 'start'],
+    actions: ['background', 'own-text', 'start'],
     tools: ['bitbucket_open_review'],
     tests: [
-      [BOARD, 'runs the regular pass with the upfront question and shows the findings by severity, with the passes run and the model'],
+      [BOARD, 'runs the regular pass with the own text and shows the findings by severity, with the passes run and the model'],
       ...INSTRUCTIONS.tests,
-      [TOOLS, 'answers "opened" without waiting for the review: the board stops on its first step and nothing is reviewed'],
+      [TOOLS, 'answers "opened" without waiting for the review: the board stops on its first step with the background text, and nothing is reviewed'],
     ],
   },
   'ticket-choice': {
-    actions: ['source', 'ticket-key'],
+    actions: ['background', 'ticket-key'],
     tests: [
-      [BOARD, 'preselects the ticket when Jira is configured and the PR title has a key'],
+      [BOARD, 'preselects the ticket when Jira is configured and the PR title has a key, and reads nothing until the read is asked for'],
       [BOARD, 'preselects the ticket the request names over the one in the title'],
-      [BOARD, 'preselects none when no key is named, and with Jira not configured the ticket is unavailable with its reason'],
+      [BOARD, 'with Jira not configured, the ticket choice shows the setup reason, and own text and none still work'],
+    ],
+  },
+  'ticket-read': {
+    actions: ['read-ticket', 'ticket-text'],
+    tests: [
+      [BOARD, 'reading the ticket fills the box with its summary, description and newest comments'],
+      [BOARD, 'a read that Jira answers with 404 shows the reason in the box, and Start stays available'],
+      [BOARD, 'Start with a ticket that could not be read runs with no background, and says why'],
     ],
   },
 
@@ -362,7 +370,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
   'token-meter': {
     actions: ['start', 'explain', 'rewrite'],
     tests: [
-      [BOARD, 'runs the regular pass with the upfront question and shows the findings by severity, with the passes run and the model'],
+      [BOARD, 'runs the regular pass with the own text and shows the findings by severity, with the passes run and the model'],
       [FINDINGS, 'Explain and Rewrite each count toward the monthly per-model counters, and Post makes no model call'],
       ['tokenMeter.test.ts', 'meters a frozen model and counts a frozen reply'],
     ],
@@ -380,7 +388,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
   },
   'review-completed': {
     actions: ['start'],
-    tests: [[BOARD, 'runs the regular pass with the upfront question and shows the findings by severity, with the passes run and the model']],
+    tests: [[BOARD, 'runs the regular pass with the own text and shows the findings by severity, with the passes run and the model']],
   },
   'diagnostic-timeline': {
     actions: ['start', 'passes'],
