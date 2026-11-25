@@ -5,12 +5,26 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Run CI by hand on a branch with no pull request, so the release gate finds a `ci-ok` result
+  # on its commit (Actions → CI → Run workflow, pick the branch).
+  workflow_dispatch:
+
+# CI only reads the repository.
+permissions:
+  contents: read
+
+# A newer push to a pull request replaces the older run. `main` runs always finish: the release
+# gate looks for a `ci-ok` result on the newest commit.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-and-test:
     # Windows too: the tests touch real paths (temp dirs, home directory, path.join), and
     # the extension is developed on Windows as well.
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -35,12 +49,14 @@ jobs:
         run: npm test
 
   e2e:
-    # Real VS Code (downloaded by @vscode/test-electron) under a virtual display: the packaged
-    # extension must activate and register every command and language model tool package.json
-    # declares, and VS Code's own MCP client must list and call the extension's MCP tools and see
-    # them go when 127.0.0.1 leaves http.noProxy. Kept as its own job so a VS Code download hiccup is visible without hiding the
-    # unit-test result above.
+    # Real VS Code (downloaded by @vscode/test-electron) under a virtual display: the extension
+    # must activate and register every command and language model tool package.json declares,
+    # VS Code must be able to call a Jira tool, and a board must open as an editor tab whose page
+    # gets an answer from the extension. A `.vsix` is also packaged, so a packaging problem shows
+    # on the pull request and not on release day. Kept as its own job so a VS Code download hiccup
+    # is visible without hiding the unit-test result above.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -53,8 +69,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Package the extension
+        run: npx vsce package --out "${RUNNER_TEMP}/ticket-sidekick-ci.vsix"
+
       - name: VS Code smoke tests
         run: xvfb-run -a npm run test:e2e
+
+      # The VS Code logs of the failed run, to diagnose a flake without rerunning it.
+      - name: Upload VS Code logs
+        if: failure()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: vscode-e2e-logs
+          path: .vscode-test/user-data/logs
+          if-no-files-found: ignore
+          retention-days: 7
 
   # One stable name for branch protection and the release gate: require only `ci-ok` and the
   # matrix above can change (Node versions, OSes) without a required check silently vanishing.
@@ -64,6 +93,7 @@ jobs:
     # Keep this list equal to every other job in this file, or a new job can fail unnoticed.
     needs: [build-and-test, e2e]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Require every CI job to have succeeded
         run: |
