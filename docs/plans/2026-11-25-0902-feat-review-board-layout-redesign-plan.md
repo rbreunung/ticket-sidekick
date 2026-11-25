@@ -40,6 +40,7 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 - **The background is a Jira ticket or the developer's own text, not both.** (session-settled: user-directed — chosen over sending the ticket and an extra text together.) Governs R10, R12.
 - **The ticket's text is shown for trimming before it is sent.** (session-settled: user-directed — chosen over sending only the summary and description, and over sending the full capped text untouched: the developer controls what goes into every call.) Governs R11.
 - **A request with both a ticket key and text preselects the text.** (session-settled: user-directed — chosen over preselecting the ticket and over preselecting neither; the first step always waits for Start, so the developer can still switch.) Governs R12.
+- **Picked persona passes run at the same time, not one after another.** Faster on a large pull request; the critic still runs last because it checks the other passes' findings. Governs R20, R21, R22, R23.
 - **A narrow tab shows the finding as an overlay over the list.** (session-settled: user-directed — chosen over stacking the detail below the list and over a wide-only layout.) Governs R9.
 
 ### Requirements
@@ -81,6 +82,13 @@ The first step also splits the developer's intent in two. A goal or ticket feeds
 - R18. Copy and `bitbucket_read_findings` no longer include requirements coverage; `bitbucket_read_findings` reports the background in use instead.
 - R19. A review stored before this change is rebuilt from its recipe or discarded under the existing stored-format rule; its coverage result is not kept.
 
+**Running the extra passes**
+
+- R20. The persona passes picked in one Run selected run at the same time, each over every batch.
+- R21. When the critic is picked together with persona passes, it starts after they have all ended, so it checks their findings too.
+- R22. While passes run together, the band shows each pass's progress on its own line, and Stop ends all of them, keeping what each found so far.
+- R23. When a pass cannot run alongside the others (for example, the model refuses a parallel request as rate-limited), the remaining passes run one after another instead, and the band says so.
+
 ### Key Flows
 
 - F1. A review on a wide tab
@@ -114,11 +122,13 @@ flowchart TB
 - AE4. **Covers R12.** Given `/ts-bitbucket review <link> PROJ-123 watch thread safety`, when the board opens, then the background is "My own text" with "watch thread safety", the ticket field holds PROJ-123, and no pass has started.
 - AE5. **Covers R14.** Given the background "sessions must expire after the configured TTL" and a change that sets the expiry to 0, when the regular pass ends, then a finding on that line carries the "against goal" marker; given no background, no finding carries it.
 - AE6. **Covers R9.** Given a narrow editor split, when the developer selects a finding, then it opens over the list, and going back returns to the list at the same place.
+- AE7. **Covers R20, R21, R22.** Given the developer picks Security, Performance and the Critic, when they press Run selected, then Security and Performance run at the same time with a progress line each, and the Critic starts only after both have ended.
+- AE8. **Covers R23.** Given a parallel Performance request is refused as rate-limited, when Security is still running, then Performance waits and runs after Security, and the band says the passes now run one after another.
 
 ### Scope Boundaries
 
 - The requirements coverage check is deferred, not rejected; bringing it back is a separate decision.
-- No new review passes, and no change to how findings are found, anchored, deduplicated or checked by the critic beyond receiving the background (R13, R14).
+- No new review passes, and no change to how findings are found (other than R20 to R23 running the picked passes at the same time), anchored, deduplicated or checked by the critic beyond receiving the background (R13, R14).
 - The sessions board, the import board and the other boards keep their layouts.
 - No styling beyond VS Code's theme and the shared board style.
 - The Agents window problem is tracked separately as O23 in [`docs/architecture/migration-status.md`](../architecture/migration-status.md).
@@ -131,6 +141,7 @@ flowchart TB
 - The width at which R9's overlay takes over from two columns.
 - How much code around the finding the detail pane shows (R3), and whether it comes from the stored diff or the whole file.
 - Whether the coverage engine code is deleted or kept unused (R17, R18).
+- How many passes may run at once (all four, or a smaller cap), and whether a refused parallel request is retried before R23's fallback.
 - Which documents change: the user manual pages on the review board, `docs/review-process.md` ("Upfront question", "Requirements check"), the `/ts-bitbucket` help, the review board parity ledger in `docs/architecture/migration-status.md`, and the manual checklist's Step 3.
 
 ### Sources / Research
