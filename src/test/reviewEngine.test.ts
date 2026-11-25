@@ -251,6 +251,95 @@ describe('regular pass: findings, batches and the snapshot', () => {
   });
 });
 
+describe('regular pass: numbers that never change while it runs', () => {
+  /** A pull request whose f1 has two hunks far apart, so it fills batches 1 and 2; f2 to f4 fill batches 3 to 5. */
+  function splitPr(): string {
+    const hunk = (from: number) => `@@ -0,0 +${from},16 @@\n${Array.from({ length: 16 }, (_, l) => `+${codeLine(1, from + l)}`).join('\n')}`;
+    return `diff --git a/src/f1.ts b/src/f1.ts\n--- a/src/f1.ts\n+++ b/src/f1.ts\n${hunk(1)}\n${hunk(101)}\n${prDiff(4).split('diff --git').slice(2).map((d) => `diff --git${d}`).join('')}`;
+  }
+  /** A finding whose quoted code is not in the diff, so its location stays unverified. */
+  function unlocated(title: string, recommendation: string): string {
+    return JSON.stringify({ file: 'src/f1.ts', line: 3, anchorCode: 'no such code', severity: 'warning', confidence: 0.6, title, description: `${title} described`, recommendation });
+  }
+  const secondHunk = (c: Call) => c.prompt.includes(codeLine(1, 101));
+  /**
+   * Batch 1: an unlocated null check and a located leak on f1; batch 2: an unlocated, different
+   * rounding issue on f1; batches 3 to 5: one finding each.
+   */
+  const respond = (c: Call) => {
+    if (c.kind !== 'regular') return reviewReply([]);
+    if (c.file === 1 && !secondHunk(c)) {
+      return [unlocated('Missing null check', 'Check the user for null'), findingLine({ file: 1, line: 5, title: 'Leaky file handle' }), JSON.stringify({ additionalFilesNeeded: [] })].join('\n');
+    }
+    if (c.file === 1) return [unlocated('Wrong rounding mode', 'Round half up for money'), JSON.stringify({ additionalFilesNeeded: [] })].join('\n');
+    return reviewReply([{ file: c.file, line: 2, title: `Issue in f${c.file}` }]);
+  };
+  function splitSetup() {
+    const t = setup({ files: 1, respond });
+    t.client.rawDiff = splitPr();
+    return t;
+  }
+
+  it('after two of five batches lists those batches\' findings with the numbers they keep at the end', async () => {
+    const t = splitSetup();
+    const snapshots = new Map<number, StagedReview>();
+    t.deps.onProgress = (p) => { if (p.step === 'regular' && p.review) snapshots.set(p.batchesDone, p.review); };
+
+    const result = await regular(t);
+
+    expect(result.review!.snapshot.batches).toHaveLength(5);
+    expect(snapshots.get(2)!.store.findings.map((f) => [f.id, f.title])).toEqual([[1, 'Missing null check'], [2, 'Leaky file handle'], [3, 'Wrong rounding mode']]);
+    const final = new Map(result.review!.store.findings.map((f) => [f.title, f.id]));
+    for (const snapshot of snapshots.values()) {
+      for (const f of snapshot.store.findings) expect(final.get(f.title), f.title).toBe(f.id);
+    }
+    expect(result.review!.store.findings.map((f) => [f.id, f.title])).toEqual([
+      [1, 'Missing null check'], [2, 'Leaky file handle'], [3, 'Wrong rounding mode'], [4, 'Issue in f2'], [5, 'Issue in f3'], [6, 'Issue in f4'],
+    ]);
+  });
+
+  it('merges a later batch\'s duplicate of an earlier finding into it without renumbering anything', async () => {
+    const t = setup({
+      files: 1,
+      respond: (c) => {
+        if (c.kind !== 'regular') return reviewReply([]);
+        if (c.file === 1 && !secondHunk(c)) {
+          return [unlocated('Missing null check', 'Check the user for null'), findingLine({ file: 1, line: 5, title: 'Leaky file handle' }), JSON.stringify({ additionalFilesNeeded: [] })].join('\n');
+        }
+        if (c.file === 1) return reviewReply([{ file: 1, line: 102, title: 'Missing null check', severity: 'critical' }]);
+        return reviewReply([{ file: c.file, line: 2, title: `Issue in f${c.file}` }]);
+      },
+    });
+    t.client.rawDiff = splitPr();
+    const snapshots: StagedReview[] = [];
+    t.deps.onProgress = (p) => { if (p.step === 'regular' && p.review) snapshots.push(p.review); };
+
+    const result = await regular(t);
+
+    expect(snapshots[0].store.findings.map((f) => [f.id, f.title])).toEqual([[1, 'Missing null check'], [2, 'Leaky file handle']]);
+    expect(result.review!.store.findings.map((f) => [f.id, f.title])).toEqual([
+      [1, 'Missing null check'], [2, 'Leaky file handle'], [3, 'Issue in f2'], [4, 'Issue in f3'], [5, 'Issue in f4'],
+    ]);
+    expect(result.review!.store.nextNumber).toBe(6);
+  });
+
+  it('a stopped regular pass keeps the numbered findings it reached', async () => {
+    const t = splitSetup();
+    let afterThree: StagedReview | undefined;
+    t.deps.onProgress = (p) => {
+      if (p.step === 'regular' && p.batchesDone === 3) { afterThree = p.review; t.controller.abort(); }
+    };
+
+    const result = await regular(t);
+
+    expect(result.outcome.status).toBe('stopped');
+    expect(result.review!.store.findings.map((f) => [f.id, f.title])).toEqual([
+      [1, 'Missing null check'], [2, 'Leaky file handle'], [3, 'Wrong rounding mode'], [4, 'Issue in f2'],
+    ]);
+    expect(result.review!.store.findings).toEqual(afterThree!.store.findings);
+  });
+});
+
 describe('regular pass: no requirements check', () => {
   it('makes only the review calls and gives the review no coverage', async () => {
     const t = setup({ files: 2, respond: () => reviewReply([]) });

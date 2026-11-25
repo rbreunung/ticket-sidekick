@@ -10,7 +10,8 @@ import { announce, api, h, startBoard } from '../shared/board.js';
 // (and drafts its comment under it), the draft with Rewrite, Undo and Regenerate; after the list,
 // Post and Copy for Teams or as Markdown. Copy names only the format and the selected numbers: the
 // extension builds the text. While a pass runs, the live region reads its progress, e.g.
-// "Security pass: 2 of 5 batches".
+// "Security pass: 2 of 5 batches"; while the regular pass runs, the results list the findings of
+// its finished batches.
 // The page keeps only what is being typed and not sent yet. Everything from Bitbucket, Jira or the
 // model is written as text.
 
@@ -269,7 +270,9 @@ function findingsBlock(r, board, off) {
   const post = r.post ?? { count: 0, blocker: 'Select the findings to post.' };
   return [
     h('h2', {}, `Findings (${r.findings.length})`),
-    r.findings.length === 0 ? h('p', { id: 'no-issues' }, 'No issues found.') : [
+    r.findings.length === 0 ? (r.running?.what === 'regular'
+      ? h('p', { id: 'no-findings-yet', class: 'muted' }, 'No findings yet.')
+      : h('p', { id: 'no-issues' }, 'No issues found.')) : [
       h('label', { class: 'select-all' }, h('input', {
         type: 'checkbox', id: 'select-all', checked: r.findings.every(f => f.selected), disabled: off,
         onChange: e => afterSaving(board, draftFields(r), () => board.act({ type: 'select', numbers: all, selected: Boolean(e.target.checked) })),
@@ -303,7 +306,7 @@ function results(view, board, off) {
       h('h2', {}, 'Not reviewed and dropped'),
       h('ul', {}, r.notes.map((line, i) => h('li', { id: `review-note-${i}` }, line)))) : null,
     r.notice ? h('p', { id: 'review-notice', class: 'banner', role: 'status' }, r.notice) : null,
-    r.hasReview ? [
+    r.hasReview || r.running?.what === 'regular' ? [
       r.picker ? passPicker(r.picker, board, off) : null,
       findingsBlock(r, board, off),
     ] : null,

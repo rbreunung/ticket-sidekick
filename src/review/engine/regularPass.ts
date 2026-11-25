@@ -71,12 +71,17 @@ async function regularPass(
   const outcome = { ...emptyOutcome('regular', chunks.length), notes: [...diff.notes] };
   const batches: ReviewBatch[] = chunks.map((chunk) => ({ files: chunk, contextPaths: [] }));
   const cache = new Map<string, string>();
-  const findings: NewFinding[] = [];
+  /** Every finding the batches gave, before the cross-batch merge; only counted for the funnel. */
+  let rawFindings = 0;
+  // Each finished batch's findings are folded into the running store once, in batch order, so a
+  // number given in a progress report is the number the finding keeps at the end.
+  let store = emptyStore();
+  const added: number[] = [];
   const recommendations: Array<string[] | undefined> = [];
   /** The review a stop now would hand over: the finished batches' findings, the step not marked as run. */
   const partial = (): StagedReview => ({
-    snapshot: { target, pr, reviewedCommit: pr.fromCommitHash, batches: batches.map((b) => ({ ...b })) },
-    store: addFindings(emptyStore(), findings).store,
+    snapshot: { target, pr, reviewedCommit: pr.fromCommitHash, batches: batches.map((b) => ({ ...b, contextPaths: [...b.contextPaths] })) },
+    store,
     suggestion: suggestionOf(recommendations),
   });
   let reviewedFiles = 0;
@@ -100,7 +105,10 @@ async function regularPass(
         buildPrompt: (items, contents, options) => service.buildPrompt(pr, items, contents, extra, !options?.priorFindings, { ...options, ...(background ? { background } : {}) }),
       });
       batches[i].contextPaths = result.contextPaths;
-      findings.push(...result.findings.map((f) => ({ ...f, batch: i })));
+      const folded = addFindings(store, result.findings.map((f): NewFinding => ({ ...f, batch: i })));
+      store = folded.store;
+      added.push(...folded.added);
+      rawFindings += result.findings.length;
       recommendations.push(result.recommendedPersonas);
       reviewedFiles += result.reviewedFiles;
       failedFiles += result.failedFiles;
@@ -136,11 +144,10 @@ async function regularPass(
     };
   }
 
-  const added = addFindings(emptyStore(), findings);
   const snapshot = { target, pr, reviewedCommit: pr.fromCommitHash, batches };
   const review: StagedReview = {
     snapshot,
-    store: stopped ? added.store : markStepRun(added.store, 'regular'),
+    store: stopped ? store : markStepRun(store, 'regular'),
     suggestion: suggestionOf(recommendations),
   };
   ctx.log('info', `Regular pass ${stopped ? 'stopped' : 'finished'} — ${review.store.findings.length} finding(s)`, {
@@ -148,13 +155,13 @@ async function regularPass(
     reviewedFileCount: reviewedFiles, failedFileCount: failedFiles,
   });
   const funnel = logFindingsFunnel(ctx, {
-    raw: tally.raw, dedupedCrossBatch: findings.length - added.added.length, droppedOutsidePr: tally.droppedOutsidePr,
+    raw: tally.raw, dedupedCrossBatch: rawFindings - added.length, droppedOutsidePr: tally.droppedOutsidePr,
     retractedByPass2: tally.retracted, final: review.store.findings.length,
     unverified: review.store.findings.filter((f) => f.locationUnverified).length,
   });
   writeRunRecord(ctx, funnel);
   return {
     review,
-    outcome: { ...outcome, status: stopped ? 'stopped' : 'finished', added: added.added, tokens: ctx.meter.totals() },
+    outcome: { ...outcome, status: stopped ? 'stopped' : 'finished', added, tokens: ctx.meter.totals() },
   };
 }

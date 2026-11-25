@@ -376,6 +376,76 @@ describe('Run selected', () => {
   });
 });
 
+describe('findings while the regular pass runs', () => {
+  it('after two of five batches the results list those batches\' findings, with the numbers they keep at the end, and say the pass is running', async () => {
+    const m = manager();
+    client.rawDiff = prDiff(5);
+    let state = await open(m);
+    const release = hold(call => call.kind === 'regular' && call.file === 3);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'start' });
+    state = await until(m, state.id, s => viewOf(s).progress === 'Regular pass: 2 of 5 batches');
+
+    expect(viewOf(state).stage).toBe('review');
+    expect(viewOf(state).firstStep).toBeUndefined();
+    const live = resultsOf(state);
+    expect(live.running).toEqual({ what: 'regular', step: 'regular', done: 2, total: 5 });
+    expect(live.hasReview).toBe(true);
+    expect(live.picker).toBeUndefined();
+    expect(live.statuses).toEqual([]);
+    expect(live.findings.map(f => [f.number, f.title])).toEqual([[1, 'Unchecked input in f1'], [2, 'Unchecked input in f2']]);
+
+    release();
+    state = await idle(m, state.id);
+    const final = resultsOf(state);
+    expect(final.running).toBeUndefined();
+    expect(final.findings.filter(f => f.number <= 2).map(f => [f.number, f.title])).toEqual([[1, 'Unchecked input in f1'], [2, 'Unchecked input in f2']]);
+    expect(final.findings).toHaveLength(5);
+  });
+
+  it('before the first batch finishes, Start shows the empty results with the pass running', async () => {
+    const m = manager();
+    client.rawDiff = prDiff(3);
+    let state = await open(m);
+    const release = hold(call => call.kind === 'regular' && call.file === 1);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'start' });
+    state = await until(m, state.id, s => viewOf(s).progress === 'Regular pass: 0 of 3 batches');
+
+    expect(viewOf(state).stage).toBe('review');
+    expect(resultsOf(state)).toMatchObject({ running: { what: 'regular', done: 0, total: 3 }, hasReview: false, findings: [] });
+    release();
+    await idle(m, state.id);
+  });
+
+  it('Run again shows the new review\'s findings so far, not the one it replaces', async () => {
+    const m = manager();
+    let state = await reviewed(m, 3);
+    respond = call => (call.kind === 'regular' ? reviewReply([findingLine(call.file, 4, `Second look at f${call.file}`)]) : defaultRespond(call));
+    const release = hold(call => call.kind === 'regular' && call.file === 2);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'again' });
+    state = await until(m, state.id, s => viewOf(s).progress === 'Regular pass: 1 of 3 batches');
+
+    expect(resultsOf(state).findings.map(f => [f.number, f.title])).toEqual([[1, 'Second look at f1']]);
+    release();
+    await idle(m, state.id);
+  });
+});
+
+describe('the order of the findings', () => {
+  it('lists by severity, then confidence from highest, a finding without confidence last, then by number', async () => {
+    const line = (file: number, n: number, title: string, severity: string, confidence?: number) => JSON.stringify({
+      file: `src/f${file}.ts`, line: n, anchorCode: codeLine(file, n), severity, ...(confidence !== undefined ? { confidence } : {}), title,
+      description: `${title} described`, recommendation: `Fix ${title}`,
+    });
+    respond = call => {
+      if (call.kind !== 'regular') return defaultRespond(call);
+      if (call.file === 1) return reviewReply([line(1, 2, 'Warning sure', 'warning', 0.9), line(1, 5, 'Critical unsure', 'critical', 0.6)]);
+      return reviewReply([line(2, 2, 'Critical sure', 'critical', 0.95), line(2, 5, 'Warning no confidence', 'warning'), line(2, 8, 'Warning also sure', 'warning', 0.9)]);
+    };
+    const results = resultsOf(await reviewed(manager(), 2));
+    expect(results.findings.map(f => f.title)).toEqual(['Critical sure', 'Critical unsure', 'Warning sure', 'Warning also sure', 'Warning no confidence']);
+  });
+});
+
 describe('the regular pass ends', () => {
   it('stopped after 3 of 7 batches: the findings of those 3 under a banner', async () => {
     const m = manager();

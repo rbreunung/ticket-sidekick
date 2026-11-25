@@ -70,8 +70,8 @@ export interface ActivePass {
   startedWith?: Omit<StartedWith, 'confidenceThreshold'>;
   /**
    * The review as it stands after the running step's last finished batch, the step not marked as
-   * run. It is not shown while the pass runs; a restart that cuts the pass off keeps it. Saved by
-   * the regular pass, which has no stored review to build on.
+   * run. The results show it while the regular pass runs; a restart that cuts the pass off keeps it.
+   * Saved by the regular pass, which has no stored review to build on.
    */
   partial?: StagedReview;
   /**
@@ -243,6 +243,8 @@ export interface ReviewResultsView {
   post: { count: number; blocker?: string };
   /** What Copy acts on: the selection, or every finding when nothing is selected. */
   copy: { scope: 'selected' | 'all'; count: number };
+  /** A pass is running: which run, the step running now and its finished batches. */
+  running?: { what: ActivePass['what']; step: ReviewStep; done: number; total: number };
 }
 
 export interface ReviewView {
@@ -391,12 +393,12 @@ function resultsView(session: ReviewSession, label: (id: string) => string): Rev
     notes: reviewNotes(working.passes),
     ...(working.notice ? { notice: working.notice } : {}),
     hasReview: review !== undefined,
-    ...(review ? { picker: pickerView(working, review) } : {}),
+    ...(review && working.active?.what !== 'regular' ? { picker: pickerView(working, review) } : {}),
     tokens,
     canRunAgain: startedWith !== undefined,
     findings: (review?.store.findings ?? [])
       .slice()
-      .sort((a, b) => SHARE_SEVERITY_ORDER.indexOf(a.severity) - SHARE_SEVERITY_ORDER.indexOf(b.severity) || a.id - b.id)
+      .sort(byListOrder)
       .map(f => findingView(f, threshold, working, selected)),
     selectedCount: selected.length,
     post: {
@@ -404,7 +406,34 @@ function resultsView(session: ReviewSession, label: (id: string) => string): Rev
       ...(selected.length === 0 ? { blocker: 'Select the findings to post.' } : postCount === 0 ? { blocker: 'The selected comments are posted already.' } : {}),
     },
     copy: selected.length > 0 ? { scope: 'selected', count: selected.length } : { scope: 'all', count: findingCount },
+    ...(working.active
+      ? { running: { what: working.active.what, step: working.active.step, done: working.active.done, total: working.active.total } } : {}),
   };
+}
+
+/** The list order: severity, then confidence from highest (a finding without one after those with one), then number. */
+function byListOrder(a: StoredFinding, b: StoredFinding): number {
+  const severity = SHARE_SEVERITY_ORDER.indexOf(a.severity) - SHARE_SEVERITY_ORDER.indexOf(b.severity);
+  if (severity !== 0) return severity;
+  const confidence = (b.confidence ?? -1) - (a.confidence ?? -1);
+  return confidence !== 0 ? confidence : a.id - b.id;
+}
+
+/**
+ * While the regular pass runs, the board shows the review it is building: the findings of the
+ * finished batches with the numbers they keep, and nothing of the review it replaces. Undefined
+ * when no regular pass runs.
+ */
+function liveRegularSession(session: ReviewSession): ReviewSession | undefined {
+  const { working } = session;
+  const { active } = working;
+  if (active?.what !== 'regular' || !active.startedWith) return undefined;
+  const live: ReviewWorking = {
+    stage: 'review', firstStep: working.firstStep, passes: [], explanations: {}, drafts: {}, active,
+    startedWith: { ...active.startedWith, confidenceThreshold: working.startedWith?.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD },
+    ...(active.partial ? { review: active.partial } : {}),
+  };
+  return { ...session, working: live };
 }
 
 function progressText(working: ReviewWorking): string | undefined {
@@ -706,11 +735,13 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
     const { recipe, derived, working } = session;
     const options = derived.data.models.options;
     const label = (id: string) => options.find(m => m.id === id)?.label ?? id;
+    const live = liveRegularSession(session);
+    const stage = live ? 'review' : working.stage;
     return {
       pr: { label: `${recipe.project}/${recipe.repo}#${recipe.prId}`, url: recipe.url, title: derived.data.pr.title, author: derived.data.pr.author },
-      stage: working.stage,
+      stage,
       model: modelView(session, label),
-      ...(working.stage === 'first-step' ? { firstStep: firstStepView(session) } : { results: resultsView(session, label) }),
+      ...(stage === 'first-step' ? { firstStep: firstStepView(session) } : { results: resultsView(live ?? session, label) }),
       ...(working.active ? { progress: progressText(working) } : {}),
     };
   },

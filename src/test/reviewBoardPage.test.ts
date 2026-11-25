@@ -304,6 +304,25 @@ describe('the review board page: passes and runs', () => {
     expect(page.posted.filter(m => m.op === 'stop')).toHaveLength(1);
   });
 
+  it('while the regular pass runs, the findings so far are listed, and before the first batch finishes it says none are found yet', async () => {
+    const running = [{ size: 'pass' as const, what: 'regular', label: 'the regular pass', done: 0, total: 3 }];
+    await loadBoard(boardState(view({
+      stage, progress: 'Regular pass: 0 of 3 batches',
+      results: results({ hasReview: false, picker: undefined, findings: [], passesRun: [], tokens: [], running: { what: 'regular', step: 'regular', done: 0, total: 3 } }),
+    }), { running }));
+    expect(must('no-findings-yet').textContent).toBe('No findings yet.');
+    expect(byId('no-issues')).toBeFalsy();
+    expect(byId('pass-picker')).toBeFalsy();
+
+    await push({
+      running: [{ ...running[0], done: 1 }],
+      view: view({ stage, progress: 'Regular pass: 1 of 3 batches', results: results({ picker: undefined, passesRun: [], tokens: [], running: { what: 'regular', step: 'regular', done: 1, total: 3 } }) }),
+    });
+    expect(byId('finding-2')).toBeTruthy();
+    expect(byId('finding-1')).toBeTruthy();
+    expect(must('explain-2').disabled).toBe(true);
+  });
+
   it('a finished review with no findings shows "No issues found" with the picker, the token usage and Run again', async () => {
     await loadBoard(boardState(view({ stage, results: results({ findings: [] }) })));
     expect(must('no-issues').textContent).toBe('No issues found.');
