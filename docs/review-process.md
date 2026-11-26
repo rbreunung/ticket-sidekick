@@ -11,7 +11,7 @@ The code lives in:
 
 - [`src/boards/review/`](../src/boards/review/) — the review board kind: start screen, first step with the background, runs, findings with their discussion, the code excerpt of a finding (`codeExcerpt.ts`), Post, Copy and the Discuss in chat prompt.
 - [`src/review/engine/`](../src/review/engine/) — the staged review engine, vscode-free: `runRegularPass`, `runPersonaPass` (and `runExtraPass`), `runCritic`, the finding store and the shared pass plumbing.
-- [`src/review/`](../src/review/) — the pure review core: `reviewSessionState.ts` (diff parsing, chunking, anchor locate, dedup, reply parsing, diagnostic formatters, the discussion prompts), `findingCalls.ts` (the discussion, Regenerate and Rewrite), `markdownTree.ts` (the safe Markdown tree the board renders), `shareFormat.ts` (Copy), `tokenMeter.ts`, `ticketRead.ts`.
+- [`src/review/`](../src/review/) — the pure review core: `reviewSessionState.ts` (diff parsing, chunking, anchor locate, dedup, reply parsing, diagnostic formatters), `findingThreadPrompt.ts` (the discussion prompts), `background.ts` (the fenced ticket background every prompt shares), `findingCalls.ts` (the discussion, Regenerate and Rewrite), `markdownTree.ts` (the safe Markdown tree the board renders), `shareFormat.ts` (Copy), `tokenMeter.ts`, `ticketRead.ts`.
 - [`src/services/PrReviewService.ts`](../src/services/PrReviewService.ts) — prompt building (regular, persona, critic, with the background), the persona catalog, comment posting.
 - [`src/bitbucket/BitbucketApiClient.ts`](../src/bitbucket/BitbucketApiClient.ts) — HTTP, diff fetch (with context lines), file fetch.
 - [`src/tools/bitbucketTools/`](../src/tools/bitbucketTools/) — the agent's side: `openReview.ts`, `readFindings.ts`, `readFile.ts`.

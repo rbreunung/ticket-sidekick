@@ -1,5 +1,5 @@
 import {
-  addFindings, addTokenTotals, markStepRun, runCritic, runPersonaPass, runRegularPass, uncheckedFindings,
+  addTokenTotals, foldPersonaBatch, markStepRun, runCritic, runPersonaPass, runRegularPass, uncheckedFindings,
   type EngineDeps, type EngineProgress, type FoldResult, type PassOutcome, type PersonaBatch, type ReviewStep, type StagedReview, type TokenTotals,
 } from '../../review/engine';
 import { PERSONAS, type PersonaId } from '../../services/PrReviewService';
@@ -364,16 +364,11 @@ export async function extraPassesRun(
   const fold = (step: ReviewStep) => (b: PersonaBatch): FoldResult | undefined => {
     // A result arriving after Stop or after a refusal stopped the run changes nothing.
     if (runSignal.aborted) return undefined;
-    const folded = addFindings(review.store, b.findings);
-    const batches = b.contextPaths.length === 0 ? review.snapshot.batches : review.snapshot.batches.map((batch, i) => (i === b.batch
-      ? { ...batch, contextPaths: [...batch.contextPaths, ...b.contextPaths.filter(p => !batch.contextPaths.includes(p))] } : batch));
-    review = { ...review, snapshot: { ...review.snapshot, batches }, store: folded.store };
+    const folded = foldPersonaBatch(review, b);
+    review = folded.review;
     entryOf(step).done++;
     report();
-    return {
-      added: folded.added, merged: folded.merged,
-      unverified: folded.store.findings.filter(f => folded.added.includes(f.id) && f.locationUnverified).length,
-    };
+    return folded.result;
   };
 
   /** The record of a step that ended, with its status in the run's words. */

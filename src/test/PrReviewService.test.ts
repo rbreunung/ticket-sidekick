@@ -21,8 +21,6 @@ import {
   extractHunkAround,
   buildPrContextPrompt,
   buildDiffAwarePrompt,
-  buildFindingThreadPrompt,
-  buildThreadCommentPrompt,
   buildStoredReviewDiff,
   formatCallLine,
   formatFindingsFunnel,
@@ -41,6 +39,7 @@ import {
   mergePass2Findings,
 } from '../review/reviewSessionState';
 import type { ReviewFinding, SourceTag } from '../review/reviewSessionState';
+import { buildFindingThreadPrompt, buildThreadCommentPrompt } from '../review/findingThreadPrompt';
 import { PrReviewService, PERSONAS } from '../services/PrReviewService';
 import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 import type { BitbucketPR } from '../bitbucket/IBitbucketClient';

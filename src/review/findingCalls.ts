@@ -2,9 +2,10 @@ import type { BitbucketPR } from '../bitbucket/IBitbucketClient';
 import type { ReviewBackground } from '../services/PrReviewService';
 import { settleOneCall, type CallFailure } from './engine/plumbing';
 import type { EngineDeps, TokenTotals } from './engine/types';
+import type { ReviewFinding } from './reviewSessionState';
 import {
-  EXPLAIN_QUESTION, buildFindingThreadPrompt, buildThreadCommentPrompt, pickThreadTurns, type ReviewFinding, type ThreadTurn,
-} from './reviewSessionState';
+  EXPLAIN_QUESTION, buildFindingThreadPrompt, buildThreadCommentPrompt, pickThreadTurns, type ThreadTurn,
+} from './findingThreadPrompt';
 
 // The single model calls the review board makes for one finding: a question in its discussion
 // (Explain's first question or a follow-up), with the finding, its code, the pull request's title

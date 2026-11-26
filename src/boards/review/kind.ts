@@ -3,7 +3,8 @@ import {
 } from '../../review/engine';
 import type { BoardKind, Reduced, RunBegun, RunFinished, RunProgress } from '../../sessions/boardKind';
 import type { DerivedPart, Session } from '../../sessions/sessionTypes';
-import { SHARE_SEVERITY_ORDER, type ThreadTurn } from '../../review/reviewSessionState';
+import { SHARE_SEVERITY_ORDER } from '../../review/reviewSessionState';
+import type { ThreadTurn } from '../../review/findingThreadPrompt';
 import { renderMarkdown, type MdBlock } from '../../review/markdownTree';
 import { codeExcerpt, type CodeLine } from './codeExcerpt';
 import { findJiraKeyInText } from '../../utils/branchParser';

@@ -3,6 +3,7 @@ import type { Reduced } from '../../sessions/boardKind';
 import type { RequirementsSourceResult } from '../../services/TicketService';
 import { safeErrorText } from '../../review/ticketRead';
 import { formatRequirementsSourceText } from '../../utils/requirementsSource';
+import type { ReviewBackground } from '../../services/PrReviewService';
 import type { ReviewPrefill } from './recipe';
 
 // The review board's first step: the model every call uses and one background for the reviewer, a
@@ -47,7 +48,7 @@ export interface FirstStep {
 }
 
 /** The background a review was started with. */
-export type Background = { kind: 'ticket'; key: string; text: string } | { kind: 'text'; text: string };
+export type Background = ReviewBackground;
 
 /** What the first step's rules read besides the step itself. */
 export interface FirstStepContext {

@@ -1,6 +1,7 @@
 import type { BitbucketCommentResult, BitbucketPR, IBitbucketClient, InlineAnchor } from '../bitbucket/IBitbucketClient';
 import type { DiagLogger } from '../utils/diagTypes';
 import { ApiError } from '../utils/apiError';
+import { ticketBackgroundLines } from '../review/background';
 import type { FileDiff, ReviewFinding } from '../review/reviewSessionState';
 import {
   formatSourceConfidence,
@@ -190,9 +191,8 @@ function againstGoalRequest(background: ReviewBackground): string {
 
 /** The ticket background as the first block inside the fence. */
 function ticketBlock(background: ReviewBackground | undefined): string {
-  return background?.kind === 'ticket'
-    ? `Background ticket ${background.key} (what the change is meant to do):\n${background.text}\n\n---\n\n`
-    : '';
+  const lines = ticketBackgroundLines(background);
+  return lines.length > 0 ? `${lines.join('\n')}\n` : '';
 }
 
 function numberFindingsForPrompt(findings: Array<Omit<ReviewFinding, 'id'>>): string {

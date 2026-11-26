@@ -72,6 +72,22 @@ export async function runPersonaPass(
 }
 
 /**
+ * One persona batch folded into the review: its findings into the store (new numbers or merged into
+ * numbered ones) and the context files it read into its batch. The board's parallel passes and
+ * `runExtraPass` fold with it.
+ */
+export function foldPersonaBatch(review: StagedReview, b: PersonaBatch): { review: StagedReview; result: FoldResult } {
+  const folded = addFindings(review.store, b.findings);
+  const batches = b.contextPaths.length === 0 ? review.snapshot.batches : review.snapshot.batches.map((batch, i) => (i === b.batch
+    ? { ...batch, contextPaths: [...batch.contextPaths, ...b.contextPaths.filter((p) => !batch.contextPaths.includes(p))] }
+    : batch));
+  return {
+    review: { ...review, snapshot: { ...review.snapshot, batches }, store: folded.store },
+    result: { added: folded.added, merged: folded.merged, unverified: folded.store.findings.filter((f) => folded.added.includes(f.id) && f.locationUnverified).length },
+  };
+}
+
+/**
  * Runs one persona pass on its own and folds its findings into the review: the step is marked as
  * run when it went over every batch.
  */
@@ -82,13 +98,10 @@ export async function runExtraPass(
   let current = review;
   const result = await runPersonaPass(review, personaId, settings, deps, {
     fold: (b) => {
-      const folded = addFindings(current.store, b.findings);
-      const batches = current.snapshot.batches.map((batch, i) => (i === b.batch
-        ? { ...batch, contextPaths: [...batch.contextPaths, ...b.contextPaths.filter((p) => !batch.contextPaths.includes(p))] }
-        : batch));
-      current = { ...current, snapshot: { ...current.snapshot, batches }, store: folded.store };
+      const folded = foldPersonaBatch(current, b);
+      current = folded.review;
       deps.onProgress?.({ step: personaId, batchesDone: b.batch + 1, batchesTotal: review.snapshot.batches.length, review: current });
-      return { added: folded.added, merged: folded.merged, unverified: folded.store.findings.filter((f) => folded.added.includes(f.id) && f.locationUnverified).length };
+      return folded.result;
     },
   });
   if (result.outcome.status === 'commit-unreadable') return { review, outcome: result.outcome };
