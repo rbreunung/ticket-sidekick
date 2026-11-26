@@ -72,10 +72,11 @@ const SECTION_MARKER = /-{5} (?:begin|end) [a-z]+ -{5}/gi;
 
 /**
  * Text from Jira, the developer or the model, between a begin and an end line, so the agent can tell
- * where it stops. Anything in the text that looks like a marker line is taken out first.
+ * where it stops. Anything in the text that looks like a marker line is replaced by a placeholder
+ * first; a placeholder, unlike removing it, cannot join the text around it into a new marker line.
  */
 function dataSection(name: string, text: string): string[] {
-  return [`----- begin ${name} -----`, text.replace(SECTION_MARKER, ''), `----- end ${name} -----`];
+  return [`----- begin ${name} -----`, text.replace(SECTION_MARKER, '(section marker removed)'), `----- end ${name} -----`];
 }
 
 function cleanText(value: string): string {
