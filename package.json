@@ -2,7 +2,7 @@
   "name": "ticket-sidekick",
   "displayName": "Ticket Sidekick",
   "description": "Manage Jira tickets with GitHub Copilot Chat",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "license": "MIT",
   "publisher": "RobertBreunung",
   "engines": {
@@ -1439,7 +1439,7 @@
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
-    "vitest": "^5.1.0",
+    "vitest": "^5.1.1",
     "write-excel-file": "^4.1.1"
   },
   "dependencies": {
@@ -1447,7 +1447,7 @@
     "fast-xml-parser": "^5.12.1",
     "highlight.js": "11.12.0",
     "markdown-it": "15.0.3",
-    "minimatch": "^11.0.8",
+    "minimatch": "^11.0.9",
     "postal-mime": "^4.2.1",
     "zod": "^4.6.7"
   },
