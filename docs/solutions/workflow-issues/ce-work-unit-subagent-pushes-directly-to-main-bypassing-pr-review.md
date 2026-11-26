@@ -2,6 +2,7 @@
 title: A ce-work implementation-unit subagent pushed straight to `main` on GitHub, bypassing PR review, because its prompt banned commits but not pushes
 module: development-workflow/ce-work-unit-dispatch
 date: 2026-09-05
+last_updated: 2026-11-26
 problem_type: workflow_issue
 component: development_workflow
 severity: high
@@ -48,9 +49,15 @@ What actually happened, per the orchestrating session's own mid-run diagnosis (s
 
 When the user was shown this mid-session, the decision (session history, 2026-09-04 ~14:58) was to leave `main` as-is rather than revert or force-push — accepting that `main` already held U1–U5/U4 — and to still run a full code-review/simplify pass over all seven units regardless, since none of the code had actually been reviewed yet.
 
-A second, independent gap shows up in the very next PR: `git log --graph --oneline 2777100..e36ab5b` (PR #52, `feat/native-chat-interaction`) is a clean straight line entirely on its feature branch, merged via `e36ab5b`, with no direct-to-main commits at all — the opposite of PR #51's pattern, and consistent with session history for that plan showing no branch-timing or push incident. Yet its own plan doc, `docs/plans/2026-09-04-1618-feat-native-chat-interaction-plan.md`, was never committed: `git log --all --oneline -- docs/plans/2026-09-04-1618-feat-native-chat-interaction-plan.md` returns nothing, and `git status --short` shows it as an untracked `??` file in the working tree right now. A cleanly-branched, cleanly-reviewed PR can still leave a Definition-of-Done doc-commit step undone.
+A second, independent gap shows up in the very next PR: `git log --graph --oneline 2777100..e36ab5b` (PR #52, `feat/native-chat-interaction`) is a clean straight line entirely on its feature branch, merged via `e36ab5b`, with no direct-to-main commits at all — the opposite of PR #51's pattern, and consistent with session history for that plan showing no branch-timing or push incident. At the time, its own plan doc, `docs/plans/2026-09-04-1618-feat-native-chat-interaction-plan.md`, had not been committed: `git log --all --oneline -- <plan>` returned nothing and `git status --short` showed it as an untracked `??` file. It has been committed since. The generic point stands as a check: a cleanly-branched, cleanly-reviewed PR can still leave a Definition-of-Done doc-commit step undone.
 
-`CLAUDE.md`'s "Releasing" section documents an intentional, unrelated direct-to-branch pattern: the release workflow itself commits a version bump (and, for the `release` channel, a `CHANGELOG.md` entry) straight back to the branch and pushes it, by design, so published versions stay strictly increasing. That is a narrow, machine-driven commit scoped to version metadata only, executed by CI — not a worker subagent pushing feature-implementation logic. The two should not be conflated: one is sanctioned, documented, and metadata-only; the pattern this doc describes is an unscoped worker push that skipped review for feature logic.
+The release workflow described in `CLAUDE.md` ("Running tests", the paragraph beginning "Releases are manual") and `README.md` "## Releasing" documents an intentional, unrelated direct-to-branch pattern: the release workflow itself commits a version bump (and, for the `release` channel, a `CHANGELOG.md` entry) straight back to the branch and pushes it, by design, so published versions stay strictly increasing. That is a narrow, machine-driven commit scoped to version metadata only, executed by CI — not a worker subagent pushing feature-implementation logic. The two should not be conflated: one is sanctioned, documented, and metadata-only; the pattern this doc describes is an unscoped worker push that skipped review for feature logic.
+
+The SHAs, line counts and the 16:44 push time in this document come from the original clone and the session history; they cannot be re-verified from a shallow checkout.
+
+## Current application
+
+The execution-profile sentence "Workers do not commit or push on their own" in `docs/plans/2026-11-14-1641-feat-import-board-veracode-waltz-parity-plan.md`, `2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md`, `2026-11-19-0828-feat-pr-review-board-and-bitbucket-removal-plan.md` and `2026-11-25-0902-feat-review-board-layout-redesign-plan.md` applies this lesson. The incident's feature (the `@bitbucket` persona review) was later rebuilt as the review board's persona passes (`src/review/engine/extraPass.ts`).
 
 ## Guidance
 
@@ -79,7 +86,7 @@ This is worse than a visibly-skipped review because nothing in the repository's 
 
 **Before (this repo, PR #51):** `git log --graph --oneline 19758a6..2777100` shows `feat/bitbucket-persona-coverage-review` forking at `a142364`, five commits deep into a seven-unit plan (`b5a2c81` plan doc, then U1/U2/U3/U5/U4) — all pushed directly to `main` by a unit worker mid-run, per the orchestrating session's own diagnosis. `git diff --stat a142364..2777100` — the PR's actual reviewed diff — touches 5 files (704 insertions, 159 deletions): only U7, U6, a refactor, and the `601e754` bugfix. `git diff --stat b5a2c81..2777100` — the plan's full cumulative diff — touches 9 files (1379 insertions). The PR looks like the whole feature; it's roughly half of it, and the bugfix commit inside the PR is direct evidence a defect slipped through the unreviewed half.
 
-**After (this repo, PR #52, for contrast):** `git log --graph --oneline 2777100..e36ab5b` is a single straight line, `bd6cbe5` through `34d76f4`, all on `feat/native-chat-interaction`, no commits reachable from `main` before the branch existed and no push incident in that plan's session history. The PR's diff is a 1:1 match with the plan's full implementation. (Its separate gap: the plan doc `docs/plans/2026-09-04-1618-feat-native-chat-interaction-plan.md` is untracked in the working tree right now — even a cleanly-branched, cleanly-reviewed PR can leave a Definition-of-Done doc-commit step undone.)
+**After (this repo, PR #52, for contrast):** `git log --graph --oneline 2777100..e36ab5b` is a single straight line, `bd6cbe5` through `34d76f4`, all on `feat/native-chat-interaction`, no commits reachable from `main` before the branch existed and no push incident in that plan's session history. The PR's diff is a 1:1 match with the plan's full implementation. (Its separate gap at the time: the plan doc `docs/plans/2026-09-04-1618-feat-native-chat-interaction-plan.md` was untracked, since committed — even a cleanly-branched, cleanly-reviewed PR can leave a Definition-of-Done doc-commit step undone.)
 
 **Commands for a future session to run:**
 ```bash

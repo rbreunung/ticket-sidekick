@@ -1,6 +1,7 @@
 ---
 title: Documentation consolidation deleted CLAUDE.md facts assuming a comprehensive destination doc already had them
 date: 2026-08-21
+last_updated: 2026-11-26
 category: workflow-issues
 module: documentation/CLAUDE.md-consolidation
 problem_type: workflow_issue
@@ -29,12 +30,12 @@ This repo's `CLAUDE.md` went through a large restructuring: several sections wer
 
 The plan treated deleting the CLAUDE.md content and replacing it with a link as pure de-duplication — removing a second copy of information that `docs/review-process.md` already fully contained. That assumption was never checked fact-by-fact; it was accepted because the destination doc covered the same general topic and looked thorough. It was wrong. Several specific facts existed only in the CLAUDE.md prose and had no counterpart anywhere in `docs/review-process.md`:
 
-- The token-estimate footer's exact formula and format: `_~N estimated tokens · budget K_`, computed as `Math.ceil((totalInputChars + totalOutputChars) / 4)` summed across all LLM calls in the response (`src/participant/BitbucketParticipant.ts:834-835`).
-- `reviewExcludePatterns` matching mechanism: glob via `minimatch` with `matchBase: true` (`src/participant/BitbucketParticipant.ts:611`).
-- The `buildAdaptiveChunks` chunk-packing cost formula — `1500 + 50×files + ceil(diff.length/4)` tokens (`CHUNK_FIXED_OVERHEAD = 1500` / `CHUNK_FILE_OVERHEAD = 50` in `src/participant/reviewSessionState.ts:599-600`) — with the per-file-budget-exceeded / `@@`-hunk-splitting fallback.
+- The token-estimate footer's exact formula and format: `_~N estimated tokens · budget K_`, computed as `Math.ceil((totalInputChars + totalOutputChars) / 4)` summed across all LLM calls in the response (in the removed `BitbucketParticipant.ts`; the chat footer went with `@bitbucket` on 2026-11-23).
+- `reviewExcludePatterns` matching mechanism: glob via `minimatch` with `matchBase: true` (then in the removed `BitbucketParticipant.ts`; now in `src/review/engine/snapshot.ts`, and documented in `docs/review-process.md` "Diff intake and chunk budgeting").
+- The `buildAdaptiveChunks` chunk-packing cost formula — `1500 + 50×files + ceil(diff.length/4)` tokens (`CHUNK_FIXED_OVERHEAD = 1500` / `CHUNK_FILE_OVERHEAD = 50`, now in `buildAdaptiveChunks`'s module `src/review/reviewSessionState.ts`) — with the per-file-budget-exceeded / `@@`-hunk-splitting fallback.
 - The token-budget resolution order: `modelContextTokens` setting → `request.model.maxInputTokens` (VS Code LM API) → `60000` fallback, multiplied by `contextBudgetRatio`.
-- Deletion-diff handling: a `+++ /dev/null` header keeps the source path and sets `deleted: true` so removed code is still reviewed (`src/participant/reviewSessionState.ts:163-165`).
-- Follow-up turn message contracts, verbatim: an unresolvable `#N` reply → `` _Finding #N not found. The review has findings #1–#M._ `` (`BitbucketParticipant.ts:452`); cancellation → `` _Review session ended._ `` (`BitbucketParticipant.ts:406`); an LLM error on a follow-up → `**Follow-up failed:**` (`BitbucketParticipant.ts:507`); a comment-preview refinement error → `**Refinement failed:**` (`BitbucketParticipant.ts:393`).
+- Deletion-diff handling: a `+++ /dev/null` header keeps the source path and sets `deleted: true` so removed code is still reviewed (`parseDiff` in `src/review/reviewSessionState.ts`).
+- Follow-up turn message contracts, verbatim: an unresolvable `#N` reply → `` _Finding #N not found. The review has findings #1–#M._ ``; cancellation → `` _Review session ended._ ``; an LLM error on a follow-up → `**Follow-up failed:**`; a comment-preview refinement error → `**Refinement failed:**`. These four chat message contracts were removed with `@bitbucket` on 2026-11-23 (`CLAUDE.md` "Removed, no chat participant left"); they stay here only as an illustration of what a per-fact grep catches.
 
 This was caught before merge, not after, by a `ce-code-review` pass (coherence + feasibility personas, `mode:agent`) run as part of the shipping workflow. Its method was concrete rather than impressionistic: it grepped `docs/review-process.md` for each specific fact/term from the CLAUDE.md section being deleted — `"estimated token"`, `"matchBase"`, `"1500 + 50"`, `"60 000"`, `"dev/null"`, `"Finding #N"` — and got zero hits for all of them. It then named the exact failure mode this produces: a future contributor changing one of these facts (say, the token-estimate formula) would check `docs/review-process.md`, which explicitly says "keep this document in sync," to see whether the doc needed updating — and would find nothing describing the fact at all, because it was never there. The doc would drift silently, with no signal that it had ever gone stale, because it never claimed to cover the thing that changed.
 
@@ -64,19 +65,23 @@ The loss is worse than ordinary information loss because it's **unrecoverable ex
 
 **What was almost lost** (each below existed only in the CLAUDE.md prose slated for deletion, with zero matches in `docs/review-process.md` at the time of the reviewer's grep pass):
 
-- The token-estimate footer's exact template and formula: `` `_~${reviewTokenEst.toLocaleString()} estimated tokens · budget ${tokenBudget.toLocaleString()}_` ``, using `Math.ceil((totalInputChars + totalOutputChars) / 4)` (`BitbucketParticipant.ts:834-835`).
-- The chunk-packing cost formula: `1500 + 50×files + ceil(diff.length/4)` tokens per chunk (`CHUNK_FIXED_OVERHEAD` / `CHUNK_FILE_OVERHEAD` in `reviewSessionState.ts:599-602`), plus the hunk-splitting fallback for a single oversized file.
-- The `matchBase: true` mechanism by which `reviewExcludePatterns` glob-matches file paths (`BitbucketParticipant.ts:611`).
-- The follow-up message contracts, verbatim — `_Finding #N not found. The review has findings #1–#M._`, `_Review session ended._`, `**Follow-up failed:**`, `**Refinement failed:**`.
+- The token-estimate footer's exact template and formula: `` `_~${reviewTokenEst.toLocaleString()} estimated tokens · budget ${tokenBudget.toLocaleString()}_` ``, using `Math.ceil((totalInputChars + totalOutputChars) / 4)` (removed with `@bitbucket` on 2026-11-23).
+- The chunk-packing cost formula: `1500 + 50×files + ceil(diff.length/4)` tokens per chunk (`CHUNK_FIXED_OVERHEAD` / `CHUNK_FILE_OVERHEAD`, now in `src/review/reviewSessionState.ts`, used by `buildAdaptiveChunks`), plus the hunk-splitting fallback for a single oversized file.
+- The `matchBase: true` mechanism by which `reviewExcludePatterns` glob-matches file paths (now in `src/review/engine/snapshot.ts`).
+- The follow-up message contracts, verbatim — `_Finding #N not found. The review has findings #1–#M._`, `_Review session ended._`, `**Follow-up failed:**`, `**Refinement failed:**` (the chat strings were removed with `@bitbucket` on 2026-11-23).
 
 **How the review caught them:** the `ce-code-review` pass grepped `docs/review-process.md` for the specific terms/strings tied to each fact (`"estimated token"`, `"matchBase"`, `"1500 + 50"`, `"60 000"`, `"dev/null"`, `"Finding #N"`) and got zero hits across the board, then reported the concrete failure mode this creates for a future contributor relying on the "keep this document in sync" instruction to catch drift that the doc was never positioned to catch in the first place.
 
-**How it was fixed:** each fact was re-verified against current source before being written anywhere (e.g. confirming `reviewTokenEst`'s exact template at `BitbucketParticipant.ts:834-835` and `CHUNK_FIXED_OVERHEAD = 1500` at `reviewSessionState.ts:599`), then relocated into `docs/review-process.md` as a new "Diff intake and chunk budgeting" section, a new "Token estimate" section, and additions to "Follow-ups" — before, not after, the CLAUDE.md section was trimmed to a link. Shipped in PR #35 (branch `docs/claude-md-knowledge-restructure`), merged to `main`.
+**How it was fixed:** each fact was re-verified against current source before being written anywhere (e.g. confirming `reviewTokenEst`'s exact template in the then-current `BitbucketParticipant.ts` and `CHUNK_FIXED_OVERHEAD = 1500` in `reviewSessionState.ts`), then relocated into `docs/review-process.md` as a new "Diff intake and chunk budgeting" section, a new "Token estimate" section, and additions to "Follow-ups" — before, not after, the CLAUDE.md section was trimmed to a link. Shipped in PR #35 (branch `docs/claude-md-knowledge-restructure`), merged to `main`. The PR number and `42d3ea4` come from the original clone and cannot be re-verified from a shallow checkout.
 
 **A smaller parallel instance, same underlying mistake in the opposite direction:** the same review pass caught two miscounts in the plan document that drove this restructuring (not in CLAUDE.md itself) — a settings-key-prefix list naming only 4 of the 5 real `ticketSidekick.*` prefixes actually present in `package.json`'s `contributes.configuration` (missing `veracode`), and a stated row-count of "sixteen" for a table being relocated that was actually seventeen rows. Both were caught by the reviewer independently counting against `package.json` and the source table rather than trusting the plan's own enumeration/arithmetic. Same root lesson as the main finding: verify counts and coverage claims against the actual source — don't trust the summary, even when the summary was written carefully and looks complete.
 
+## Current application
+
+`docs/plans/2026-11-14-1257-feat-ticket-list-parity-and-step1-removal-plan.md` ("Check each removed doc fact against its destination before deleting it") applies this as a standing step.
+
 ## Related
 
-- No related `docs/solutions/` entries — this is this corpus's first `workflow-issues` entry; the three existing docs (`docs/solutions/integration-issues/waltz-oss-report-unzip-failure-on-real-world-xlsx.md`, `docs/solutions/logic-errors/redaction-substring-match-false-positives.md`, `docs/solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md`) are unrelated bug reports.
-- [`docs/review-process.md`](../../review-process.md) — the destination doc extended to carry the previously-unreachable facts.
+- [`docs/review-process.md`](../../review-process.md) — the destination doc extended to carry the previously-unreachable facts ("Diff intake and chunk budgeting").
+- [`docs/solutions/workflow-issues/copilot-host-surface-answered-from-source-but-blocked-on-managed-machine.md`](copilot-host-surface-answered-from-source-but-blocked-on-managed-machine.md) and [`docs/solutions/workflow-issues/import-board-parity-list-misses-recent-functional-import-work.md`](import-board-parity-list-misses-recent-functional-import-work.md) — the same pattern (acting on an unverified assumption or a remembered list) in other settings.
 - PR #35 (`docs/claude-md-knowledge-restructure`), merged to `main`.

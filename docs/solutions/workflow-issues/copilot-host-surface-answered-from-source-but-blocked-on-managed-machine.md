@@ -1,6 +1,7 @@
 ---
 title: A Copilot host surface confirmed from VS Code's source was still blocked on the managed machine
 date: 2026-11-13
+last_updated: 2026-11-26
 category: workflow-issues
 module: architecture/copilot-integration-surfaces
 problem_type: workflow_issue
@@ -51,11 +52,11 @@ The result: about a week of merged features (MCP lifecycle, keys, request guard,
 
 ## Why This Matters
 
-The extension's real users sit on managed banking machines with a corporate proxy and organisation-controlled Copilot policies. A design that works on an unmanaged developer machine and in VS Code's source can still be dead on arrival there, and each surface was only found out after its PRs were merged. The plan already assumes this risk continues: "Extension tools stay allowed by the organisation's Copilot policy … an organisation could restrict extension tools too, and then only the Command Palette boards remain" (boards plan, assumptions), and model access outside a chat participant is still to be checked on the managed machine before `@bitbucket` is removed.
+The extension's real users sit on managed banking machines with a corporate proxy and organisation-controlled Copilot policies. A design that works on an unmanaged developer machine and in VS Code's source can still be dead on arrival there, and each surface was only found out after its PRs were merged. The plan already assumes this risk continues: "Extension tools stay allowed by the organisation's Copilot policy … an organisation could restrict extension tools too, and then only the Command Palette boards remain" (boards plan, assumptions), Model access outside a chat request was confirmed on 2026-11-16 (`docs/architecture/migration-status.md` Q1, "Not tested with the organisation policy itself set") and `@bitbucket` is removed; the review board's own checks (four concurrent requests, Discuss in chat) sit in the "Managed-machine probe" in `docs/architecture/manual-checklist.md` (open point O22, still open).
 
 ## When to Apply
 
-- Before planning the import board, the PR review board, or any feature that calls a model outside a chat participant: run the managed-machine check the boards plan names first (model access with the Local harness disallowed).
+- Before planning any new feature that depends on a model call outside a chat request, a chat command (`workbench.action.chat.open`) or concurrent model requests: put the check in the managed-machine probe of `docs/architecture/manual-checklist.md` first.
 - When a VS Code release note or Copilot SDK change offers a new surface (canvas, agent host feature, MCP App, chat customization) that looks like a better host.
 - Whenever a spike table entry says "answered from docs" or "answered from source" and the next step is several PRs.
 
@@ -78,6 +79,8 @@ S1 | Does an MCP server registered through registerMcpServerDefinitionProvider
      Source: yes. Managed machine: open — run a one-tool probe there before PR 2.
 ```
 
+Live application: the review board's Discuss in chat and its parallel model requests are held as "Source: yes. Managed machine: open". `docs/architecture/manual-checklist.md` has a "Managed-machine probe (run first; stop and report if it fails)" with "Four concurrent model requests succeed" and "Discuss in chat opens Copilot Chat in Agent mode with the prompt typed in and not sent", and open point O22 in `docs/architecture/migration-status.md` runs it.
+
 Release gate that now carries the same idea for every step: R35 in the boards plan — a step becomes a normal release only after a written manual checklist passes on the maintainer's managed machine with the proxy, the organisation's Copilot policies and real Jira and Bitbucket Data Center.
 
 ## Related
@@ -85,5 +88,6 @@ Release gate that now carries the same idea for every step: R35 in the boards pl
 - `docs/architecture/copilot-harness-migration.md` — superseded plan; spikes S1 to S7 and decisions D1 to D22
 - `docs/architecture/boards-and-sessions.md` — the design as built (D18 to D22)
 - `docs/architecture/migration-status.md` — what is done and still open
+- `docs/architecture/manual-checklist.md` — the manual checklist with the managed-machine probe
 - `docs/plans/2026-11-11-2234-feat-boards-replace-chat-participants-plan.md` — current plan, R35 and the managed-machine assumptions
 - `docs/solutions/workflow-issues/doc-consolidation-unverified-destination-coverage-assumption.md` — another case of acting on an unverified assumption

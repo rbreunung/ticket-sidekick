@@ -1,6 +1,7 @@
 ---
 title: The import board's parity list misses the functional import work done just before the rewrite
 date: 2026-11-13
+last_updated: 2026-11-26
 category: workflow-issues
 module: architecture/migration-parity-import-board
 problem_type: workflow_issue
@@ -25,7 +26,7 @@ tags: [migration, parity, import-board, veracode, waltz, due-date, sla, auto-fin
 The work since PR #114 is a technical rewrite: Jira tools, skills and boards replace the `@jira` and `@bitbucket` chat participants (see `copilot-host-surface-answered-from-source-but-blocked-on-managed-machine.md` for the surface choice). The two weeks before it were functional work on the Veracode and Waltz imports, all inside the participant:
 
 - **2026-10-23, Veracode SLA Due Dates:** an SLA day table (`ticketSidekick.veracode.slaDays`), first-found and due-date columns in the Findings table, the Due Date written on create, on a new ticket and on rewrite, open tickets without a Due Date flagged for a rewrite (backfill), due dates in the export, and Waltz giving its rewrite Due Date through the same hook.
-- **2026-11-02/03, import review screens:** a compact page line, a Commands line and a help link backed by a command catalog (`src/participant/session/importCommands.ts`), help printed after a refused reply, `accept CVE`, one-line answers to `next`/`prev` at a page boundary, and **finishing a drained import without a `done` reply** (`isNewGroupDrained()` in `importScreens.ts`).
+- **2026-11-02/03, import review screens:** a compact page line, a Commands line and a help link backed by a command catalog (removed with `@jira` on 2026-11-16), help printed after a refused reply, `accept CVE`, one-line answers to `next`/`prev` at a page boundary, and **finishing a drained import without a `done` reply** (`isNewGroupDrained()`, removed with `@jira` on 2026-11-16).
 
 Earlier work in the same area added `search`/`show`, `reload report`, and screens marked out of date after `unaccept` or a ticket merge. All of it is described in `docs/report-import.md`.
 
@@ -39,27 +40,26 @@ The boards plan (`docs/plans/2026-11-11-2234-feat-boards-replace-chat-participan
 | Drained import finishes without `done` | not named | missing |
 | Export with due-date columns | "export" named | "export" named |
 
-Nothing in the tree checked this. The command guard tests (`importCommandsGuard.test.ts`, `jiraCommandsGuard.test.ts`) tie the chat reply parsers to their catalog, and both are deleted together with the participant.
+Nothing in the tree checked this. The command guard tests tied the chat reply parsers to their catalog, and were deleted together with the participant (removed with `@jira` on 2026-11-16).
 
-**Fixed the same day:** O7 and R16 now name these rules, `migration-status.md` has an "Import board parity ledger" that gives every reply command and importer capability a Carry over or Dropped decision, and `src/test/importBoardParity.test.ts` fails when a command or capability has no row there.
+**Outcome:** O7 and R16 were made to name these rules the same day, and `docs/architecture/migration-status.md` has an "Import board parity ledger" that gives every reply command and importer capability a Carry over or Dropped decision. Later a "Review board parity ledger" was built the same way for `@bitbucket`. Both are guarded by `src/test/importBoardParity.test.ts` and `src/test/reviewBoardParity.test.ts`, which also map each carried-over row to a board action and a scenario test.
 
 ## Guidance
 
-1. **Build a parity list from the old surface's spec and code, not from memory of its actions.** For the imports, the sources are `docs/report-import.md`, the `ReportImportDescriptor` capabilities (`fold`, `changeTracking` with `dueDateBackfill`, `accepted`, `ticketMerge`, `overviewExport`, `rewriteDueDate`/`dueDateNote`) and the reply kinds in `IMPORT_COMMAND_ENTRIES`. Every capability and every behaviour that changes what is written to Jira gets its own line.
+1. **Build a parity list from the old surface's spec and code, not from memory of its actions.** For the imports, the sources are `docs/report-import.md`, the `ReportImportDescriptor` capabilities (`fold`, `changeTracking` with `dueDateBackfill`, `accepted`, `ticketMerge`, `overviewExport`, `rewriteDueDate`/`dueDateNote`) and the reply commands of the old import screens, now kept as a list in `src/test/importBoardParity.test.ts`. Every capability and every behaviour that changes what is written to Jira gets its own line.
 2. **Treat the most recent functional work as the most likely to be lost.** It is the least settled in anyone's memory and often not yet in the design summary. When a rewrite follows a feature stretch, go through `git log` for that stretch and check each feature against the parity list.
 3. **Separate behaviour from chat presentation.** The Commands line, the help link and "help after a refused reply" exist because a chat reply has to be typed; a board shows controls instead and does not need them. Due Dates, auto-finish, refresh and out-of-date marking are behaviour and must carry over, or be dropped by a recorded decision.
 4. **Keep the working list as detailed as the requirement.** "Same rules and results" in R16 does not help a session that plans from O7. If a rule matters, name it in the open point.
-5. **Let a test hold the list.** `src/test/importBoardParity.test.ts` reads the reply commands from `IMPORT_COMMAND_ENTRIES` and the optional members of `ReportImportDescriptor` and `ImportChangeTracking`, and fails when one has no row in the parity ledger or a row has no decision. Rules with no command or capability of their own (the SLA Due Date on create, auto-finish, the out-of-date marking) are in the ledger too, but only a reviewer can check them. When a new import feature fails the test, add its row with a decision; do not drop the test before the import participant is removed (O11).
+5. **Let a test hold the list.** `src/test/importBoardParity.test.ts` holds the removed reply commands as a list and reads the optional members of `ReportImportDescriptor` and `ImportChangeTracking`, and fails when one has no row in the parity ledger or a row has no decision. Rules with no command or capability of their own (the SLA Due Date on create, auto-finish, the out-of-date marking) are in the ledger too, but only a reviewer can check them. When a new import feature fails the test, add its row with a decision; the guard outlives the replaced surface: keep the removed commands as a list inside the test (as `importBoardParity.test.ts` does) and map each to the board rule and scenario test that keeps it.
 
 ## Why This Matters
 
-The import board is the step that lets `@jira` be removed (O11). If it ships from the O7 list, a Veracode import on the board could create tickets without the SLA Due Date, stop flagging tickets without one, and leave a drained import waiting. Nothing would fail, because the participant code and its tests are deleted in the same step. The Due Date is what the security report's `overdue` and `due-before-release` flags are computed from, so the loss would also show up later, as missing flags on the security report board.
+The import board was the step that let `@jira` be removed (O11, closed 2026-11-16). Had it shipped from the O7 list, a Veracode import on the board could create tickets without the SLA Due Date, stop flagging tickets without one, and leave a drained import waiting. Nothing would fail, because the participant code and its tests are deleted in the same step. The Due Date is what the security report's `overdue` and `due-before-release` flags are computed from, so the loss would also show up later, as missing flags on the security report board.
 
 ## When to Apply
 
-- Before planning or reviewing the import board (O7, O8), and again before removing the imports (O11).
-- For the PR review board in step 3: run the same check on `docs/review-process.md` (modes, requirements pass, follow-ups, token usage, truncated Data Center diffs) before `@bitbucket` is removed.
 - Whenever a requirement promises parity with "same rules and results".
+- Any future removal of a surface (a skill, a board kind) uses the same ledger-plus-test pattern.
 
 ## Examples
 

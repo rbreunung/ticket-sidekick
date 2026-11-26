@@ -59,7 +59,7 @@ A ticket field whose value is usually the same across many tickets of a kind —
 ## Boards
 
 ### Board
-A page in an editor tab (a VS Code webview) that shows a session and sends the developer's actions to the extension over the tab's message channel; the page holds no state. Also called an editor view. A write is shown as a preview before a second Apply click, and a write to several tickets, a close or a Bitbucket post also needs a VS Code confirmation. Built: the security report (no writes), the ticket list (search, bulk move, bulk field update, cleanup), the sessions board and the import board (Veracode, Waltz). Planned: the import board's email kind and the PR review board.
+A page in an editor tab (a VS Code webview) that shows a session and sends the developer's actions to the extension over the tab's message channel; the page holds no state. Also called an editor view. A write is shown as a preview before a second Apply click, and a write to several tickets, a close or a Bitbucket post also needs a VS Code confirmation. Built: the security report (no writes), the ticket list (search, bulk move, bulk field update, cleanup), the sessions board, the import board (Veracode, Waltz, emails) and the PR review board.
 *Avoid:* "canvas" — VS Code canvases were tried and removed; a board is never one.
 
 ### Cleanup board
@@ -76,6 +76,14 @@ Working state in a session whose target changed or disappeared when the sources 
 
 ### Extension tool
 A Jira or Bitbucket tool registered with VS Code as a language model tool, which Copilot's agent calls. It is the only way Copilot reaches Ticket Sidekick's tools; the Jira ones come from one catalog (`src/tools/jiraTools/`). An earlier MCP server offering the same tools was removed.
+
+## Migration
+
+### Parity ledger
+The list of everything a surface being replaced can do, built from that surface's own code and specification rather than from memory, with each entry mapped to the rule or action that keeps it on the replacement, or marked as deliberately dropped. A test holds the list, so a capability with no mapped entry fails the build, and the guard outlives the removed surface. The chat participants' replacement by boards and tools was checked this way, once for the imports and once for the pull request review.
+
+### Managed machine
+The maintainer's work computer, where organisation policy, proxies and Copilot limits decide which VS Code and Copilot surfaces actually work. A capability confirmed from source code or on another machine counts as open until it has been run there; a manual probe on it is the last gate before a feature that depends on such a capability is released.
 
 ## Flagged ambiguities
 

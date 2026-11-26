@@ -1,101 +1,69 @@
 ---
-title: "Combined create-ticket list silently guesses an issue type ('Task') and drops the no-template fallback when the issue-type fetch fails"
+title: "Ticket create must never guess an issue type, and a failed issue-type fetch must not remove the only way forward"
 date: 2026-08-25
+last_updated: 2026-11-26
 category: logic-errors
-module: "src/participant/jira/createHandler.ts — handleCreateTicket() / streamCreateSelection(); src/participant/JiraParticipant.ts — <!-- jira:selecting-create-option --> routing block"
+module: "src/tools/jiraTools/createTicket.ts (jira_create_ticket handler); src/tools/jiraTools/toolMessages.ts (formatIssueTypeOptionsMessage)"
 problem_type: logic_error
 component: assistant
 symptoms:
-  - "A template with no explicit `issueType` in `.jira-templates.json`, combined with a failed `ticketService.getIssueTypes(projectKey)` call, silently defaulted the ticket's issue type to the literal string `'Task'` with no indication to the user it was a guess rather than a resolved fact"
-  - "If the project had no `Task` issue type, ticket creation failed with an opaque Jira 400; if it happened to have one, a ticket was silently created with a possibly-wrong issue type"
-  - "When templates existed but the issue-type fetch failed entirely, the merged selection list rendered only the templates section (the 'Issue types (no template)' section was gated on `issueTypes.length > 0`), leaving the user stuck picking a template with no way to create a ticket without one, other than cancelling"
-  - "This regressed an escape hatch the old, pre-merge two-separate-lists code always provided — a `showInputBox` free-type fallback in this exact scenario"
-  - "Caught only by a post-implementation `ce-code-review` pass on the finished diff, not by planning-phase review or by the implementer"
+  - "A create with no issue type and no template-supplied one was submitted to Jira with the literal 'Task' as its issue type, with nothing to show it was a guess"
+  - "A project with no 'Task' issue type answered with an opaque Jira 400; a project that had one got a ticket with a possibly wrong type, created silently"
+  - "When the issue-type fetch failed, the 'issue types (no template)' section of the old selection list vanished because it was gated on a non-empty array, leaving the user nothing to pick but templates"
+  - "Caught only by a post-implementation code review, not by planning review, the implementer or the tests"
 root_cause: logic_error
 resolution_type: code_fix
 severity: medium
-related_components: [JiraParticipant, sessionState, createHandler]
-tags: [issue-type-resolution, silent-default, missing-fallback, template-selection, chat-participant, code-review-finding, sentinel-value, jira-create]
+related_components: [JiraTools, TicketService]
+tags: [issue-type-resolution, silent-default, missing-fallback, failed-fetch, jira-create, code-review-finding]
 ---
 
-# Combined create-ticket list silently guesses an issue type ('Task') and drops the no-template fallback when the issue-type fetch fails
+# Ticket create must never guess an issue type, and a failed issue-type fetch must not remove the only way forward
 
 ## Problem
 
-While merging `@jira create`'s separate template-list and issue-type-list prompts into one combined numbered list (`docs/plans/2026-08-24-2201-refactor-align-create-issuetype-list-plan.md`), the new selection-building logic in `handleCreateTicket` (`src/participant/jira/createHandler.ts`) conflated "no value was resolvable" with "pick a plausible default." When a template's own `issueType` couldn't be resolved — either the template had none configured, or `ticketService.getIssueTypes(projectKey)` failed outright — the list either silently substituted a fabricated issue type or silently dropped the user's only way to create a ticket without a template.
+When a ticket is created without an issue type, and no template supplies one, the code must not fall back to a plausible literal such as `'Task'`. A guessed type looks like a real value all the way to Jira. It either comes back as an opaque 400 or creates a wrong-typed ticket without anyone noticing. The second half of the rule: when the list of valid issue types cannot be fetched, that failure must not silently remove the only way forward. The caller must still be told what to do next.
 
 ## Symptoms
 
-- A template with no explicit `issueType` in `.jira-templates.json`, combined with a failed issue-type fetch, caused the ticket to be submitted to Jira with the literal string `'Task'` as its issue type — no indication to the user this was a guess. A project with no `Task` issue type got an opaque Jira 400; a project that happened to have one got a ticket with a possibly-wrong type, silently.
-- When templates existed but the issue-type fetch failed entirely (`issueTypes = []`), the merged list's "Issue types (no template)" section rendered only `if (session.issueTypes.length > 0)` — with `issueTypes` empty, the section vanished. The user was stuck picking from templates only, with `(c)` to cancel as the only way out.
-- The old, pre-merge two-separate-lists code always resolved to a `showInputBox` free-type fallback in the second scenario; the merged-list rewrite silently regressed that escape hatch.
-- Neither issue was caught by planning-phase review or by the implementer — both surfaced only in a post-implementation `ce-code-review` pass on the finished diff.
+This was first seen in the `@jira` chat participant's combined template and issue-type list, which was removed on 2026-11-16. The same rule now governs the `jira_create_ticket` tool. As observed then:
+
+- A template with no `issueType`, combined with a failed issue-type fetch, was submitted with the literal `'Task'`. A project without that type got a Jira 400. A project with it got a ticket of a possibly wrong type, silently.
+- With templates present and the fetch failed, the section listing issue types for a no-template create rendered only when `issueTypes.length > 0`. It disappeared, and the user could only pick a template or cancel. The older two-list code had always offered a free-type fallback in that case, so the merge regressed it.
+- Neither problem showed up in planning review or in the implementer's own check. A review pass over the finished diff found both.
 
 ## What Didn't Work
 
-- Building each template's list entry as `issueType: t.issueType ?? issueTypes[0] ?? 'Task'` — falling all the way through to the hardcoded string `'Task'` when neither the template nor the fetched issue types had anything to offer. `'Task'` reads as a reasonable guess for a lot of Jira projects, which is exactly what made it dangerous: it looked like a real value everywhere downstream (list rendering, the submitted payload, Jira's own 400 response), with nothing to distinguish "the user chose this" from "the code invented this."
-- Gating the standalone "Issue types (no template)" section purely on `session.issueTypes.length > 0`. That check is correct when `issueTypes` came from a successful fetch — but the code building `session.issueTypes` didn't first guarantee it would be non-empty in every case that reached the combined list, so a failed fetch with templates still present produced an empty array and a vanished section, with no other code path providing a bypass.
+- A `??` chain that bottomed out in a literal: `t.issueType ?? issueTypes[0] ?? 'Task'`. `'Task'` is a reasonable guess for many projects, which made it dangerous. Downstream, the list, the payload and Jira's error all treated it as a real choice, and nothing separated "the user chose this" from "the code invented this".
+- Gating a section on `array.length > 0` without checking that every path building the array could leave it non-empty. A failed fetch produced an empty array, the section vanished, and no other path offered a way out.
 
 ## Solution
 
-Introduce `''` (empty string) as an explicit "no resolvable issue type" sentinel — never a real Jira issue type name — used at three points in `createHandler.ts`, plus one in `JiraParticipant.ts`'s routing block:
+`src/tools/jiraTools/createTicket.ts` states in the tool's description that the issue type is never guessed. In the `jira_create_ticket` handler, the issue type comes from only two sources: the `issueType` argument (`requestedType`, trimmed, or undefined) and the issue type of a resolved template. There is no third, hardcoded source.
 
-**1. Template list construction** (`createHandler.ts`):
+When both are missing, the handler creates nothing. It calls `ticketService.getIssueTypes(projectKey)`, logs a warning through `onDiag` if that call throws, and returns `formatIssueTypeOptionsMessage(projectKey, issueTypes)` from `src/tools/jiraTools/toolMessages.ts`, preceded by any template note.
 
-```ts
-// before
-templates: templates.map((t) => ({ name: t.name, issueType: t.issueType ?? issueTypes[0] ?? 'Task' })),
+`formatIssueTypeOptionsMessage` has two explicit branches:
 
-// after
-templates: templates.map((t) => ({ name: t.name, issueType: t.issueType ?? issueTypes[0] ?? '' })),
-```
+- With issue types, it says no ticket was created and lists the project's valid types. It tells the caller to call the tool again with one as `issueType`, or with a `templateName`.
+- With none, because the fetch failed or returned nothing, it has its own text. It says no ticket was created, that the project's issue types could not be fetched, and that the caller should call again with an explicit `issueType`.
 
-**2. Issue-type list construction, guaranteeing a bypass entry** (`createHandler.ts`):
-
-```ts
-// before
-issueTypes,
-
-// after
-issueTypes: issueTypes.length > 0 ? issueTypes : [''],
-```
-
-This makes the existing `session.issueTypes.length > 0` render guard trivially true whenever templates exist but the fetch failed — the section always has at least the one sentinel entry to show.
-
-**3. Rendering the sentinel as an instruction, not a blank** (`streamCreateSelection` in `createHandler.ts`):
-
-```ts
-const label = (issueType: string) => issueType === '' ? '_you will be asked to type it_' : issueType;
-```
-
-**4. Routing block detours to the input box instead of submitting the sentinel** (`JiraParticipant.ts`, inside the `<!-- jira:selecting-create-option -->` handler, after `pickEmailOption()` resolves the user's numeric pick):
-
-```ts
-let issueType = pick.issueType;
-if (issueType === '') {
-  const entered = await vscode.window.showInputBox({ prompt: 'Enter the issue type (e.g. Bug, Story, Task)', ignoreFocusOut: true }) ?? null;
-  if (!entered) { stream.markdown('No issue type provided — cancelled.'); return; }
-  issueType = entered;
-}
-```
-
-This mirrors the pre-existing "both templates and issue types are completely empty" fallback, which already used `showInputBox` for the same reason — the fix generalizes that existing escape hatch to a second, previously-unhandled partial-failure case (templates present, issue-type fetch failed) instead of inventing a new mechanism.
+A comment in `toolMessages.ts` records that this mirrors the old chat flow's never-guess handling. It is adapted from an input-box prompt to a returned message, because a tool call has no interactive prompt.
 
 ## Why This Works
 
-The root failure mode is **silently substituting a plausible-looking default for a value that could not actually be resolved from any real source**. `'Task'` and "just omit the section" both hide the fact that the code has no real answer — one hides it behind a fabricated value that flows all the way to Jira's API, the other hides it by removing the only UI path that could have produced a real answer. Both are invisible until a user (or Jira's 400 response) surfaces them, by which point the ticket is either wrong or the user is stuck.
+The failure came from substituting a plausible default for a value that could not be resolved from any real source. One version hid the gap behind a fabricated value that reached Jira. The other hid it by removing the only path that could give a real answer.
 
-The `''` sentinel fixes this structurally rather than patching each symptom: it is a value that is provably never a real Jira issue-type name, so it can be checked for equality everywhere the resolved issue type is consumed — in list rendering (`label()`), in list construction (guaranteeing the bypass entry exists), and in the terminal routing step (detouring to `showInputBox` instead of calling `continueAfterIssueType` with a guess). Because the sentinel is threaded through the same `CreateSelectionSession`/`pickEmailOption()` data path as a real issue type, there is exactly one place it must be intercepted before reaching the Jira API — no duplicate defaulting logic to keep in sync across call sites.
+The tool avoids both. An unresolved issue type is a stop condition, not a value, so there is nothing for a default to flow through. The failed-fetch case is a separate branch, not an empty list rendered through the success path, so the caller always gets a next step. Because the stop happens before `createTicket` runs, nothing is written to Jira on the unresolved path.
 
 ## Prevention
 
-- **General principle**: when a value your code needs isn't resolvable from any real source (a failed fetch, a missing config field), don't let a fallback chain (`??`) silently bottom out in a plausible-looking literal. Bottom it out in a sentinel that is provably distinguishable from every real value, and force that sentinel through an explicit fallback UI or error path at the point of consumption — never let it flow silently into a downstream API call.
-- **Code-review checklist item**: any `??`/`||` fallback chain that ends in a hardcoded literal (a string like `'Task'`, a magic number, a default id) is worth flagging — ask whether that literal represents a real, verified value or is standing in for "nothing worked." If the latter, it should be a sentinel plus an explicit handling path, not a silent default.
-- **List/section-gating checklist item**: when a UI section's visibility is gated on `array.length > 0`, check whether every code path that constructs that array actually guarantees it can be non-empty when the section needs to appear, rather than relying on an assumption (e.g. "the fetch usually succeeds") that a failure path silently violates.
-- This bug pattern was caught by an automated `/code-review` pass on a plan-driven implementation, not by a human reviewer or by the test suite — `createHandler.ts` and the `JiraParticipant.ts` routing block both import `vscode` directly, so both fall under the same Vitest-unloadable rule `CLAUDE.md`'s Testing section states by name for `JiraParticipant.ts`/`BitbucketParticipant.ts`, and this class of bug is structurally invisible to `npm test` here. A `/code-review` pass (or equivalent manual review) is the load-bearing check for `vscode`-coupled flow code in this codebase — worth running deliberately on any new multi-step `vscode`-dependent flow rather than assuming unit-test coverage will catch fallback/default-value bugs in it.
+- Any `??` or `||` chain that ends in a hardcoded literal (a string like `'Task'`, a magic number, a default id) needs a stated reason. Ask whether the literal is a verified real value or stands in for "nothing worked". If it is the latter, return an explicit stop or error instead.
+- Give the failed-fetch path its own explicit text instead of reusing the success path with an empty list. Gating output on `array.length > 0` is only safe when every path that builds the array can make it non-empty.
+- Keep the tests in `src/test/jiraWriteTools.test.ts` under "create ticket": "without a template or issue type lists the issue types and creates nothing" and "creates nothing when the template names no issue type and the issue types cannot be read, and says what to give". The second pins the failed-fetch case, including that nothing is created.
+- Review new create or write paths for the same shape: a value resolved from a remote lookup, with a fallback when the lookup fails.
 
 ## Related Issues
 
-- `docs/solutions/logic-errors/confirm-cancel-word-list-broadening-swallows-domain-name-collisions.md` — a different failure mode (parsing-order collision, not silent-default) in the same Jira ticket-creation multi-turn selection subsystem (`src/participant/sessionState.ts` / `createHandler.ts` / `JiraParticipant.ts`), also caught by a post-implementation `ce-code-review` pass rather than by tests. Worth reading together as two distinct ways this subsystem's `vscode`-coupled flow code has slipped past earlier review.
-- `docs/plans/2026-08-24-2201-refactor-align-create-issuetype-list-plan.md` — the plan this fix was implemented against; KTD5 and KTD7 in its Planning Contract document this exact fix and its rationale.
-- PR #39 (`rbreunung/ticket-sidekick`, `worktree-brainstorm-align-issuetype-list` branch), merged into `main` 2026-08-24.
+- [`concurrent-attachment-download-same-filename-race-silently-drops-one.md`](concurrent-attachment-download-same-filename-race-silently-drops-one.md): another silent-failure shape, where work disappears without any signal to the user.
+- [`docs/onboarding.md`](../../onboarding.md) states the current never-guess rule and links here for the failure mode.

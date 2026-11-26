@@ -1,6 +1,7 @@
 ---
 title: git commands hardcoded to 'origin' fail in this repo -- the GitHub remote is named 'Github'
 date: 2026-08-22
+last_updated: 2026-11-26
 category: workflow-issues
 module: development-workflow/git-remote-configuration
 problem_type: workflow_issue
@@ -25,6 +26,8 @@ tags: [git, github, gh-cli, remote-name, origin, multi-remote, ce-commit-push-pr
 # git commands hardcoded to 'origin' fail in this repo -- the GitHub remote is named 'Github'
 
 ## Context
+
+Observed on the maintainer's local clone; a fresh or cloud checkout may name its remote `origin`, so verify with `git remote -v` first.
 
 During an automated `ce-work` -> `ce-commit-push-pr` shipping run, several git commands that assume a remote named `origin` failed outright:
 
@@ -148,6 +151,6 @@ gh pr view 37 --json state,mergedAt
 
 ## Related
 
-- No related `docs/solutions/` entries -- a corpus-wide search (frontmatter and content grep across `title`, `tags`, `module`, and full-text for `remote`/`origin`/`git push`/`gh repo`) found no doc covering git-remote naming or `origin`-assumption failures; the two incidental hits (a `git log`-style "pushed to the Github remote" mention in `docs/solutions/integration-issues/waltz-oss-report-unzip-failure-on-real-world-xlsx.md`, and an unrelated "remote-image embed" wiki-markup term in `docs/solutions/security-issues/waltz-oss-report-markdown-injection-in-jira-wiki-converter.md`) are unrelated to this topic. `docs/solutions/workflow-issues/doc-consolidation-unverified-destination-coverage-assumption.md` is this corpus's only other `workflow-issues` entry and shares the directory but not the topic (documentation fact-verification, not git tooling).
+- `docs/solutions/workflow-issues/subagent-write-tool-silently-fails-on-posix-tmp-path-on-windows.md` — same shape: an environment-specific assumption silently breaks automation.
 - No related GitHub issues found (`gh issue list --search "origin remote" --state all` and `gh issue list --search "remote push" --state all` against `rbreunung/ticket-sidekick` both returned zero results).
 - PR #37 (`feat/unify-review-table-rendering`), merged to `main`.
