@@ -439,7 +439,6 @@ function copyButtons(r, board) {
     }, `Copy ${scope}`),
     copyMenuOpen ? h('span', {
       id: 'copy-menu-items', class: 'menu', role: 'menu', 'aria-label': 'Copy format',
-      onKeydown: e => { if (e.key === 'Escape') { e.preventDefault(); copyMenuOpen = false; board.repaint(); document.getElementById('copy-menu')?.focus(); } },
     }, item('copy-teams', 'teams', 'Copy for Teams'), item('copy-markdown', 'markdown', 'Copy as Markdown')) : null);
 }
 
@@ -641,10 +640,32 @@ function results(view, board, off) {
     r.hasReview || r.running?.what === 'regular' ? columns(r, board, off) : null);
 }
 
+/** What the page shows: the first step, a regular pass under way, or the review. */
+let shownPhase;
+
+/**
+ * A new review (New review, or Run again, which numbers the findings from #1) starts with none of
+ * the page's own lines and choices from the one before: the result lines would sit next to
+ * unrelated findings.
+ */
+function forgetOnNewReview(view) {
+  const phase = view.stage === 'first-step' ? 'first-step' : view.results?.running?.what === 'regular' ? 'regular-pass' : 'review';
+  if (phase !== shownPhase && phase !== 'review') {
+    copyLine = undefined;
+    discussLine = undefined;
+    linkLine = undefined;
+    opened = undefined;
+    previewing.clear();
+    copyMenuOpen = false;
+  }
+  shownPhase = phase;
+}
+
 boardRef = startBoard({
   root: document.getElementById('root'),
   loading: () => h('p', { class: 'muted' }, 'Reading the pull request…'),
   render: (view, board, locked) => {
+    forgetOnNewReview(view);
     announce(view.progress ?? discussLine?.text ?? copyLine?.text ?? linkLine ?? '');
     return h('div', {},
       headerLine(view),
@@ -653,3 +674,23 @@ boardRef = startBoard({
   },
 });
 watchWidth(document.getElementById('root'));
+
+// The narrow tab's Copy menu closes on a press outside it and on Escape wherever the focus is.
+function closeCopyMenu(focusButton) {
+  copyMenuOpen = false;
+  boardRef?.repaint();
+  if (focusButton) document.getElementById('copy-menu')?.focus();
+}
+document.addEventListener('pointerdown', e => {
+  if (copyMenuOpen && !insideCopyMenu(e.target)) closeCopyMenu(false);
+}, true);
+document.addEventListener('keydown', e => {
+  if (copyMenuOpen && e.key === 'Escape') { e.preventDefault?.(); closeCopyMenu(true); }
+});
+
+function insideCopyMenu(node) {
+  for (let el = node; el; el = el.parentNode) {
+    if (el.getAttribute?.('class')?.split(' ').includes('copy-menu')) return true;
+  }
+  return false;
+}

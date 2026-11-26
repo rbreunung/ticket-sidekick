@@ -649,6 +649,21 @@ describe('the review board page: the detail pane', () => {
     expect(must('copy-result').textContent).toBe('Copied 2 findings.');
   });
 
+  it('the Copy and Discuss result lines of one review are gone when a new review starts', async () => {
+    copyAnswer = { outcome: 'copied', count: 2 };
+    discussAnswer = { outcome: 'opened' };
+    await loadBoard(boardState(reviewView(results({ band: band({ state: 'folded' }) }))));
+    await openEntry(2);
+    await click(must('discuss-2'));
+    await click(must('copy-markdown'));
+    expect(must('copy-result').textContent).toBe('Copied 2 findings.');
+
+    await push({ view: view({ firstStep: firstStep() }) });
+    await push({ view: reviewView(results({ band: band({ state: 'folded' }) })) });
+    expect(byId('copy-result')).toBeNull();
+    expect(byId('discuss-result-2')).toBeNull();
+  });
+
   it('Discuss in chat names only the finding number, and says when the prompt was copied because the chat could not open', async () => {
     discussAnswer = { outcome: 'opened' };
     await loadBoard(boardState(reviewView(results({ band: band({ state: 'folded' }) }))));
@@ -718,6 +733,28 @@ describe('the review board page on a narrow tab', () => {
     await click(must('copy-markdown'));
     expect(posted('copy')).toEqual([{ format: 'markdown', numbers: [3] }]);
     expect(byId('copy-menu-items')).toBeNull();
+  });
+
+  it('the Copy menu closes on a press outside it, and on Escape with the focus elsewhere', async () => {
+    await narrowBoard(boardState(reviewView(results({ band: band({ state: 'folded' }) }))));
+    await click(must('copy-menu'));
+    expect(byId('copy-menu-items')).toBeTruthy();
+    page.document.dispatch('pointerdown', { target: must('copy-teams') });
+    page.document.dispatch('pointerup');
+    await settle();
+    expect(byId('copy-menu-items')).toBeTruthy();
+
+    page.document.dispatch('pointerdown', { target: must('select-all') });
+    page.document.dispatch('pointerup');
+    await settle();
+    expect(byId('copy-menu-items')).toBeNull();
+
+    await click(must('copy-menu'));
+    must('select-all').focus();
+    page.document.dispatch('keydown', { key: 'Escape' });
+    await settle();
+    expect(byId('copy-menu-items')).toBeNull();
+    expect(page.document.activeElement?.id).toBe('copy-menu');
   });
 });
 

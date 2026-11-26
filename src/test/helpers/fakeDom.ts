@@ -7,6 +7,9 @@
 
 export class FakeNode {
   parent: FakeElement | null = null;
+  get parentNode(): FakeElement | null {
+    return this.parent;
+  }
   get textContent(): string {
     return '';
   }
@@ -117,8 +120,8 @@ export class FakeDocument {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
   /** Sends a document-level event, such as the `pointerdown` and `pointerup` around a mouse press. */
-  dispatch(type: string): void {
-    for (const listener of this.listeners.get(type) ?? []) listener({ type });
+  dispatch(type: string, extra: Record<string, unknown> = {}): void {
+    for (const listener of this.listeners.get(type) ?? []) listener({ type, ...extra });
   }
   getSelection(): { anchorNode: unknown; isCollapsed: boolean; rangeCount: number } {
     return this.selection;
