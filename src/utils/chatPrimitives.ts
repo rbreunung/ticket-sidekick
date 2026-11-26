@@ -1,24 +1,4 @@
-// Leaf chat helpers: markdown neutralizing, confirm/cancel and greeting words, the review-table renderer and counted nouns. Pure (vscode-free).
-
-export function isConfirmation(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  const CONFIRMATIONS = new Set([
-    'yes', 'yep', 'ok', 'okay', 'sure', 'perfect', 'great',
-    'looks good', 'looks great', 'go ahead', 'do it', 'ship it',
-    'post it', 'post', 'confirm', 'confirmed', 'submit', 'approved', 'approve', 'fine',
-    'load all', 'load more', 'show all', 'show more', 'create it',
-  ]);
-  return CONFIRMATIONS.has(normalized);
-}
-
-export function isCancellation(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  const CANCELLATIONS = new Set([
-    'c', 'no', 'nope', 'cancel', 'cancelled', 'stop', 'abort',
-    'never mind', 'nevermind', "don't", 'dont', 'quit', 'skip',
-  ]);
-  return CANCELLATIONS.has(normalized);
-}
+// Leaf text helpers: markdown neutralizing, the review-table renderer, counted nouns and bullet lists. Pure (vscode-free).
 
 /**
  * Neutralizes markdown link/image syntax in untrusted, externally-influenced text (a Jira ticket
