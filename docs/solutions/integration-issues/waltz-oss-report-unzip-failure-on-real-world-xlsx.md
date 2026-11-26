@@ -1,6 +1,7 @@
 ---
 title: read-excel-file/unzipper-esm fails to unzip real-world .xlsx exports that open fine in Excel
 date: 2026-08-20
+last_updated: 2026-11-26
 category: integration-issues
 module: "src/utils/waltzReport.ts — parseWaltzReport() / loadWaltzWorkbook()"
 problem_type: integration_issue
@@ -14,7 +15,7 @@ symptoms:
 root_cause: dependency_incompatibility
 resolution_type: dependency_update
 severity: high
-related_components: [waltzHandler, reportImportHandler, extension]
+related_components: [import-board, imports-waltz]
 tags: [waltz-oss-report, xlsx, unzip, read-excel-file, unzipper-esm, exceljs, jszip, fixture-blind-spot]
 ---
 
@@ -26,7 +27,7 @@ tags: [waltz-oss-report, xlsx, unzip, read-excel-file, unzipper-esm, exceljs, js
 
 ## Symptoms
 
-- `@jira import oss report` (and the equivalent Command Palette command) fails with `Could not read OSS report: Couldn't unzip \`.xlsx\` file contents`.
+- The Waltz import (then `@jira import oss report` and its Command Palette command; today the import board) fails with `Could not read OSS report: Couldn't unzip \`.xlsx\` file contents`.
 - The same file opens cleanly in Excel — no password prompt, no repair warning.
 - The file lives in a plain local (non-cloud-synced) Downloads folder.
 - Every pre-existing `waltzReport.test.ts` fixture stayed green throughout — the bug was invisible to CI.
@@ -46,9 +47,9 @@ With those four eliminated, the remaining explanation was a ZIP-parser compatibi
 
 ## Solution
 
-Fixed in commit `720bf09` on branch `fix/waltz-oss-report-unzip-compat` (pushed to the `Github` remote; no PR opened, not yet merged as of this writing).
+Fixed and merged; the current code is `loadWaltzWorkbook`, `readNamedSheet`, `headerIndex` and `parseWaltzReportInner` in `src/utils/waltzReport.ts`.
 
-Swapped `parseWaltzReport()`'s sheet-reading layer from `read-excel-file` to `exceljs`. The unzip now happens once, up front, in a new `loadWaltzWorkbook()` (`src/utils/waltzReport.ts:205-218`):
+Swapped `parseWaltzReport()`'s sheet-reading layer from `read-excel-file` to `exceljs`. The unzip now happens once, up front, in a new `loadWaltzWorkbook()`:
 
 ```ts
 async function loadWaltzWorkbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
@@ -67,9 +68,9 @@ async function loadWaltzWorkbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
 }
 ```
 
-`parseWaltzReportInner` (`src/utils/waltzReport.ts:242-260`) now calls this once (line 247) and passes the resulting `ExcelJS.Workbook` down to `readNamedSheet`/`readOptionalNamedSheet` (lines 251, 259-260), instead of the old design where `read-excel-file`'s `readSheet(buffer, sheetName)` re-unzipped the whole archive on each of the three sheet reads.
+`parseWaltzReportInner` calls this once and passes the resulting `ExcelJS.Workbook` down to `readNamedSheet`/`readOptionalNamedSheet`, instead of the old design where `read-excel-file`'s `readSheet(buffer, sheetName)` re-unzipped the whole archive on each of the three sheet reads.
 
-Because `exceljs` hands back raw `ExcelJS.Cell` values rather than schema-validated rows, `read-excel-file`'s `Schema<T>` shape and `SheetNotFoundError` type were re-implemented locally and minimally (`src/utils/waltzReport.ts:59-92`):
+Because `exceljs` hands back raw `ExcelJS.Cell` values rather than schema-validated rows, `read-excel-file`'s `Schema<T>` shape and `SheetNotFoundError` type were re-implemented locally and minimally:
 
 ```ts
 type ColumnType = typeof String | typeof Number;
@@ -88,7 +89,7 @@ class SheetNotFoundError extends Error {
 }
 ```
 
-`readNamedSheet` (`src/utils/waltzReport.ts:137-181`) walks the worksheet's header row via `headerIndex()` (`waltzReport.ts:125-132`) and its data rows via `worksheet.eachRow`, mapping cells to schema fields with `cellToString`/`cellToNumber` (`waltzReport.ts:97-122`, which resolve `exceljs`'s richer cell-value shapes — rich text runs, hyperlinks, formula results, dates — down to plain string/number), and preserves the exact pre-existing error strings:
+`readNamedSheet` walks the worksheet's header row via `headerIndex()` and its data rows via `worksheet.eachRow`, mapping cells to schema fields with `cellToString`/`cellToNumber` (which resolve `exceljs`'s richer cell-value shapes — rich text runs, hyperlinks, formula results, dates — down to plain string/number), and preserves the exact pre-existing error strings:
 
 ```ts
 if (errors.length > 0) {
@@ -96,7 +97,7 @@ if (errors.length > 0) {
 }
 ```
 
-and, at the call site in `parseWaltzReportInner` (`waltzReport.ts:250-257`):
+and, at the call site in `parseWaltzReportInner`:
 
 ```ts
 try {
@@ -119,10 +120,10 @@ try {
 
 ## Prevention
 
-- **The fixture-generation blind spot is structural and remains open.** Every `.xlsx` fixture in this repo (`scripts/fixtures/build-waltz-report-fixture.mjs`) is generated via `write-excel-file` — the same author's sibling package to the now-removed `read-excel-file`. A writer and reader from the same small ecosystem will always agree on ZIP layout by construction, so this class of "real producer writes something spec-legal but library-unfriendly" bug cannot be caught by this repo's own fixtures no matter which parsing library is used downstream. A future Waltz schema/format change, or any other real-world `.xlsx` producer, could reintroduce an equivalent "green in CI, broken for real users" gap. **(session history)** This exact limitation was already flagged as an open risk during the original Waltz-importer build's own doc-review pass — it went unaddressed at the time and is precisely the gap this bug fell through, which is worth remembering the next time a similar "validated against one real export" caveat shows up in a review.
+- **The fixture-generation blind spot is structural and remains open** (tracked as KL4, with this incident as the evidence for KL2, in `docs/known-limitations.md`). Every `.xlsx` fixture in this repo (`scripts/fixtures/build-waltz-report-fixture.mjs`) is generated via `write-excel-file` — the same author's sibling package to the now-removed `read-excel-file`. A writer and reader from the same small ecosystem will always agree on ZIP layout by construction, so this class of "real producer writes something spec-legal but library-unfriendly" bug cannot be caught by this repo's own fixtures no matter which parsing library is used downstream. A future Waltz schema/format change, or any other real-world `.xlsx` producer, could reintroduce an equivalent "green in CI, broken for real users" gap. **(session history)** This exact limitation was already flagged as an open risk during the original Waltz-importer build's own doc-review pass — it went unaddressed at the time and is precisely the gap this bug fell through, which is worth remembering the next time a similar "validated against one real export" caveat shows up in a review.
 - If it recurs: obtaining the actual failing file before reasoning from library internals is the fastest path. The diagnostic questions used here (does it open in Excel with no password prompt? plain local file or cloud-synced? has this worked before?) are a fast way to triage without the file in hand, but reproduction beats theory.
 - **A synthetic fixture reproducing the exact byte-level defect (data-descriptor ZIP entries) was deliberately not created.** Hand-constructing one would encode an unconfirmed theory about the precise trigger as proven test coverage, which risks false confidence more than it adds real protection — the theory is well-evidenced (matches `unzipper-esm`'s own error taxonomy and a known class of streaming-writer output) but was never confirmed by reproduction against the actual failing file, since the user could not share it. Verify against the real file when possible; don't launder a plausible theory into test coverage that claims more certainty than exists.
-- **Verification performed:** all 26 pre-existing `src/test/waltzReport.test.ts` tests — including the malformed-file (`toThrow(/could not read|invalid/i)`) and missing-required-sheet (`toThrow(/ComponentRemediations/)`) error-message assertions — passed unchanged with zero test modifications, confirming full behavioral parity for every previously-tested path. Full suite: 28 test files / 962 tests green; `npm run compile` clean; `npm run bundle` succeeds. **Not independently verified against the real-world failing file** — that remains open until the user can confirm against their actual report.
+- **Not independently verified against the real-world failing file**; the user could not share it.
 
 ## Related Issues
 
