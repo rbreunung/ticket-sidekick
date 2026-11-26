@@ -21,7 +21,7 @@ tags: [bitbucket, path-traversal, url-encoding, untrusted-input, prompt-injectio
 
 ## Problem
 
-The pull request review lets the model ask for whole files outside the diff (`additionalFilesNeeded` in its reply). Those paths went straight into a Bitbucket request URL. The client's encoding keeps `..` segments, so a path the model was steered into asking for could leave the pull request's repository and read another one the credentials can see. Fixed in [PR #150](https://github.com/rbreunung/ticket-sidekick/pulls) (branch `claude/fix-bitbucket-path-traversal`; open, unmerged as of this writing).
+The pull request review lets the model ask for whole files outside the diff (`additionalFilesNeeded` in its reply). Those paths went straight into a Bitbucket request URL. The client's encoding keeps `..` segments, so a path the model was steered into asking for could leave the pull request's repository and read another one the credentials can see. Fixed in [PR #150](https://github.com/rbreunung/ticket-sidekick/pull/150) (branch `claude/fix-bitbucket-path-traversal`; open, unmerged as of this writing).
 
 ## Symptoms
 
