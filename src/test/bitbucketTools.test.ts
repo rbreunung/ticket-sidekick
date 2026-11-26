@@ -2,7 +2,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { BitbucketConfig, BitbucketPR } from '../bitbucket/IBitbucketClient';
+import { NotAFileError, type BitbucketConfig, type BitbucketPR } from '../bitbucket/IBitbucketClient';
+import { BitbucketApiError } from '../utils/apiError';
 import type { BoardModelHandle } from '../boards/boardModels';
 import type { ReviewBoardDeps } from '../boards/review/deps';
 import { reviewKind, type ReviewView, type ReviewWorking } from '../boards/review/kind';
@@ -495,6 +496,18 @@ describe('bitbucket_read_file', () => {
     const result = await callTool(tool('bitbucket_read_file'), { url: 'https://evil.example.com/projects/PROJ/repos/app/pull-requests/482', path: 'src/f1.ts' }, toolDeps(manager()));
     expect(result.text).toBe('Not read: the link is on evil.example.com, but the configured Bitbucket server is bitbucket.example.com. This tool reads files only from that server.');
     expect(requests()).toBe(before);
+  });
+
+  it('says a folder path is not a file, and a failed read names the path', async () => {
+    await reviewOnBoard();
+    const deps = toolDeps(manager());
+    client.getFileContent = async (_p, _r, path) => { throw new NotAFileError(path); };
+    const folder = await callTool(tool('bitbucket_read_file'), { url: PR_URL, path: 'src' }, deps);
+    expect(folder.text).toBe('Not read: src is not a file at that commit (it may be a folder).');
+
+    client.getFileContent = async () => { throw new BitbucketApiError('Not found (404)', 404, 'url'); };
+    const missing = await callTool(tool('bitbucket_read_file'), { url: PR_URL, path: 'src/gone.ts' }, deps);
+    expect(missing.text).toMatch(/^Could not read src\/gone\.ts/);
   });
 
   it('refuses a link with no stored review, before any request', async () => {

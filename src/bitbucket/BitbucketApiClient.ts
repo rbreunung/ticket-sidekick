@@ -1,4 +1,5 @@
 import type { BitbucketAuthType, BitbucketCommentResult, BitbucketPR, BitbucketUser, DiffCoverage, IBitbucketClient, InlineAnchor, PullRequestFileDiff } from './IBitbucketClient';
+import { NotAFileError, isCloudFolderListing } from './IBitbucketClient';
 import { fetchWithRetry } from '../utils/fetchWithRetry';
 import { BitbucketApiError } from '../utils/apiError';
 import type { DiagLogger } from '../utils/diagTypes';
@@ -420,13 +421,17 @@ export class BitbucketApiClient implements IBitbucketClient {
     const encPath = encodePathSegments(path);
     const encCommit = encodeURIComponent(commitHash);
     if (this.authType === 'cloud') {
-      return this.cloudRequestText(`/repositories/${project}/${repo}/src/${encCommit}/${encPath}`);
+      const body = await this.cloudRequestText(`/repositories/${project}/${repo}/src/${encCommit}/${encPath}`);
+      if (isCloudFolderListing(body)) throw new NotAFileError(path);
+      return body;
     }
     // The browse API is paginated (default limit: 25 lines). Fetch with a high limit to
     // capture most source files in one request; very large files are truncated at 5000 lines.
-    const data = await this.dcRequest<{ lines: Array<{ text: string }> }>(
+    const data = await this.dcRequest<{ lines?: Array<{ text: string }> }>(
       `/projects/${project}/repos/${repo}/browse/${encPath}?at=${encCommit}&limit=5000`,
     );
+    // A folder answers with its children and no lines.
+    if (!Array.isArray(data.lines)) throw new NotAFileError(path);
     return data.lines.map((l) => l.text).join('\n');
   }
 
