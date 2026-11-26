@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { BitbucketApiClient, BitbucketApiError, summarizeDcDiffShape } from '../bitbucket/BitbucketApiClient';
-import { NotAFileError } from '../bitbucket/IBitbucketClient';
+import { NotAFileError, UnsafePathError } from '../bitbucket/IBitbucketClient';
+import { PrReviewService } from '../services/PrReviewService';
 
 function errorFetch(status: number): ReturnType<typeof vi.fn> {
   return vi.fn().mockResolvedValue({
@@ -327,5 +328,47 @@ describe('summarizeDcDiffShape (R25)', () => {
 
   it('describes a non-object response', () => {
     expect(summarizeDcDiffShape('oops')).toContain('not an object');
+  });
+});
+
+describe('BitbucketApiClient — a path that leaves the repository is never requested', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  // A path the model asks for as a context file is steered by pull request text. Encoding keeps a
+  // `..` segment as it is, and URL parsing then resolves it into another repository's path.
+  const ESCAPES = ['../../../../OTHER/repos/secrets/browse/creds.txt', 'src/../../x', './a.ts', 'src//a.ts', '/etc/passwd', 'src\\..\\a.ts', ''];
+
+  it('refuses each such path for a file read on Data Center and Cloud, before any request', async () => {
+    for (const config of [DC_CONFIG, CLOUD_CONFIG]) {
+      const f = textFetch('body');
+      vi.stubGlobal('fetch', f);
+      const client = new BitbucketApiClient(config);
+      for (const path of ESCAPES) {
+        const err = await client.getFileContent('PROJ', 'repo', path, 'abc123').catch((e: unknown) => e);
+        expect(err, `${config.authType} ${path}`).toBeInstanceOf(UnsafePathError);
+      }
+      expect(f).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses such a path for a per-file diff on Data Center, before any request', async () => {
+    const f = jsonFetch({ diffs: [] });
+    vi.stubGlobal('fetch', f);
+    const client = new BitbucketApiClient(DC_CONFIG);
+    const err = await client.getPullRequestFileDiff('PROJ', 'repo', 1, '../../OTHER/repos/x/browse/a.ts').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnsafePathError);
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  it('a review asking for an escaping context file gets the other files, and no request leaves the repository', async () => {
+    const f = jsonFetch({ lines: [{ text: 'export const a = 1;' }] });
+    vi.stubGlobal('fetch', f);
+    const service = new PrReviewService(new BitbucketApiClient(DC_CONFIG));
+    const files = await service.gatherFileContents('PROJ', 'repo', 'abc123', ['src/a.ts', '../../../../OTHER/repos/secrets/browse/creds.txt']);
+    expect(files.get('src/a.ts')).toBe('export const a = 1;');
+    expect([...files.keys()]).toEqual(['src/a.ts']);
+    const urls = f.mock.calls.map(([url]) => String(url));
+    expect(urls).toHaveLength(1);
+    expect(urls.every(u => new URL(u).pathname.includes('/projects/PROJ/repos/repo/'))).toBe(true);
   });
 });

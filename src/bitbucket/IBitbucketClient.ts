@@ -107,3 +107,27 @@ export function isCloudFolderListing(body: string): boolean {
     return false;
   }
 }
+
+/**
+ * Why a path cannot name a file inside the repository, or undefined when it can. The one rule for
+ * every path the client puts into a request URL: `encodeURIComponent` keeps a `.` or `..` segment
+ * as it is, and URL parsing then resolves it, so `../../OTHER/repos/x/browse/f` would read another
+ * repository the credentials can see. Paths a model asks for are steered by pull request text.
+ */
+export function repositoryPathProblem(path: string): string | undefined {
+  if (path.trim() === '') return 'give the file\'s path in the repository.';
+  if (path.includes('\\')) return 'the path has a backslash; use / between folders.';
+  if (path.startsWith('/') || /^[A-Za-z]:/.test(path)) return 'the path is absolute; give it relative to the repository\'s root.';
+  const segments = path.split('/');
+  if (segments.some(segment => segment === '.' || segment === '..')) return 'the path has a . or .. folder; give it from the repository\'s root.';
+  if (segments.some(segment => segment === '')) return 'the path has an empty folder name; use one / between folders.';
+  return undefined;
+}
+
+/** A path refused by `repositoryPathProblem` before any request was made. */
+export class UnsafePathError extends Error {
+  constructor(readonly path: string, readonly problem: string) {
+    super(`Not requested: ${problem}`);
+    this.name = 'UnsafePathError';
+  }
+}

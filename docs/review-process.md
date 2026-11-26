@@ -252,7 +252,12 @@ dedup.
 
 When the model asks for files outside the diff, Pass 2 re-reviews the batch
 with those files rendered in a *Context files (not part of this diff)*
-section and with Pass 1's findings as a numbered list. It may add findings,
+section and with Pass 1's findings as a numbered list. The paths the model
+asks for are steered by pull request text, so the client refuses an empty,
+absolute or backslash path and one with an empty, `.` or `..` segment before
+any request (`repositoryPathProblem` in `src/bitbucket/IBitbucketClient.ts`):
+encoding keeps a `..` segment and URL parsing would resolve it into another
+repository. A refused path is left out, neither shown nor stored. It may add findings,
 and it retracts a Pass 1 finding only by naming its number in the meta
 line's `retract` list; to correct a finding's severity or wording it retracts
 the number and reports the corrected version. These instructions sit outside
