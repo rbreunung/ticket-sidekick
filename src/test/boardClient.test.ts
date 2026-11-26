@@ -156,4 +156,36 @@ describe('a board page drawn again', () => {
     expect(page.document.activeElement?.id).toBe('question');
     expect([byId('question')!.selectionStart, byId('question')!.selectionEnd]).toEqual([3, 5]);
   });
+
+  it('waits with the redraw while text on the board is selected, and draws once the selection closes', async () => {
+    state = base();
+    closed = false;
+    waiting = [];
+    page = installFakePage({ kind: 'runs', session: SESSION, title: 'Review' }, async (op, body) => {
+      if (closed) return new Promise(() => undefined);
+      if (op === 'state' && typeof body.tick === 'number' && body.tick === state.tick) {
+        await new Promise<void>(resolve => waiting.push(resolve));
+        if (closed) return new Promise(() => undefined);
+      }
+      return state;
+    });
+    vi.resetModules();
+    const { startBoard, h } = await import('../../board-pages/shared/board.js' as string);
+    startBoard({
+      root: page.root,
+      render: (view: { items: number }) => h('ul', { id: 'list' }, Array.from({ length: view.items ?? 1 }, (_, i) => h('li', {}, `Item ${i + 1}`))),
+    });
+    await settle();
+    const list = byId('list')!;
+    page.document.selection = { anchorNode: list.children[0], isCollapsed: false, rangeCount: 1 };
+
+    await push({ view: { items: 3 } });
+    expect(byId('list')).toBe(list);
+
+    page.document.selection = { anchorNode: null, isCollapsed: true, rangeCount: 0 };
+    page.document.dispatch('selectionchange');
+    await settle();
+    expect(byId('list')).not.toBe(list);
+    expect(byId('list')!.textContent).toBe('Item 1Item 2Item 3');
+  });
 });

@@ -94,6 +94,10 @@ export class FakeElement extends FakeNode {
     for (const listener of this.listeners.get(type) ?? []) listener(event);
     return event;
   }
+  /** Whether a node is this element or below it. */
+  contains(node: unknown): boolean {
+    return node === this || this.children.some(c => c === node || (c instanceof FakeElement && c.contains(node)));
+  }
   /** Every element below this one, in document order. */
   elements(): FakeElement[] {
     return this.children.flatMap(c => [c, ...c.elements()]);
@@ -102,6 +106,8 @@ export class FakeElement extends FakeNode {
 
 export class FakeDocument {
   activeElement: FakeElement | null = null;
+  /** The text selection: open when `anchorNode` is set and it is not collapsed. */
+  selection: { anchorNode: unknown; isCollapsed: boolean; rangeCount: number } = { anchorNode: null, isCollapsed: true, rangeCount: 0 };
   readonly body: FakeElement;
   private listeners = new Map<string, Array<(event: { type: string }) => void>>();
   constructor() {
@@ -113,6 +119,9 @@ export class FakeDocument {
   /** Sends a document-level event, such as the `pointerdown` and `pointerup` around a mouse press. */
   dispatch(type: string): void {
     for (const listener of this.listeners.get(type) ?? []) listener({ type });
+  }
+  getSelection(): { anchorNode: unknown; isCollapsed: boolean; rangeCount: number } {
+    return this.selection;
   }
   createElement(tag: string): FakeElement {
     return new FakeElement(tag.toLowerCase(), this);

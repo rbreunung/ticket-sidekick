@@ -351,13 +351,26 @@ export function startBoard({ root, render, loading }) {
   document.addEventListener('pointercancel', released, true);
   window.addEventListener('blur', released);
 
+  // Text the developer selected on the board (to copy it) would go with the elements it is in, so
+  // drawing waits while a selection is open too, until it closes or five seconds at most.
+  const selectingText = () => {
+    // A selection inside a text box is the box's own, and the redraw keeps its caret.
+    if (/^(INPUT|TEXTAREA|VSCODE-TEXTAREA|VSCODE-TEXTFIELD)$/.test(document.activeElement?.tagName ?? '')) return false;
+    const selection = document.getSelection?.();
+    return !!selection && !selection.isCollapsed && selection.rangeCount > 0 && root.contains(selection.anchorNode);
+  };
+  document.addEventListener('selectionchange', () => {
+    if (paintWaiting && !pointerHeld && !selectingText()) setTimeout(paintNow, 0);
+  });
+
   function paint() {
-    if (!pointerHeld) {
+    const selecting = selectingText();
+    if (!pointerHeld && !selecting) {
       paintNow();
       return;
     }
     if (paintWaiting) return;
-    paintWaiting = setTimeout(() => { pointerHeld = false; paintNow(); }, 1000);
+    paintWaiting = setTimeout(() => { pointerHeld = false; paintNow(); }, selecting ? 5000 : 1000);
   }
 
   function paintNow() {
