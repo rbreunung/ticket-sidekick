@@ -503,6 +503,27 @@ describe('picked persona passes running at the same time', () => {
     expect(calls.filter(c => c.kind === 'performance').map(c => c.file)).toEqual([1, 2, 2, 3]);
   });
 
+  it('Stop while a rate-limited pass waits for its rerun records it as stopped, not refused, and claims no rerun', async () => {
+    let refusals = 0;
+    respond = call => {
+      if (call.kind === 'performance' && call.file === 2 && refusals++ === 0) throw rateLimited();
+      return defaultRespond(call);
+    };
+    sleepFor = () => new Promise<void>(() => {});
+    const m = manager();
+    let state = await picking(m, 3, ['performance']);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'passes' });
+    await until(m, state.id, () => sleeps.includes(30_000));
+    await m.stopRun(REVIEW_KIND, state.id);
+    state = await idle(m, state.id);
+
+    expect(calls.filter(c => c.kind === 'performance').map(c => c.file)).toEqual([1, 2]);
+    const results = resultsOf(state);
+    expect(results.statuses).toContainEqual(expect.stringMatching(/^The performance pass was stopped: 1 of 3 batches finished/));
+    expect(results.statuses.some(s => /refused/.test(s))).toBe(false);
+    expect(results.notice).toBeUndefined();
+  });
+
   it('a rerun refused again stops the run with the quota message, and offers the refused pass again', async () => {
     respond = call => {
       if (call.kind === 'performance' && call.file === 2) throw rateLimited();

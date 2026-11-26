@@ -323,6 +323,7 @@ export async function extraPassesRun(
   let oneAtATime = false;
   let refusedStop = false;
   let rerunRound = false;
+  let reranAny = false;
   let unexpected: unknown;
   const outcomes = new Map<ReviewStep, PassOutcome>();
   const reviewedFiles = new Map<ReviewStep, number>();
@@ -380,7 +381,8 @@ export async function extraPassesRun(
 
   const endStep = (step: ReviewStep, outcome: PassOutcome) => {
     let status: PassRecord['status'] = outcome.status;
-    if (outcome.status === 'stopped' && !signal.aborted) status = 'refused';
+    // Stopped without the developer's Stop: a refusal stopped the run, or another pass failed unexpectedly.
+    if (outcome.status === 'stopped' && !signal.aborted && refusedStop) status = 'refused';
     if (outcome.status === 'finished' || outcome.status === 'failed') {
       status = step === 'critic' || (reviewedFiles.get(step) ?? 0) > 0 ? 'finished' : 'failed';
     }
@@ -439,11 +441,12 @@ export async function extraPassesRun(
     rerunRound = true;
     for (const d of deferred) {
       if (runSignal.aborted) break;
+      reranAny = true;
       await runPersona(d.step, d.remaining);
     }
   }
-  // A pass still paused when the run ended was refused.
-  const leftPaused = deferred.filter(d => entryOf(d.step).state === 'waiting').map(d => recordOf(d.step, 'refused'));
+  // A pass still paused when the run ended: stopped by the developer, else refused.
+  const leftPaused = deferred.filter(d => entryOf(d.step).state === 'waiting').map(d => recordOf(d.step, signal.aborted ? 'stopped' : 'refused'));
   if (leftPaused.length > 0) {
     for (const r of leftPaused) entryOf(r.step).state = 'ended';
     report(leftPaused);
@@ -478,7 +481,7 @@ export async function extraPassesRun(
   if (unexpected !== undefined) throw unexpected;
 
   const final = review;
-  const notice = refusedStop ? QUOTA_MESSAGE : deferred.length > 0 ? RAN_ONE_AT_A_TIME_NOTICE : undefined;
+  const notice = refusedStop ? QUOTA_MESSAGE : reranAny ? RAN_ONE_AT_A_TIME_NOTICE : undefined;
   return {
     update: w => {
       const next: ReviewWorking = { ...w, review: final };
