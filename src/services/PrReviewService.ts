@@ -1,4 +1,4 @@
-import type { BitbucketCommentResult, BitbucketPR, IBitbucketClient, InlineAnchor } from '../bitbucket/IBitbucketClient';
+import { UnsafePathError, type BitbucketCommentResult, type BitbucketPR, type IBitbucketClient, type InlineAnchor } from '../bitbucket/IBitbucketClient';
 import type { DiagLogger } from '../utils/diagTypes';
 import { ApiError } from '../utils/apiError';
 import { ticketBackgroundLines } from '../review/background';
@@ -226,7 +226,8 @@ export class PrReviewService {
    * commit hash — never from the local workspace, which may be a different repo/branch and
    * would feed the wrong version to the reviewer. A missing file degrades to a marker so a
    * single 404 doesn't abort the review, but an auth failure propagates so it isn't masked
-   * as "every file unavailable".
+   * as "every file unavailable". A path that could leave the repository is left out altogether, so
+   * it is neither shown to the model nor stored as a context file to read again later.
    */
   async gatherFileContents(
     project: string,
@@ -235,12 +236,16 @@ export class PrReviewService {
     paths: string[],
   ): Promise<Map<string, string>> {
     const entries = await Promise.all(
-      paths.map(async (path) => {
+      paths.map(async (path): Promise<readonly [string, string] | undefined> => {
         try {
           const remote = await this.client.getFileContent(project, repo, path, commitHash);
           return [path, remote] as const;
         } catch (err) {
           if (isAuthError(err)) throw err;
+          if (err instanceof UnsafePathError) {
+            this.onDiag?.('warn', 'Additional file refused — the path could leave the repository', { project, repo, problem: err.problem });
+            return undefined;
+          }
           this.onDiag?.('warn', `Additional file unavailable — ${path}`, {
             project, repo, path, error: err instanceof Error ? err.message : String(err),
           });
@@ -248,7 +253,7 @@ export class PrReviewService {
         }
       }),
     );
-    return new Map(entries);
+    return new Map(entries.filter((e): e is readonly [string, string] => e !== undefined));
   }
 
   buildPrompt(

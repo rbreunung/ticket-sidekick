@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { NotAFileError, type BitbucketConfig } from '../../bitbucket/IBitbucketClient';
+import { NotAFileError, repositoryPathProblem, type BitbucketConfig } from '../../bitbucket/IBitbucketClient';
 import { parseReviewUrl, reviewSessionId } from '../../boards/review/recipe';
 import { shortCommit } from '../../boards/review/findings';
 import { defineTool } from '../toolDefinition';
@@ -31,15 +31,6 @@ function configuredHost(config: BitbucketConfig): { ok: true; host: string } | {
   } catch {
     return { ok: false, reason: 'the ticketSidekick.bitbucket.baseUrl setting is not a web address.' };
   }
-}
-
-/** Why a path cannot name a file in the repository, or undefined when it can. */
-export function repositoryPathProblem(path: string): string | undefined {
-  if (path.trim() === '') return 'give the file\'s path in the repository.';
-  if (path.includes('\\')) return 'the path has a backslash; use / between folders.';
-  if (path.startsWith('/') || /^[A-Za-z]:/.test(path)) return 'the path is absolute; give it relative to the repository\'s root.';
-  if (path.split('/').some(segment => segment === '.' || segment === '..')) return 'the path has a . or .. folder; give it from the repository\'s root.';
-  return undefined;
 }
 
 export const readFileTool = defineTool<BitbucketToolDeps, typeof readFileShape>({

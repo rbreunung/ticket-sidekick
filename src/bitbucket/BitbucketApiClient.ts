@@ -1,5 +1,5 @@
 import type { BitbucketAuthType, BitbucketCommentResult, BitbucketPR, BitbucketUser, DiffCoverage, IBitbucketClient, InlineAnchor, PullRequestFileDiff } from './IBitbucketClient';
-import { NotAFileError, isCloudFolderListing } from './IBitbucketClient';
+import { NotAFileError, UnsafePathError, isCloudFolderListing, repositoryPathProblem } from './IBitbucketClient';
 import { fetchWithRetry } from '../utils/fetchWithRetry';
 import { BitbucketApiError } from '../utils/apiError';
 import type { DiagLogger } from '../utils/diagTypes';
@@ -92,6 +92,13 @@ function summarizeDcChangesShape(page: unknown): string {
 /** Encode each path segment (preserving '/' separators) so spaces, '#', '?', and non-ASCII
  * characters cannot break the request URL. */
 const encodePathSegments = (path: string): string => path.split('/').map(encodeURIComponent).join('/');
+
+/** A repository path encoded for a request URL; a path that could leave the repository is refused first. */
+function repositoryUrlPath(path: string): string {
+  const problem = repositoryPathProblem(path);
+  if (problem) throw new UnsafePathError(path, problem);
+  return encodePathSegments(path);
+}
 
 const dcContextQuery = (contextLines?: number): string =>
   typeof contextLines === 'number' && contextLines >= 0 ? `&contextLines=${Math.floor(contextLines)}` : '';
@@ -368,7 +375,7 @@ export class BitbucketApiClient implements IBitbucketClient {
     }
     const src = srcPath ? `&srcPath=${encodeURIComponent(srcPath)}` : '';
     const response = await this.fetchDcDiff(
-      `/projects/${project}/repos/${repo}/pull-requests/${prId}/diff/${encodePathSegments(path)}?withComments=false${dcContextQuery(contextLines)}${src}`,
+      `/projects/${project}/repos/${repo}/pull-requests/${prId}/diff/${repositoryUrlPath(path)}?withComments=false${dcContextQuery(contextLines)}${src}`,
       `per-file diff ${path}`, { project, repo, prId, path },
     );
     return { raw: dcDiffToUnified(response), truncated: dcHasTruncation(response) };
@@ -418,7 +425,7 @@ export class BitbucketApiClient implements IBitbucketClient {
   async getFileContent(project: string, repo: string, path: string, commitHash: string): Promise<string> {
     // Encode each path segment (preserving '/' separators) and the commit hash so spaces,
     // '#', '?', and non-ASCII characters cannot break the request or corrupt the query.
-    const encPath = encodePathSegments(path);
+    const encPath = repositoryUrlPath(path);
     const encCommit = encodeURIComponent(commitHash);
     if (this.authType === 'cloud') {
       const body = await this.cloudRequestText(`/repositories/${project}/${repo}/src/${encCommit}/${encPath}`);
