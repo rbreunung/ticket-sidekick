@@ -46,6 +46,19 @@ export class BoardPanels implements BoardHost {
     await vscode.env.clipboard.writeText(text);
   }
 
+  /**
+   * Discuss in chat: Copilot Chat in agent mode with the prompt typed in, for the developer to add
+   * a question and send. Below VS Code 1.99 the mode is ignored and chat opens in its current mode.
+   */
+  async openChat(prompt: string): Promise<void> {
+    await vscode.commands.executeCommand('workbench.action.chat.open', { query: prompt, isPartialQuery: true, mode: 'agent' });
+  }
+
+  /** A web link from rendered Markdown; VS Code shows its own confirmation before it opens. */
+  async openExternal(url: string): Promise<void> {
+    await vscode.env.openExternal(vscode.Uri.parse(url, true));
+  }
+
   pickReportFile(kind: ReportKind): Promise<string | undefined> {
     return this.pickReport ? this.pickReport(kind) : Promise.resolve(undefined);
   }

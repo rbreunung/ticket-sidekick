@@ -1,8 +1,6 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelRequestCancelledError, type BoardModelHandle } from '../boards/boardModels';
 import type { ReviewBoardDeps, ReviewSettings } from '../boards/review/deps';
@@ -16,7 +14,7 @@ import { MockBitbucketClient } from './mocks/MockBitbucketClient';
 
 // The review board after its first step: the pass suggestion and picker, Run selected (persona
 // passes, then the critic), Stop, the banners for a stopped, interrupted, failed or refused pass,
-// Run again, the requirements re-check and the token usage per pass. A pull request whose files
+// Run again and the token usage per pass. A pull request whose files
 // each land in a batch of their own, a scripted model that answers by what the prompt asks, and a
 // fake native confirmation. Every scenario goes through the session manager, as a board tab does.
 
@@ -47,12 +45,10 @@ function reviewReply(findings: string[], meta: { recommendedPersonas?: string[];
   return [...findings, JSON.stringify({ additionalFilesNeeded: meta.additionalFilesNeeded ?? [], ...(meta.recommendedPersonas ? { recommendedPersonas: meta.recommendedPersonas } : {}) })].join('\n');
 }
 
-type CallKind = 'reword' | 'regular' | 'whole-files' | 'security' | 'performance' | 'reliability' | 'maintainability' | 'critic' | 'requirements';
+type CallKind = 'regular' | 'whole-files' | 'security' | 'performance' | 'reliability' | 'maintainability' | 'critic';
 
 function kindOf(prompt: string): CallKind {
   if (prompt.startsWith('You are verifying the findings')) return 'critic';
-  if (prompt.startsWith('You are checking whether a pull request')) return 'requirements';
-  if (prompt.startsWith('A developer typed the goal')) return 'reword';
   for (const lens of ['security', 'performance', 'reliability', 'maintainability'] as const) {
     if (prompt.includes(`through a ${lens} lens ONLY`)) return lens;
   }
@@ -72,24 +68,23 @@ let calls: Call[];
 let respond: (call: Call) => string | Promise<string>;
 let confirms: string[];
 let confirmAnswer: boolean;
-let ticketResult: RequirementsSourceResult;
 let clock: number;
 let jiraConfigured: boolean;
-/** The ticket read by key, when a test needs one key to fail and another to read. */
-let ticketFor: ((key: string) => RequirementsSourceResult) | undefined;
+/** The keys of the Jira tickets read. */
+let ticketReads: string[];
 /** Settings a test adds to the board's. */
 let extraSettings: Partial<ReviewSettings>;
 /** The review passes' diagnostic lines. */
 let reviewLines: string[];
-
-function requirementsReply(): string {
-  return readFileSync(resolve(process.cwd(), 'src/test/fixtures/requirements-reply-clean-spec.json'), 'utf-8');
-}
+/** A reply the model had under way still arrives after Stop, as if the model ignored the stop. */
+let repliesAfterStop: boolean;
+/** Every wait the board asked for, in ms. */
+let sleeps: number[];
+/** How a wait of the given length ends; by default at once. */
+let sleepFor: (ms: number) => Promise<void>;
 
 /** The regular pass finds one warning per file and suggests the security pass. */
 const defaultRespond = (call: Call): string => {
-  if (call.kind === 'requirements') return requirementsReply();
-  if (call.kind === 'reword') return JSON.stringify({ inScope: ['Only the backend export endpoint'], outOfScope: ['The export button'], openPoints: [] });
   if (call.kind === 'critic') return JSON.stringify({ keep: [] });
   if (call.kind === 'regular') return reviewReply([findingLine(call.file, 2, `Unchecked input in f${call.file}`)], { recommendedPersonas: ['security'] });
   if (call.kind === 'security') return reviewReply([findingLine(call.file, 6, `Token logged in f${call.file}`, 'critical')]);
@@ -106,8 +101,12 @@ function handle(id: string): BoardModelHandle {
       const prompt = messages.map(m => m.content).join('\n');
       const call = { kind: kindOf(prompt), file: fileOf(prompt), prompt };
       calls.push(call);
-      const text = await respond(call);
-      if (signal.aborted) throw new ModelRequestCancelledError();
+      // As the real handle does, a stop ends the request at once; a test may let a reply land after it.
+      const reply = Promise.resolve().then(() => respond(call));
+      const text = repliesAfterStop ? await reply : await Promise.race([reply, new Promise<never>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new ModelRequestCancelledError()), { once: true });
+      })]);
+      if (signal.aborted && !repliesAfterStop) throw new ModelRequestCancelledError();
       return { text: (async function* () { yield text; })() };
     },
   };
@@ -116,7 +115,12 @@ function handle(id: string): BoardModelHandle {
 function deps(): ReviewBoardDeps {
   return {
     bitbucket: async () => ({ configured: true, client }),
-    jira: async () => (jiraConfigured ? { readRequirements: async (key: string) => (ticketFor ? ticketFor(key) : ticketResult) } : undefined),
+    jira: async () => (jiraConfigured ? {
+      readRequirements: async (key: string): Promise<RequirementsSourceResult> => {
+        ticketReads.push(key);
+        return { ok: false, reason: 'not-found', message: 'Issue does not exist' };
+      },
+    } : undefined),
     models: { list: async () => [MODEL], handle: async id => (id === MODEL.id ? handle(id) : undefined) },
     modelSettings: { reviewModel: () => MODEL.id, writeReviewModel: async () => {} },
     // One file per batch.
@@ -125,7 +129,7 @@ function deps(): ReviewBoardDeps {
     confirm: async question => { confirms.push(question.title); return confirmAnswer; },
     now: () => clock,
     reviewDiag: (_level, message) => { reviewLines.push(message); },
-    sleep: async () => {},
+    sleep: ms => { sleeps.push(ms); return sleepFor(ms); },
   };
 }
 
@@ -191,8 +195,8 @@ async function storedWorking(id: string): Promise<ReviewWorking> {
   return (await new SessionStore(dir).load(id))!.session.working as ReviewWorking;
 }
 
-/** Writes explanations and drafts into the stored session, as Explain and the drafts would. */
-async function storeWork(id: string, work: Pick<ReviewWorking, 'explanations' | 'drafts'>): Promise<void> {
+/** Writes discussions and drafts into the stored session, as Explain and the drafts would. */
+async function storeWork(id: string, work: Pick<ReviewWorking, 'threads' | 'drafts'>): Promise<void> {
   const store = new SessionStore(dir);
   const stored = (await store.load(id))!.session;
   await store.save({ ...stored, working: { ...(stored.working as ReviewWorking), ...work } });
@@ -206,15 +210,14 @@ beforeEach(() => {
   respond = defaultRespond;
   confirms = [];
   confirmAnswer = true;
-  ticketResult = {
-    ok: true,
-    source: { key: 'PROJ-12', summary: 'Add export', descriptionText: 'Export the report as CSV.', truncatedDescription: false, comments: [], omittedComments: 0, commentsUnavailable: false },
-  };
   clock = 1_000;
   jiraConfigured = true;
-  ticketFor = undefined;
+  ticketReads = [];
   extraSettings = {};
   reviewLines = [];
+  repliesAfterStop = false;
+  sleeps = [];
+  sleepFor = async () => {};
 });
 
 afterEach(() => {
@@ -297,7 +300,7 @@ describe('Run selected', () => {
     state = await runAndWait(m, state, { type: 'passes' });
     expect(resultsOf(state).passesRun).toEqual(['Regular', 'Security']);
     const numbers = Object.fromEntries(resultsOf(state).findings.map(f => [f.title, f.number]));
-    await storeWork(state.id, { explanations: { [numbers['Token logged in f1']]: { text: 'The token reaches the log.' } }, drafts: { [numbers['Unchecked input in f2']]: { text: 'Please validate.' } } });
+    await storeWork(state.id, { threads: { [numbers['Token logged in f1']]: [{ answer: 'The token reaches the log.' }] }, drafts: { [numbers['Unchecked input in f2']]: { text: 'Please validate.' } } });
 
     clock += 24 * 60 * 60 * 1000;
     calls = [];
@@ -313,7 +316,7 @@ describe('Run selected', () => {
     expect(results.passesRun).toEqual(['Regular', 'Security', 'Critic']);
     expect(results.findings.map(f => [f.title, f.markers])).toEqual([
       ['Token logged in f1', ['probably a false alarm']],
-      ['Unchecked input in f2', ['probably a false alarm']],
+      ['Unchecked input in f2', ['probably a false alarm', 'draft']],
     ]);
     expect(results.findings.map(f => f.number)).toEqual([numbers['Token logged in f1'], numbers['Unchecked input in f2']]);
   });
@@ -345,29 +348,6 @@ describe('Run selected', () => {
     expect(resultsOf(state).passesRun).toEqual(['Regular', 'Security']);
   });
 
-  it('a persona pass whose every batch failed stops the run, stays unmarked and picked, and the banner says it can be picked again', async () => {
-    const m = manager();
-    let state = await reviewed(m, 2);
-    state = await act(m, state, { type: 'pick-pass', step: 'reliability', picked: true });
-    respond = call => {
-      if (call.kind === 'security') throw new Error('The model is overloaded');
-      return defaultRespond(call);
-    };
-    calls = [];
-    state = await runAndWait(m, state, { type: 'passes' });
-
-    expect(calls.map(c => c.kind).filter(k => k === 'reliability')).toEqual([]);
-    const results = resultsOf(state);
-    expect(results.statuses).toEqual([expect.stringMatching(/^The security pass failed: .*overloaded\. No batch could be reviewed, so it added no findings\. It is not marked as run, so you can pick it again\.$/)]);
-    expect(results.passesRun).toEqual(['Regular']);
-    expect(results.picker!.choices.find(c => c.step === 'security')).toMatchObject({ available: true, run: false, picked: true });
-    expect(results.picker!.choices.find(c => c.step === 'reliability')).toMatchObject({ picked: true });
-
-    respond = defaultRespond;
-    state = await runAndWait(m, state, { type: 'passes' });
-    expect(resultsOf(state).passesRun).toEqual(['Regular', 'Security', 'Reliability']);
-  });
-
   it('an extra pass whose reviewed commit can no longer be read does not run, stays unmarked, and the banner offers Run again', async () => {
     respond = call => (call.kind === 'regular' && call.file === 1
       ? reviewReply([findingLine(1, 2, 'Unchecked input in f1')], { additionalFilesNeeded: ['src/ctx.ts'], recommendedPersonas: ['security'] })
@@ -383,6 +363,398 @@ describe('Run selected', () => {
     expect(results.statuses).toEqual([expect.stringMatching(/The security pass did not run: src\/ctx\.ts can no longer be read at the reviewed commit.*Run again/)]);
     expect(results.passesRun).toEqual(['Regular']);
     expect(results.canRunAgain).toBe(true);
+  });
+});
+
+describe('picked persona passes running at the same time', () => {
+  const rateLimited = (message = 'Sorry, you have been rate-limited.') => Object.assign(new Error(message), { name: 'ChatRateLimited' });
+  const blocked = () => Object.assign(new Error('The request was blocked'), { code: 'Blocked' });
+  const lines = (state: BoardState) => (resultsOf(state).running?.passes ?? []).map(p => p.text);
+  const kinds = (kind: CallKind) => calls.map((c, i) => [c, i] as const).filter(([c]) => c.kind === kind).map(([, i]) => i);
+
+  async function picking(m: SessionManager, files: number, steps: string[]): Promise<BoardState> {
+    let state = await reviewed(m, files);
+    for (const step of steps) state = await act(m, state, { type: 'pick-pass', step, picked: true });
+    calls = [];
+    return state;
+  }
+
+  it('Security and Performance on a three-batch review run at the same time, each with its own progress line, and the critic starts only after both end', async () => {
+    const m = manager();
+    let state = await picking(m, 3, ['performance', 'critic']);
+    const releaseSecurity = hold(c => c.kind === 'security' && c.file === 1);
+    const releasePerformance = hold(c => c.kind === 'performance' && c.file === 1);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'passes' });
+    state = await until(m, state.id, s => lines(s).length === 2 && calls.length === 2);
+
+    expect(calls.map(c => [c.kind, c.file])).toEqual([['security', 1], ['performance', 1]]);
+    expect(lines(state)).toEqual(['Security pass: 0 of 3 batches', 'Performance pass: 0 of 3 batches']);
+    expect(viewOf(state).progress).toBe('Security pass: 0 of 3 batches; Performance pass: 0 of 3 batches');
+    releasePerformance();
+    state = await until(m, state.id, s => lines(s).length === 1);
+    expect(kinds('critic')).toEqual([]);
+    releaseSecurity();
+    state = await idle(m, state.id);
+
+    const lastPersona = Math.max(...kinds('security'), ...kinds('performance'));
+    expect(kinds('critic').length).toBeGreaterThan(0);
+    expect(Math.min(...kinds('critic'))).toBeGreaterThan(lastPersona);
+    // The passes are listed in the order they ended.
+    expect(resultsOf(state).passesRun).toEqual(['Regular', 'Performance', 'Security', 'Critic']);
+    // The diagnostic lines of the two passes interleave; each configuration line names its pass.
+    expect(reviewLines.filter(l => / passes=(security|performance) /.test(l))).toHaveLength(2);
+  });
+
+  it('on a six-batch review with three passes picked, at most two run at once and the third starts when one ends', async () => {
+    const m = manager();
+    let state = await picking(m, 6, ['performance', 'reliability']);
+    const releaseSecurity = hold(c => c.kind === 'security' && c.file === 1);
+    const releasePerformance = hold(c => c.kind === 'performance' && c.file === 1);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'passes' });
+    state = await until(m, state.id, s => lines(s).length === 2 && calls.length === 2);
+    expect(kinds('reliability')).toEqual([]);
+
+    releasePerformance();
+    state = await until(m, state.id, s => lines(s).some(l => l.startsWith('Reliability')));
+    expect(kinds('security')).toHaveLength(1);
+    expect(lines(state).map(l => l.split(':')[0])).toEqual(['Security pass', 'Reliability pass']);
+    releaseSecurity();
+    state = await idle(m, state.id);
+    expect(resultsOf(state).passesRun).toEqual(['Regular', 'Performance', 'Reliability', 'Security']);
+  });
+
+  it('batches finishing in interleaved order give unique, gap-free numbers across both passes, a duplicate across passes merges, and neither prompt carries the other\'s findings', async () => {
+    respond = call => {
+      if (call.kind === 'security') {
+        return call.file === 1
+          ? reviewReply([findingLine(1, 6, 'Shared issue', 'critical'), findingLine(1, 8, 'Security only in f1')])
+          : reviewReply([findingLine(2, 6, 'Security only in f2')]);
+      }
+      if (call.kind === 'performance') {
+        return call.file === 1
+          ? reviewReply([findingLine(1, 6, 'Shared issue'), findingLine(1, 10, 'Performance only in f1')])
+          : reviewReply([findingLine(2, 8, 'Performance only in f2')]);
+      }
+      return defaultRespond(call);
+    };
+    const m = manager();
+    let state = await picking(m, 2, ['performance']);
+    const releaseSecurity = hold(c => c.kind === 'security' && c.file === 1);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'passes' });
+    await until(m, state.id, s => lines(s).length === 1 && lines(s)[0].startsWith('Security'));
+    releaseSecurity();
+    state = await idle(m, state.id);
+
+    const byTitle = Object.fromEntries(resultsOf(state).findings.map(f => [f.title, f]));
+    expect(resultsOf(state).findings.map(f => f.number).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(Object.fromEntries(Object.entries(byTitle).map(([t, f]) => [t, f.number]))).toEqual({
+      'Unchecked input in f1': 1, 'Unchecked input in f2': 2,
+      'Shared issue': 3, 'Performance only in f1': 4, 'Performance only in f2': 5, 'Security only in f1': 6, 'Security only in f2': 7,
+    });
+    expect(byTitle['Shared issue']).toMatchObject({ severity: 'critical', facts: expect.arrayContaining(['source: security, performance']) });
+    const persona = calls.filter(c => c.kind === 'security' || c.kind === 'performance');
+    expect(persona.every(c => !/Shared issue|only in f|Unchecked input/.test(c.prompt))).toBe(true);
+  });
+
+  it('a Performance batch refused as rate-limited while Security runs waits, runs once more after Security ends, and the board says the passes now run one after another', async () => {
+    let refusals = 0;
+    respond = call => {
+      if (call.kind === 'performance' && call.file === 2 && refusals++ === 0) throw rateLimited();
+      return defaultRespond(call);
+    };
+    const m = manager();
+    let state = await picking(m, 3, ['performance']);
+    const releaseSecurity = hold(c => c.kind === 'security' && c.file === 2);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'passes' });
+    state = await until(m, state.id, s => resultsOf(s).running?.note !== undefined);
+
+    expect(resultsOf(state).running!.note).toBe('The model limited the requests, so the passes now run one after another.');
+    expect(lines(state)).toEqual(['Security pass: 1 of 3 batches', 'Performance pass: 1 of 3 batches, runs again after the others']);
+    expect(calls.filter(c => c.kind === 'performance').map(c => c.file)).toEqual([1, 2]);
+    releaseSecurity();
+    state = await idle(m, state.id);
+
+    expect(calls.filter(c => c.kind === 'performance').map(c => c.file)).toEqual([1, 2, 2, 3]);
+    expect(kinds('performance')[2]).toBeGreaterThan(Math.max(...kinds('security')));
+    expect(sleeps).toEqual([30_000]);
+    const results = resultsOf(state);
+    expect(results.passesRun).toEqual(['Regular', 'Security', 'Performance']);
+    expect(results.notice).toMatch(/one after another/);
+  });
+
+  it('the rerun round waits as long as the refusal asked before it starts', async () => {
+    let refusals = 0;
+    respond = call => {
+      if (call.kind === 'performance' && call.file === 2 && refusals++ === 0) throw rateLimited('Rate limited. Please wait 45 seconds before trying again.');
+      return defaultRespond(call);
+    };
+    let endWait!: () => void;
+    sleepFor = ms => (ms === 45_000 ? new Promise<void>(r => { endWait = r; }) : Promise.resolve());
+    const m = manager();
+    let state = await picking(m, 3, ['performance']);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'passes' });
+    await until(m, state.id, () => sleeps.includes(45_000));
+    const before = calls.length;
+    expect(calls.filter(c => c.kind === 'performance').map(c => c.file)).toEqual([1, 2]);
+    await new Promise(r => setTimeout(r, 20));
+    expect(calls).toHaveLength(before);
+    endWait();
+    state = await idle(m, state.id);
+    expect(calls.filter(c => c.kind === 'performance').map(c => c.file)).toEqual([1, 2, 2, 3]);
+  });
+
+  it('Stop while a rate-limited pass waits for its rerun records it as stopped, not refused, and claims no rerun', async () => {
+    let refusals = 0;
+    respond = call => {
+      if (call.kind === 'performance' && call.file === 2 && refusals++ === 0) throw rateLimited();
+      return defaultRespond(call);
+    };
+    sleepFor = () => new Promise<void>(() => {});
+    const m = manager();
+    let state = await picking(m, 3, ['performance']);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'passes' });
+    await until(m, state.id, () => sleeps.includes(30_000));
+    await m.stopRun(REVIEW_KIND, state.id);
+    state = await idle(m, state.id);
+
+    expect(calls.filter(c => c.kind === 'performance').map(c => c.file)).toEqual([1, 2]);
+    const results = resultsOf(state);
+    expect(results.statuses).toContainEqual(expect.stringMatching(/^The performance pass was stopped: 1 of 3 batches finished/));
+    expect(results.statuses.some(s => /refused/.test(s))).toBe(false);
+    expect(results.notice).toBeUndefined();
+  });
+
+  it('a rerun refused again stops the run with the quota message, and offers the refused pass again', async () => {
+    respond = call => {
+      if (call.kind === 'performance' && call.file === 2) throw rateLimited();
+      return defaultRespond(call);
+    };
+    const m = manager();
+    let state = await picking(m, 3, ['performance', 'critic']);
+    state = await runAndWait(m, state, { type: 'passes' });
+
+    expect(calls.filter(c => c.kind === 'performance').map(c => c.file)).toEqual([1, 2, 2]);
+    expect(kinds('critic')).toEqual([]);
+    const results = resultsOf(state);
+    expect(results.notice).toMatch(/^The model refused further requests: the request limit or quota is used up/);
+    expect(results.statuses).toContainEqual(expect.stringMatching(/^The performance pass was refused by the model: 1 of 3 batches finished.*pick it again/));
+    expect(results.passesRun).toEqual(['Regular', 'Security']);
+    expect(results.picker!.choices.filter(c => c.picked).map(c => c.step)).toEqual(['performance', 'critic']);
+  });
+
+  it('a two-file batch whose first call is refused as blocked ends the other running pass, and no model call starts after the run ends', async () => {
+    extraSettings = { modelContextTokens: 2300 };
+    respond = call => {
+      if (call.kind === 'performance') throw blocked();
+      return defaultRespond(call);
+    };
+    const m = manager();
+    let state = await picking(m, 4, ['performance']);
+    const releaseSecurity = hold(c => c.kind === 'security');
+    state = await runAndWait(m, state, { type: 'passes' });
+
+    expect(calls.map(c => c.kind)).toEqual(['security', 'performance']);
+    releaseSecurity();
+    await new Promise(r => setTimeout(r, 20));
+    expect(calls).toHaveLength(2);
+    const results = resultsOf(state);
+    expect(results.notice).toMatch(/^The model refused further requests/);
+    expect(results.statuses).toEqual([
+      expect.stringMatching(/^The performance pass was refused by the model: 0 of 2 batches/),
+      expect.stringMatching(/^The security pass was refused by the model: 0 of 2 batches/),
+    ]);
+  });
+
+  it('a second batch refused as rate-limited while the passes already run one after another joins the same rerun round', async () => {
+    const refused = new Set<string>();
+    const once = (key: string) => (refused.has(key) ? false : (refused.add(key), true));
+    respond = call => {
+      if (call.kind === 'performance' && call.file === 1 && once('p1')) throw rateLimited();
+      if (call.kind === 'reliability' && call.file === 3 && once('r3')) throw rateLimited();
+      return defaultRespond(call);
+    };
+    let callsAtWait = -1;
+    sleepFor = async ms => { if (ms === 30_000) callsAtWait = calls.length; };
+    const m = manager();
+    let state = await picking(m, 6, ['performance', 'reliability']);
+    state = await runAndWait(m, state, { type: 'passes' });
+
+    expect(sleeps).toEqual([30_000]);
+    expect(Math.min(...kinds('reliability'))).toBeGreaterThan(Math.max(...kinds('security')));
+    const rerun = calls.slice(callsAtWait).map(c => [c.kind, c.file]);
+    expect(rerun).toEqual([
+      ...[1, 2, 3, 4, 5, 6].map(f => ['performance', f]),
+      ...[3, 4, 5, 6].map(f => ['reliability', f]),
+    ]);
+    expect(resultsOf(state).passesRun).toEqual(['Regular', 'Security', 'Performance', 'Reliability']);
+  });
+
+  it('a blocked refusal starts no further batch or pass, stops with the quota message, and offers the refused pass and the passes not started', async () => {
+    respond = call => {
+      if (call.kind === 'performance' && call.file === 2) throw blocked();
+      return defaultRespond(call);
+    };
+    const m = manager();
+    let state = await picking(m, 6, ['performance', 'reliability']);
+    state = await runAndWait(m, state, { type: 'passes' });
+
+    const blockedAt = calls.findIndex(c => c.kind === 'performance' && c.file === 2);
+    expect(kinds('reliability')).toEqual([]);
+    expect(calls.slice(blockedAt + 1).every(c => c.kind === 'security')).toBe(true);
+    expect(calls.slice(blockedAt + 1).length).toBeLessThanOrEqual(1);
+    const results = resultsOf(state);
+    expect(results.notice).toMatch(/^The model refused further requests/);
+    expect(results.passesRun).toEqual(['Regular']);
+    expect(results.picker!.choices.filter(c => c.picked).map(c => c.step)).toEqual(['security', 'performance', 'reliability']);
+    expect(results.picker!.offered).toEqual(['security', 'performance', 'reliability', 'maintainability', 'critic']);
+  });
+
+  it('with Security failing on every batch and Performance finishing, the picked critic still checks the findings there are, and Security is offered again', async () => {
+    respond = call => {
+      if (call.kind === 'security') throw new Error('The model is overloaded');
+      if (call.kind === 'performance') return reviewReply([findingLine(call.file, 9, `Slow loop in f${call.file}`)]);
+      return defaultRespond(call);
+    };
+    const m = manager();
+    let state = await picking(m, 2, ['performance', 'critic']);
+    state = await runAndWait(m, state, { type: 'passes' });
+
+    const critic = calls.filter(c => c.kind === 'critic');
+    expect(critic.length).toBeGreaterThan(0);
+    expect(critic.some(c => c.prompt.includes('Slow loop in f1'))).toBe(true);
+    const results = resultsOf(state);
+    expect(results.passesRun).toEqual(['Regular', 'Performance', 'Critic']);
+    expect(results.statuses).toContainEqual(expect.stringMatching(/^The security pass failed: .*pick it again/));
+    expect(results.picker!.choices.find(c => c.step === 'security')).toMatchObject({ available: true, picked: true });
+  });
+
+  it('Stop ends both passes and keeps what each found, the critic does not run, and a reply landing after Stop changes nothing', async () => {
+    repliesAfterStop = true;
+    respond = call => (call.kind === 'performance' ? reviewReply([findingLine(call.file, 9, `Slow loop in f${call.file}`)]) : defaultRespond(call));
+    const m = manager();
+    let state = await picking(m, 3, ['performance', 'critic']);
+    const release = hold(c => (c.kind === 'security' || c.kind === 'performance') && c.file === 2);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'passes' });
+    await until(m, state.id, s => lines(s).join() === 'Security pass: 1 of 3 batches,Performance pass: 1 of 3 batches' && calls.length === 4);
+    await m.stopRun(REVIEW_KIND, state.id);
+    release();
+    state = await idle(m, state.id);
+
+    expect(kinds('critic')).toEqual([]);
+    expect(titles(state)).toEqual(['Slow loop in f1', 'Token logged in f1', 'Unchecked input in f1', 'Unchecked input in f2', 'Unchecked input in f3']);
+    const results = resultsOf(state);
+    expect(results.statuses).toEqual([
+      expect.stringMatching(/^The security pass was stopped: 1 of 3 batches finished/),
+      expect.stringMatching(/^The performance pass was stopped: 1 of 3 batches finished/),
+    ]);
+    expect(results.passesRun).toEqual(['Regular']);
+    expect(results.notice).toBeUndefined();
+  });
+
+  it('a restart during two running passes keeps both passes\' finished batches and records both as cut off', async () => {
+    respond = call => (call.kind === 'performance' ? reviewReply([findingLine(call.file, 9, `Slow loop in f${call.file}`)]) : defaultRespond(call));
+    const m = manager();
+    const state = await picking(m, 3, ['performance']);
+    hold(c => (c.kind === 'security' || c.kind === 'performance') && c.file === 2);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'passes' });
+    await until(m, state.id, s => lines(s).join() === 'Security pass: 1 of 3 batches,Performance pass: 1 of 3 batches');
+
+    const restored = await open(manager());
+    const results = resultsOf(restored);
+    expect(results.statuses).toEqual([
+      expect.stringMatching(/^The security pass was cut off by a restart: 1 of 3 batches finished/),
+      expect.stringMatching(/^The performance pass was cut off by a restart: 1 of 3 batches finished/),
+    ]);
+    expect(titles(restored)).toEqual(['Slow loop in f1', 'Token logged in f1', 'Unchecked input in f1', 'Unchecked input in f2', 'Unchecked input in f3']);
+    expect(results.findings.map(f => f.number).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
+    expect(results.picker!.choices.filter(c => c.picked).map(c => c.step)).toEqual(['security', 'performance']);
+  });
+
+  it('after Security and Performance it offers Reliability, Maintainability and the critic; after the critic, the critic is offered again only once a later pass adds findings', async () => {
+    respond = call => (call.kind === 'reliability' ? reviewReply([findingLine(call.file, 11, `Unclosed stream in f${call.file}`)]) : defaultRespond(call));
+    const m = manager();
+    let state = await picking(m, 2, ['performance']);
+    state = await runAndWait(m, state, { type: 'passes' });
+    expect(resultsOf(state).picker!.offered).toEqual(['reliability', 'maintainability', 'critic']);
+
+    state = await act(m, state, { type: 'pick-pass', step: 'critic', picked: true });
+    state = await runAndWait(m, state, { type: 'passes' });
+    expect(resultsOf(state).picker!.offered).toEqual(['reliability', 'maintainability']);
+
+    respond = call => (call.kind === 'reliability' ? reviewReply([findingLine(call.file, 11, `Unclosed stream in f${call.file}`)]) : defaultRespond(call));
+    state = await act(m, state, { type: 'pick-pass', step: 'reliability', picked: true });
+    state = await runAndWait(m, state, { type: 'passes' });
+    expect(resultsOf(state).picker!.offered).toEqual(['maintainability', 'critic']);
+  });
+});
+
+describe('findings while the regular pass runs', () => {
+  it('after two of five batches the results list those batches\' findings, with the numbers they keep at the end, and say the pass is running', async () => {
+    const m = manager();
+    client.rawDiff = prDiff(5);
+    let state = await open(m);
+    const release = hold(call => call.kind === 'regular' && call.file === 3);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'start' });
+    state = await until(m, state.id, s => viewOf(s).progress === 'Regular pass: 2 of 5 batches');
+
+    expect(viewOf(state).stage).toBe('review');
+    expect(viewOf(state).firstStep).toBeUndefined();
+    const live = resultsOf(state);
+    expect(live.running).toEqual({ what: 'regular', step: 'regular', done: 2, total: 5 });
+    expect(live.hasReview).toBe(true);
+    expect(live.picker).toBeUndefined();
+    expect(live.statuses).toEqual([]);
+    expect(live.findings.map(f => [f.number, f.title])).toEqual([[1, 'Unchecked input in f1'], [2, 'Unchecked input in f2']]);
+
+    release();
+    state = await idle(m, state.id);
+    const final = resultsOf(state);
+    expect(final.running).toBeUndefined();
+    expect(final.findings.filter(f => f.number <= 2).map(f => [f.number, f.title])).toEqual([[1, 'Unchecked input in f1'], [2, 'Unchecked input in f2']]);
+    expect(final.findings).toHaveLength(5);
+  });
+
+  it('before the first batch finishes, Start shows the empty results with the pass running', async () => {
+    const m = manager();
+    client.rawDiff = prDiff(3);
+    let state = await open(m);
+    const release = hold(call => call.kind === 'regular' && call.file === 1);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'start' });
+    state = await until(m, state.id, s => viewOf(s).progress === 'Regular pass: 0 of 3 batches');
+
+    expect(viewOf(state).stage).toBe('review');
+    expect(resultsOf(state)).toMatchObject({ running: { what: 'regular', done: 0, total: 3 }, hasReview: false, findings: [] });
+    release();
+    await idle(m, state.id);
+  });
+
+  it('Run again shows the new review\'s findings so far, not the one it replaces', async () => {
+    const m = manager();
+    let state = await reviewed(m, 3);
+    respond = call => (call.kind === 'regular' ? reviewReply([findingLine(call.file, 4, `Second look at f${call.file}`)]) : defaultRespond(call));
+    const release = hold(call => call.kind === 'regular' && call.file === 2);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'again' });
+    state = await until(m, state.id, s => viewOf(s).progress === 'Regular pass: 1 of 3 batches');
+
+    expect(resultsOf(state).findings.map(f => [f.number, f.title])).toEqual([[1, 'Second look at f1']]);
+    release();
+    await idle(m, state.id);
+  });
+});
+
+describe('the order of the findings', () => {
+  it('lists by severity, then confidence from highest, a finding without confidence last, then by number', async () => {
+    const line = (file: number, n: number, title: string, severity: string, confidence?: number) => JSON.stringify({
+      file: `src/f${file}.ts`, line: n, anchorCode: codeLine(file, n), severity, ...(confidence !== undefined ? { confidence } : {}), title,
+      description: `${title} described`, recommendation: `Fix ${title}`,
+    });
+    respond = call => {
+      if (call.kind !== 'regular') return defaultRespond(call);
+      if (call.file === 1) return reviewReply([line(1, 2, 'Warning sure', 'warning', 0.9), line(1, 5, 'Critical unsure', 'critical', 0.6)]);
+      return reviewReply([line(2, 2, 'Critical sure', 'critical', 0.95), line(2, 5, 'Warning no confidence', 'warning'), line(2, 8, 'Warning also sure', 'warning', 0.9)]);
+    };
+    const results = resultsOf(await reviewed(manager(), 2));
+    expect(results.findings.map(f => f.title)).toEqual(['Critical sure', 'Critical unsure', 'Warning sure', 'Warning also sure', 'Warning no confidence']);
   });
 });
 
@@ -440,10 +812,11 @@ describe('Run again', () => {
     const m = manager();
     let state = await open(m);
     client.rawDiff = prDiff(2);
-    state = await act(m, state, { type: 'question', text: 'does this handle retries?' });
+    state = await act(m, state, { type: 'background', choice: 'text' });
+    state = await act(m, state, { type: 'own-text', text: 'does this handle retries?' });
     state = await runAndWait(m, state, { type: 'start' });
     state = await runAndWait(m, state, { type: 'passes' });
-    await storeWork(state.id, { explanations: { 1: { text: 'Explained.' } }, drafts: {} });
+    await storeWork(state.id, { threads: { 1: [{ answer: 'Explained.' }] }, drafts: {} });
     const m2 = manager();
     state = await open(m2);
 
@@ -453,7 +826,7 @@ describe('Run again', () => {
     expect(confirms).toEqual(['Run the whole review again?']);
     expect(calls).toEqual([]);
     expect(resultsOf(state).notice).toMatch(/kept/);
-    expect((await storedWorking(state.id)).explanations).toEqual({ 1: { text: 'Explained.' } });
+    expect((await storedWorking(state.id)).threads).toEqual({ 1: [{ answer: 'Explained.' }] });
     expect(resultsOf(state).passesRun).toEqual(['Regular', 'Security']);
 
     confirmAnswer = true;
@@ -461,7 +834,7 @@ describe('Run again', () => {
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.filter(c => c.kind === 'regular').every(c => c.prompt.includes('does this handle retries?'))).toBe(true);
     expect(resultsOf(state).passesRun).toEqual(['Regular']);
-    expect((await storedWorking(state.id)).explanations).toEqual({});
+    expect((await storedWorking(state.id)).threads).toEqual({});
   });
 
   it('a review with nothing worked on runs again without asking', async () => {
@@ -472,119 +845,29 @@ describe('Run again', () => {
   });
 });
 
-describe('the requirements check', () => {
-  it('a ticket that cannot be read: the findings stand, the coverage position names the failed read, and Re-check runs only the check', async () => {
+describe('the results of a review', () => {
+  it('with a ticket key in the pull request title, read no ticket, have no requirements check, coverage or source form, and refuse Re-check and Reword', async () => {
     client.prOverride.title = 'PROJ-12 Add export';
-    ticketResult = { ok: false, reason: 'not-found', message: 'Issue does not exist' };
-    const m = manager();
-    let state = await reviewed(m, 2);
-    let results = resultsOf(state);
-    expect(results.findings).toHaveLength(2);
-    expect(results.requirementsLine).toMatch(/the ticket PROJ-12 could not be read \(Issue does not exist\)/);
-    expect(results.canRecheck).toBe(true);
-    expect(results.coverage).toBeUndefined();
-
-    ticketResult = {
-      ok: true,
-      source: { key: 'PROJ-12', summary: 'Add export', descriptionText: 'Export the report as CSV.', truncatedDescription: false, comments: [], omittedComments: 0, commentsUnavailable: false },
-    };
-    calls = [];
-    const started = await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'recheck' });
-    expect(started.running).toEqual([expect.objectContaining({ size: 'call', what: 'recheck' })]);
-    state = await idle(m, state.id);
-    results = resultsOf(state);
-    expect(calls.map(c => c.kind)).toEqual(['requirements']);
-    expect(results.coverage).toMatch(/Requirements coverage \(PROJ-12\)/);
-    expect(results.requirementsLine).toBeUndefined();
-    expect(results.findings).toHaveLength(2);
-    expect(results.tokens.map(t => t.pass)).toEqual(['Regular pass', 'Requirements re-check']);
-  });
-
-  it('a check whose model reply is unreadable says it failed and offers Re-check', async () => {
-    client.prOverride.title = 'PROJ-12 Add export';
-    respond = call => (call.kind === 'requirements' ? 'no json here' : defaultRespond(call));
-    const results = resultsOf(await reviewed(manager(), 2));
-    expect(results.requirementsLine).toMatch(/^The requirements check failed/);
-    expect(results.canRecheck).toBe(true);
-    expect(results.findings).toHaveLength(2);
-  });
-});
-
-describe('changing the requirements source after a review', () => {
-  async function reviewedAgainstTicket(m: SessionManager): Promise<BoardState> {
-    client.prOverride.title = 'PROJ-12 Add export';
-    const state = await reviewed(m, 2);
-    expect(resultsOf(state).coverage).toMatch(/Requirements coverage \(PROJ-12\)/);
-    return state;
-  }
-
-  it('switching from the ticket to a reworded goal and re-checking makes one requirements call, replaces the coverage and leaves the findings', async () => {
-    const m = manager();
-    let state = await reviewedAgainstTicket(m);
-    const before = resultsOf(state).findings;
-    expect(resultsOf(state).requirementsForm).toMatchObject({ source: 'ticket', ticketKey: 'PROJ-12' });
-
-    state = await act(m, state, { type: 'source', source: 'goal' });
-    state = await act(m, state, { type: 'goal', text: 'export only the backend endpoint' });
-    expect(resultsOf(state).requirementsForm).toMatchObject({ source: 'goal', goal: 'export only the backend endpoint', canReword: true });
-    expect(resultsOf(state).coverage).toMatch(/PROJ-12/);
-
-    calls = [];
-    state = await runAndWait(m, state, { type: 'reword' });
-    expect(calls.map(c => c.kind)).toEqual(['reword']);
-    expect(resultsOf(state).requirementsForm!.points).toMatch(/Only the backend export endpoint/);
-
-    calls = [];
-    const started = await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'recheck' });
-    expect(started.running).toEqual([expect.objectContaining({ size: 'call', what: 'recheck' })]);
-    state = await idle(m, state.id);
-    expect(calls.map(c => c.kind)).toEqual(['requirements']);
-    expect(calls[0].prompt).toContain('Only the backend export endpoint');
-    const results = resultsOf(state);
-    expect(results.requirements).toBe('the stated goal');
-    expect(results.coverage).toMatch(/Stated goal/);
-    expect(results.coverage).not.toMatch(/PROJ-12/);
-    expect(results.findings).toEqual(before);
-    expect(results.passesRun).toEqual(['Regular']);
-  });
-
-  it('switching to none and re-checking makes no call and removes the coverage', async () => {
-    const m = manager();
-    let state = await reviewedAgainstTicket(m);
-    const before = resultsOf(state).findings;
-    state = await act(m, state, { type: 'source', source: 'none' });
-    expect(resultsOf(state).canRecheck).toBe(true);
-
-    calls = [];
-    state = await runAndWait(m, state, { type: 'recheck' });
-    expect(calls).toEqual([]);
-    const results = resultsOf(state);
-    expect(results.coverage).toBeUndefined();
-    expect(results.requirements).toBe('none');
-    expect(results.findings).toEqual(before);
-    // Nothing is left to check or remove.
-    expect(results.canRecheck).toBe(false);
-    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'recheck' })).rejects.toThrow(/ticket or a goal/);
-  });
-
-  it('a goal re-check needs the goal typed; the ticket is not offered while Jira is not configured', async () => {
-    jiraConfigured = false;
-    const m = manager();
-    let state = await reviewed(m, 2);
-    let form = resultsOf(state).requirementsForm!;
-    expect(form.sources.find(s => s.id === 'ticket')).toMatchObject({ available: false, reason: expect.stringMatching(/Jira is not configured/) });
-    await expect(act(m, state, { type: 'source', source: 'ticket' })).rejects.toThrow(/Jira is not configured/);
-
-    state = await act(m, state, { type: 'source', source: 'goal' });
-    form = resultsOf(state).requirementsForm!;
-    expect(resultsOf(state).canRecheck).toBe(false);
-    expect(form.recheckBlocker).toBe('Type the goal.');
-  });
-
-  it('the question and the model stay as the review was started', async () => {
     const m = manager();
     const state = await reviewed(m, 2);
-    await expect(act(m, state, { type: 'question', text: 'other question' })).rejects.toThrow(/New review/);
+    const results = resultsOf(state);
+
+    expect(ticketReads).toEqual([]);
+    expect(calls.map(c => c.kind)).toEqual(['regular', 'regular']);
+    expect(results.findings).toHaveLength(2);
+    for (const gone of ['coverage', 'requirementsLine', 'requirementsForm', 'canRecheck', 'requirements']) expect(results).not.toHaveProperty(gone);
+    expect(results.tokens.map(t => t.pass)).toEqual(['Regular pass']);
+    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'recheck' })).rejects.toThrow('Unknown run.');
+    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'reword' })).rejects.toThrow('Unknown run.');
+    await expect(act(m, state, { type: 'background', choice: 'none' })).rejects.toThrow(/New review/);
+    await expect(act(m, state, { type: 'ticket-key', key: 'PROJ-99' })).rejects.toThrow(/New review/);
+  });
+
+  it('the background and the model stay as the review was started', async () => {
+    const m = manager();
+    const state = await reviewed(m, 2);
+    await expect(act(m, state, { type: 'own-text', text: 'other text' })).rejects.toThrow(/New review/);
+    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'read-ticket' })).rejects.toThrow(/New review/);
   });
 });
 
@@ -711,42 +994,6 @@ describe('a finding in full', () => {
   });
 });
 
-describe('a requested ticket that does not exist while the title names another', () => {
-  it('names the title\'s key on the failure line, offers it on the first step and the results, and Re-check reads it after the switch', async () => {
-    client.prOverride.title = 'PROJ-12 Add export';
-    client.rawDiff = prDiff(2);
-    ticketFor = key => key === 'PROJ-12' ? ticketResult : { ok: false, reason: 'not-found', message: 'Issue does not exist' };
-    const m = manager();
-    let state = await runAndWait(m, await open(m, { url: PR_URL, ticketKey: 'PROJ-99' }), { type: 'start' });
-    let results = resultsOf(state);
-    expect(results.requirementsLine).toBe(
-      'The requirements check did not run: the ticket PROJ-99 could not be read (Issue does not exist). The findings stand. The pull request title names PROJ-12 instead.',
-    );
-    expect(results.requirementsForm).toMatchObject({ ticketKey: 'PROJ-99', titleKey: 'PROJ-12' });
-
-    state = await act(m, state, { type: 'new-review' });
-    expect(viewOf(state).firstStep).toMatchObject({ ticketKey: 'PROJ-99', titleKey: 'PROJ-12' });
-    state = await act(m, state, { type: 'back-to-review' });
-
-    state = await act(m, state, { type: 'ticket-key', key: 'PROJ-12' });
-    expect(resultsOf(state).requirementsForm!.titleKey).toBeUndefined();
-    calls = [];
-    state = await runAndWait(m, state, { type: 'recheck' });
-    results = resultsOf(state);
-    expect(calls.map(c => c.kind)).toEqual(['requirements']);
-    expect(results.coverage).toMatch(/Requirements coverage \(PROJ-12\)/);
-    expect(results.requirementsLine).toBeUndefined();
-  });
-
-  it('offers nothing when the title names the same key, or no key', async () => {
-    client.prOverride.title = 'PROJ-12 Add export';
-    ticketResult = { ok: false, reason: 'not-found', message: 'Issue does not exist' };
-    const results = resultsOf(await reviewed(manager(), 2));
-    expect(results.requirementsLine).not.toMatch(/title names/);
-    expect(results.requirementsForm!.titleKey).toBeUndefined();
-  });
-});
-
 describe('the diagnostic timeline of a board review', () => {
   it('goes to the review\'s own logger, with the structured run record only when detailed diagnostics is on', async () => {
     await reviewed(manager(), 2);
@@ -760,5 +1007,59 @@ describe('the diagnostic timeline of a board review', () => {
     await runAndWait(m, await open(m), { type: 'again' });
     expect(reviewLines).toContain('Configuration:');
     expect(reviewLines).toContain('Run: pr=PROJ/app#482');
+  });
+});
+
+describe('the summary band above the findings', () => {
+  it('after the regular pass the band is open with the counts and the suggested pass preselected; it folds, opens again, and a run of extra passes opens it', async () => {
+    const m = manager();
+    let state = await reviewed(m, 2);
+    const results = resultsOf(state);
+    expect(results.band).toMatchObject({
+      state: 'open', counts: { total: 2, critical: 0, warning: 2, suggestion: 0, againstGoal: 0 }, background: 'None', notReviewed: [],
+    });
+    expect(results.band.tokens).toMatch(/input and .* output tokens/);
+    expect(results.picker!.choices.find(c => c.step === 'security')?.picked).toBe(true);
+
+    state = await act(m, state, { type: 'band', open: false });
+    expect(resultsOf(state).band.state).toBe('folded');
+    state = await act(m, state, { type: 'band', open: true });
+    expect(resultsOf(state).band.state).toBe('open');
+    state = await act(m, state, { type: 'band', open: false });
+
+    state = await runAndWait(m, state, { type: 'passes' });
+    expect(resultsOf(state).band.state).toBe('open');
+    expect(resultsOf(state).band.counts).toMatchObject({ total: 4, critical: 2 });
+  });
+
+  it('Not now folds the band', async () => {
+    const m = manager();
+    let state = await reviewed(m, 2);
+    state = await act(m, state, { type: 'keep-as-is' });
+    expect(resultsOf(state).band.state).toBe('folded');
+  });
+
+  it('while a pass runs the band is running, with the tokens of the run so far', async () => {
+    const m = manager();
+    let state = await reviewed(m, 5);
+    const release = hold(call => call.kind === 'security' && call.file === 3);
+    await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'passes' });
+    state = await until(m, state.id, s => viewOf(s).progress === 'Security pass: 2 of 5 batches');
+    const band = resultsOf(state).band;
+    expect(band.state).toBe('running');
+    expect(band.tokens).toMatch(/^[1-9][\d,]* input and \d[\d,]* output tokens in 2 call\(s\)/);
+    expect(resultsOf(state).running?.passes).toEqual([{ step: 'security', text: 'Security pass: 2 of 5 batches', done: 2, total: 5 }]);
+    release();
+    await idle(m, state.id);
+  });
+
+  it('the review board leaves the run line and Stop of the shared header to its band', async () => {
+    const state = await reviewed(manager(), 1);
+    expect(viewOf(state).ownRunLine).toBe(true);
+  });
+
+  it('says what was reviewed: the files, the batches and the reviewed commit', async () => {
+    const state = await reviewed(manager(), 2);
+    expect(resultsOf(state).reviewed).toEqual({ files: ['src/f1.ts', 'src/f2.ts'], batches: 2, commit: HEAD.slice(0, 12) });
   });
 });

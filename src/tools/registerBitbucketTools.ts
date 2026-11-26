@@ -30,6 +30,7 @@ export function registerBitbucketTools(context: vscode.ExtensionContext, configS
     openReview: input => boards.panels.open(REVIEW_KIND, input),
     // A look at the stored session only: no background check starts and Bitbucket is not asked.
     storedReview: async id => (await boards.manager.peek(REVIEW_KIND, id)) as ReviewSession | undefined,
+    discardedReview: id => boards.manager.storedInOtherFormat(REVIEW_KIND, id),
     tokenUsage: () => usage.snapshot(),
     now: () => new Date(),
     onDiag: (level, message, details) => logDiag('tools.bitbucket', level, message, details),

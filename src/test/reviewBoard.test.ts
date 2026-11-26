@@ -1,8 +1,6 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ModelRequestCancelledError, type BoardModelHandle } from '../boards/boardModels';
 import type { ReviewBoardDeps } from '../boards/review/deps';
@@ -41,12 +39,11 @@ function findingLine(file: number, line: number, title: string, severity: string
   });
 }
 
-type CallKind = 'reword' | 'review' | 'requirements';
+type CallKind = 'review' | 'other';
 
+/** Every review call carries the pull request's diff; any other call is not part of the review. */
 function kindOf(prompt: string): CallKind {
-  if (prompt.startsWith('A developer typed the goal')) return 'reword';
-  if (prompt.startsWith('You are checking whether a pull request')) return 'requirements';
-  return 'review';
+  return prompt.includes('### File: src/f') ? 'review' : 'other';
 }
 
 let dir: string;
@@ -56,6 +53,10 @@ let settingWrites: string[];
 let available: typeof MODEL[];
 let jiraConfigured: boolean;
 let ticketReads: string[];
+/** What a ticket read answers, by key. */
+let ticketResult: (key: string) => RequirementsSourceResult;
+/** What a ticket read waits for before it answers, by key. */
+let readGate: (key: string) => Promise<void>;
 let calls: Array<{ kind: CallKind; prompt: string }>;
 let respond: (kind: CallKind, prompt: string) => Promise<string>;
 let confirms: string[];
@@ -64,13 +65,7 @@ let recorded: string[];
 let completed: number;
 let clock: number;
 
-function requirementsReply(): string {
-  return readFileSync(resolve(process.cwd(), 'src/test/fixtures/requirements-reply-clean-spec.json'), 'utf-8');
-}
-
-const defaultRespond = async (kind: CallKind): Promise<string> => {
-  if (kind === 'reword') return JSON.stringify({ inScope: ['The backend export endpoint'], outOfScope: ['The export button'], openPoints: [] });
-  if (kind === 'requirements') return requirementsReply();
+const defaultRespond = async (_kind: CallKind): Promise<string> => {
   return [findingLine(1, 2, 'Unchecked input', 'suggestion'), findingLine(1, 4, 'SQL built from input', 'critical'), JSON.stringify({ additionalFilesNeeded: [] })].join('\n');
 };
 
@@ -96,13 +91,8 @@ function deps(): ReviewBoardDeps {
     jira: async () => jiraConfigured ? {
       readRequirements: async (key: string): Promise<RequirementsSourceResult> => {
         ticketReads.push(key);
-        return {
-          ok: true,
-          source: {
-            key, summary: 'Add export', descriptionText: 'Export the report as CSV.', truncatedDescription: false,
-            comments: [], omittedComments: 0, commentsUnavailable: false,
-          },
-        };
+        await readGate(key);
+        return ticketResult(key);
       },
     } : undefined,
     models: {
@@ -158,6 +148,17 @@ async function runAndWait(m: SessionManager, state: BoardState, request: Record<
 
 const viewOf = (state: BoardState) => state.view as ReviewView;
 
+/** Waits until the board's state meets `test`. */
+async function until(m: SessionManager, id: string, test: (state: BoardState) => boolean): Promise<BoardState> {
+  let state = await m.state(REVIEW_KIND, id);
+  while (!test(state)) state = await m.state(REVIEW_KIND, id, state.tick, 1000);
+  return state;
+}
+
+async function storedWorking(id: string): Promise<ReviewWorking> {
+  return (await new SessionStore(dir).load(id))!.session.working as ReviewWorking;
+}
+
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-board-'));
   client = new MockBitbucketClient();
@@ -168,6 +169,14 @@ beforeEach(() => {
   available = [MODEL];
   jiraConfigured = true;
   ticketReads = [];
+  ticketResult = key => ({
+    ok: true,
+    source: {
+      key, summary: 'Add export', descriptionText: 'Export the report as CSV.', truncatedDescription: false,
+      comments: [], omittedComments: 0, commentsUnavailable: false,
+    },
+  });
+  readGate = async () => {};
   calls = [];
   respond = defaultRespond;
   confirms = [];
@@ -241,181 +250,228 @@ describe('the model on the first step', () => {
     setting = 'gone-model';
     const view = viewOf(await open(manager()));
     expect(view.model.askReason).toMatch(/"gone-model" .* is not available/);
-    expect(view.firstStep?.canReword).toBe(false);
+    expect(view.firstStep?.canStart).toBe(false);
   });
 });
 
-describe('the requirements source', () => {
-  it('preselects the ticket when Jira is configured and the PR title has a key', async () => {
+describe('the background on the first step', () => {
+  it('preselects the ticket when Jira is configured and the PR title has a key, and reads nothing until the read is asked for', async () => {
     client.prOverride.title = 'PROJ-12 Add export';
     const step = viewOf(await open(manager())).firstStep!;
-    expect(step.source).toBe('ticket');
-    expect(step.ticketKey).toBe('PROJ-12');
+    expect(step).toMatchObject({ choice: 'ticket', ticketKey: 'PROJ-12', ticket: { state: 'idle', text: '', readNeeded: true } });
+    expect(ticketReads).toEqual([]);
+  });
+
+  it('reading the ticket fills the box with its summary, description and newest comments', async () => {
+    client.prOverride.title = 'PROJ-12 Add export';
+    ticketResult = key => ({
+      ok: true,
+      source: {
+        key, summary: 'Add export', descriptionText: 'Export the report as CSV.', truncatedDescription: false,
+        comments: [
+          { author: 'Ann', created: '2026-11-20T10:00:00.000+0000', text: 'Also support semicolons.' },
+          { author: 'Bob', created: '2026-11-18T10:00:00.000+0000', text: 'Keep the header row.' },
+        ],
+        omittedComments: 0, commentsUnavailable: false,
+      },
+    });
+    const m = manager();
+    const state = await runAndWait(m, await open(m), { type: 'read-ticket' });
+
+    expect(ticketReads).toEqual(['PROJ-12']);
+    const { ticket } = viewOf(state).firstStep!;
+    expect(ticket).toMatchObject({ state: 'read', edited: false, readNeeded: false });
+    expect(ticket.text).toBe([
+      'Ticket PROJ-12: Add export', '', 'Description:', 'Export the report as CSV.', '', 'Comments (newest first):',
+      '- Ann, 2026-11-20: Also support semicolons.', '- Bob, 2026-11-18: Keep the header row.',
+    ].join('\n'));
+    expect(calls).toEqual([]);
+  });
+
+  it('picking Jira ticket asks for a read of the key in the field', async () => {
+    const m = manager();
+    let state = await open(m);
+    expect(viewOf(state).firstStep).toMatchObject({ choice: 'none', ticket: { readNeeded: false } });
+    state = await act(m, state, { type: 'background', choice: 'ticket' });
+    state = await act(m, state, { type: 'ticket-key', key: 'proj-7' });
+    expect(viewOf(state).firstStep).toMatchObject({ choice: 'ticket', ticketKey: 'PROJ-7', ticket: { readNeeded: true } });
+    state = await runAndWait(m, state, { type: 'read-ticket' });
+    expect(ticketReads).toEqual(['PROJ-7']);
+    expect(viewOf(state).firstStep!.ticket.text).toContain('Ticket PROJ-7: Add export');
   });
 
   it('preselects the ticket the request names over the one in the title', async () => {
     client.prOverride.title = 'PROJ-12 Add export';
     const step = viewOf(await open(manager(), { url: PR_URL, ticketKey: 'proj-99' })).firstStep!;
-    expect(step).toMatchObject({ source: 'ticket', ticketKey: 'PROJ-99' });
+    expect(step).toMatchObject({ choice: 'ticket', ticketKey: 'PROJ-99' });
   });
 
-  it('asked for again with a ticket key and a question while on the first step, shows them and keeps the model picked', async () => {
+  it('a request with a ticket key and text opens with the own text preselected and the key kept in the ticket field, and nothing runs', async () => {
+    const state = await open(manager(), { url: PR_URL, ticketKey: 'PROJ-123', background: 'watch thread safety' });
+    expect(viewOf(state).firstStep).toMatchObject({ choice: 'text', ownText: 'watch thread safety', ticketKey: 'PROJ-123', ticket: { readNeeded: false } });
+    expect(viewOf(state).stage).toBe('first-step');
+    expect(state.running ?? []).toEqual([]);
+    expect(ticketReads).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it('asked for again with a ticket key and text while on the first step, shows them and keeps the model picked', async () => {
     client.prOverride.title = 'Add export';
     setting = '';
     const m = manager();
     let state = await open(m);
-    expect(viewOf(state).firstStep).toMatchObject({ source: 'none', question: '' });
+    expect(viewOf(state).firstStep).toMatchObject({ choice: 'none', ownText: '' });
     state = await act(m, state, { type: 'pick-model', id: MODEL.id });
-    state = await act(m, state, { type: 'question', text: 'An older question' });
+    state = await act(m, state, { type: 'own-text', text: 'An older text' });
 
-    state = await open(m, { url: PR_URL, ticketKey: 'proj-99', question: 'Is the export safe?' });
+    state = await open(m, { url: PR_URL, ticketKey: 'proj-99', background: 'Is the export safe?' });
 
     const view = viewOf(state);
-    expect(view.firstStep).toMatchObject({ source: 'ticket', ticketKey: 'PROJ-99', question: 'Is the export safe?' });
+    expect(view.firstStep).toMatchObject({ choice: 'text', ticketKey: 'PROJ-99', ownText: 'Is the export safe?' });
     expect(view.model.inUse).toMatchObject({ id: MODEL.id, picked: true });
     // Asked for again with nothing new, the first step stays as it is.
     const revision = state.revision;
     state = await open(m, { url: PR_URL });
     expect(state.revision).toBe(revision);
-    expect(viewOf(state).firstStep).toMatchObject({ ticketKey: 'PROJ-99', question: 'Is the export safe?' });
+    expect(viewOf(state).firstStep).toMatchObject({ ticketKey: 'PROJ-99', ownText: 'Is the export safe?' });
   });
 
-  it('asked for again with a ticket key and a question once a review is shown, leaves the stored review as it is', async () => {
+  it('asked for again with a ticket key and text once a review is shown, leaves the stored review as it is', async () => {
     const m = manager();
-    let state = await runAndWait(m, await open(m, { url: PR_URL, question: 'First question' }), { type: 'start' });
+    let state = await runAndWait(m, await open(m, { url: PR_URL, background: 'First text' }), { type: 'start' });
     const before = viewOf(state).results!;
     const revision = state.revision;
 
-    state = await open(m, { url: PR_URL, ticketKey: 'PROJ-99', question: 'Another question' });
+    state = await open(m, { url: PR_URL, ticketKey: 'PROJ-99', background: 'Another text' });
 
     expect(state.revision).toBe(revision);
     expect(viewOf(state).stage).toBe('review');
     expect(viewOf(state).results).toEqual(before);
   });
 
-  it('preselects none when no key is named, and with Jira not configured the ticket is unavailable with its reason', async () => {
-    client.prOverride.title = 'PROJ-12 Add export';
-    jiraConfigured = false;
-    const step = viewOf(await open(manager())).firstStep!;
-    expect(step.source).toBe('none');
-    expect(step.sources[0]).toMatchObject({ id: 'ticket', available: false, reason: expect.stringMatching(/Jira is not configured/) });
-  });
-
-  it('reads the ticket and shows the coverage when the ticket is the source', async () => {
-    client.prOverride.title = 'PROJ-12 Add export';
+  it('a read that Jira answers with 404 shows the reason in the box, and Start stays available', async () => {
+    client.prOverride.title = 'PROJ-123 Add export';
+    ticketResult = () => ({ ok: false, reason: 'not-found', message: 'Issue does not exist' });
     const m = manager();
-    const state = await runAndWait(m, await open(m), { type: 'start' });
-    expect(ticketReads).toEqual(['PROJ-12']);
-    expect(viewOf(state).results?.coverage).toMatch(/Requirements coverage \(PROJ-12\)/);
-    expect(viewOf(state).results?.requirements).toBe('Jira ticket PROJ-12');
-  });
-
-  it('with none picked, reads no ticket and shows no coverage', async () => {
-    client.prOverride.title = 'PROJ-12 Add export';
-    const m = manager();
-    let state = await open(m);
-    state = await act(m, state, { type: 'source', source: 'none' });
-    state = await runAndWait(m, state, { type: 'start' });
-    expect(ticketReads).toEqual([]);
-    expect(calls.map(c => c.kind)).not.toContain('requirements');
-    expect(viewOf(state).results?.coverage).toBeUndefined();
-  });
-});
-
-describe('the goal and its rewording', () => {
-  async function onGoal(m: SessionManager, goal: string): Promise<BoardState> {
-    let state = await open(m);
-    state = await act(m, state, { type: 'source', source: 'goal' });
-    return act(m, state, { type: 'goal', text: goal });
-  }
-
-  it('typing the goal makes no model call; Reword makes one, shows the points, and Start waits until it ends', async () => {
-    const m = manager();
-    const state = await onGoal(m, 'only backend endpoint, export button later');
-    expect(calls).toEqual([]);
-
-    let release!: () => void;
-    respond = async (kind, prompt) => {
-      if (kind === 'reword') await new Promise<void>(r => { release = r; });
-      return defaultRespond(kind);
-    };
-    const started = await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'reword' });
-    expect(started.running).toEqual([expect.objectContaining({ size: 'call', what: 'reword' })]);
-    await expect(m.startRun(REVIEW_KIND, state.id, started.revision, { type: 'start' })).rejects.toThrow(/the goal rewording is running/);
-    await new Promise(r => setTimeout(r, 10));
-    release();
-    const after = await idle(m, state.id);
-
-    expect(calls.map(c => c.kind)).toEqual(['reword']);
-    expect(calls[0].prompt).toContain('only backend endpoint, export button later');
-    expect(viewOf(after).firstStep?.points).toBe('In scope:\n- The backend export endpoint\n\nOut of scope:\n- The export button');
-    expect(recorded).toEqual([MODEL.id]);
-  });
-
-  it('Start without a rewording checks the diff against the typed words', async () => {
-    const m = manager();
-    const state = await runAndWait(m, await onGoal(m, 'only backend endpoint, export button later'), { type: 'start' });
-    const check = calls.find(c => c.kind === 'requirements');
-    expect(check?.prompt).toContain('only backend endpoint, export button later');
-    expect(viewOf(state).results?.requirements).toBe('the stated goal');
-  });
-
-  it('Start checks against the points as the developer corrected them', async () => {
-    const m = manager();
-    let state = await runAndWait(m, await onGoal(m, 'only backend endpoint, export button later'), { type: 'reword' });
-    state = await act(m, state, { type: 'points', text: 'In scope:\n- The CSV export endpoint only' });
-    await runAndWait(m, state, { type: 'start' });
-    expect(calls.find(c => c.kind === 'requirements')?.prompt).toContain('The CSV export endpoint only');
-  });
-
-  it('a failed rewording keeps the typed words, shows an error line, and Start uses the typed words', async () => {
-    respond = async (kind) => (kind === 'reword' ? 'I cannot do that.' : defaultRespond(kind));
-    const m = manager();
-    let state = await runAndWait(m, await onGoal(m, 'only backend endpoint'), { type: 'reword' });
+    const state = await runAndWait(m, await open(m), { type: 'read-ticket' });
     const step = viewOf(state).firstStep!;
-    expect(step.goal).toBe('only backend endpoint');
-    expect(step.points).toBe('');
-    expect(step.rewordError).toMatch(/could not be reworded.*Start uses your words as they stand/);
-    expect(step.canStart).toBe(true);
-
-    state = await runAndWait(m, state, { type: 'start' });
-    expect(calls.find(c => c.kind === 'requirements')?.prompt).toContain('only backend endpoint');
+    expect(step.ticket).toMatchObject({ state: 'failed', text: '', reason: 'The ticket PROJ-123 was not found in Jira, or you have no access to it.', readNeeded: false });
+    expect(step).toMatchObject({ canStart: true });
   });
 
-  it('changing the typed goal after the points were corrected asks before Reword replaces the corrections', async () => {
+  it('Start with a ticket that could not be read runs with no background, and says why', async () => {
+    ticketResult = () => ({ ok: false, reason: 'not-found', message: 'Issue does not exist' });
     const m = manager();
-    let state = await runAndWait(m, await onGoal(m, 'only backend endpoint'), { type: 'reword' });
-    state = await act(m, state, { type: 'points', text: 'In scope:\n- My corrected point' });
-    state = await act(m, state, { type: 'goal', text: 'backend endpoint and the button' });
-    expect(viewOf(state).firstStep?.pointsFromOtherGoal).toBe(true);
+    let state = await runAndWait(m, await open(m, { url: PR_URL, ticketKey: 'PROJ-123' }), { type: 'read-ticket' });
+    state = await runAndWait(m, state, { type: 'start' });
+
+    expect(viewOf(state).stage).toBe('review');
+    const { startedWith } = await storedWorking(state.id);
+    expect(startedWith?.background).toBeUndefined();
+    expect(startedWith?.backgroundReason).toBe('The ticket PROJ-123 was not found in Jira, or you have no access to it.');
+    expect(calls.filter(c => c.kind === 'review').some(c => c.prompt.includes('PROJ-123'))).toBe(false);
+  });
+
+  it('Start with the ticket read and trimmed keeps what was left in the box as the background', async () => {
+    client.prOverride.title = 'PROJ-12 Add export';
+    const m = manager();
+    let state = await runAndWait(m, await open(m), { type: 'read-ticket' });
+    state = await act(m, state, { type: 'ticket-text', text: 'Ticket PROJ-12: Add export\nOnly the CSV part.' });
+    expect(viewOf(state).firstStep!.ticket.edited).toBe(true);
+    state = await runAndWait(m, state, { type: 'start' });
+    expect((await storedWorking(state.id)).startedWith?.background).toEqual({ kind: 'ticket', key: 'PROJ-12', text: 'Ticket PROJ-12: Add export\nOnly the CSV part.' });
+    // The review calls get what was left in the box, inside the untrusted fence and not as instructions.
+    const reviews = calls.filter(c => c.kind === 'review');
+    expect(reviews.length).toBeGreaterThan(0);
+    for (const { prompt } of reviews) {
+      const start = prompt.indexOf('«UNTRUSTED-CONTENT»\n');
+      const inside = prompt.slice(start, prompt.indexOf('\n«END-UNTRUSTED-CONTENT»'));
+      expect(start).toBeGreaterThan(-1);
+      expect(inside).toContain('Background ticket PROJ-12');
+      expect(inside).toContain('Only the CSV part.');
+      expect(prompt.slice(0, start)).not.toContain('Only the CSV part.');
+    }
+  });
+
+  it('Start with an emptied ticket box runs with no background, and says why', async () => {
+    client.prOverride.title = 'PROJ-12 Add export';
+    const m = manager();
+    let state = await runAndWait(m, await open(m), { type: 'read-ticket' });
+    state = await act(m, state, { type: 'ticket-text', text: '  ' });
+    state = await runAndWait(m, state, { type: 'start' });
+    const { startedWith } = await storedWorking(state.id);
+    expect(startedWith?.background).toBeUndefined();
+    expect(startedWith?.backgroundReason).toBe('The ticket box was empty.');
+  });
+
+  it('changing the key while a read runs drops the first read\'s result, and Start waits while a read runs', async () => {
+    client.prOverride.title = 'PROJ-1 Add export';
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    readGate = key => (key === 'PROJ-1' ? held : Promise.resolve());
+    const m = manager();
+    let state = await open(m);
+    state = await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'read-ticket' });
+    expect(viewOf(state).firstStep!.ticket.state).toBe('reading');
+    expect(viewOf(state).firstStep).toMatchObject({ canStart: false, startBlocker: 'Wait for the ticket to be read.' });
+    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'start' })).rejects.toThrow(/Wait for the ticket to be read|is running/);
+
+    state = await act(m, state, { type: 'ticket-key', key: 'PROJ-2' });
+    expect(viewOf(state).firstStep!.ticket).toMatchObject({ state: 'idle', readNeeded: true });
+    state = await m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'read-ticket' });
+    await until(m, state.id, s => viewOf(s).firstStep!.ticket.state === 'read');
+    release();
+    state = await idle(m, state.id);
+
+    expect(ticketReads).toEqual(['PROJ-1', 'PROJ-2']);
+    expect(viewOf(state).firstStep!.ticket.text).toContain('Ticket PROJ-2: Add export');
+    expect(viewOf(state).firstStep!.ticket.text).not.toContain('PROJ-1');
+  });
+
+  it('a second read over a box the developer edited asks before replacing it', async () => {
+    client.prOverride.title = 'PROJ-12 Add export';
+    const m = manager();
+    let state = await runAndWait(m, await open(m), { type: 'read-ticket' });
+    state = await act(m, state, { type: 'ticket-text', text: 'My trimmed ticket text' });
 
     confirmAnswer = false;
-    state = await runAndWait(m, state, { type: 'reword' });
-    expect(confirms).toEqual(['Replace your corrected points?']);
-    expect(calls.map(c => c.kind)).toEqual(['reword']);
-    expect(viewOf(state).firstStep).toMatchObject({ points: 'In scope:\n- My corrected point', notice: expect.stringMatching(/corrected points were kept/) });
+    state = await runAndWait(m, state, { type: 'read-ticket' });
+    expect(confirms).toEqual(['Replace the text in the ticket box with PROJ-12?']);
+    expect(ticketReads).toEqual(['PROJ-12']);
+    expect(viewOf(state).firstStep).toMatchObject({ ticket: { state: 'read', text: 'My trimmed ticket text', readNeeded: false }, notice: 'Not read: your text in the ticket box was kept.' });
 
     confirmAnswer = true;
-    state = await runAndWait(m, state, { type: 'reword' });
-    expect(calls.map(c => c.kind)).toEqual(['reword', 'reword']);
-    expect(viewOf(state).firstStep?.points).toMatch(/The backend export endpoint/);
+    state = await runAndWait(m, state, { type: 'read-ticket' });
+    expect(ticketReads).toEqual(['PROJ-12', 'PROJ-12']);
+    expect(viewOf(state).firstStep!.ticket).toMatchObject({ state: 'read', edited: false, text: expect.stringContaining('Ticket PROJ-12: Add export') });
   });
 
-  it('Reword is not offered before a model is chosen', async () => {
-    setting = '';
+  it('with Jira not configured, the ticket choice shows the setup reason, and own text and none still work', async () => {
+    client.prOverride.title = 'PROJ-12 Add export';
+    jiraConfigured = false;
     const m = manager();
-    const state = await onGoal(m, 'only backend endpoint');
-    expect(viewOf(state).firstStep).toMatchObject({ canReword: false, rewordBlocker: 'Pick the model first.' });
-    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'reword' })).rejects.toThrow('Pick the model first.');
-    expect(calls).toEqual([]);
+    let state = await open(m);
+    const step = viewOf(state).firstStep!;
+    expect(step.choice).toBe('none');
+    expect(step.choices[0]).toMatchObject({ id: 'ticket', available: false, reason: expect.stringMatching(/Jira is not configured/) });
+    expect(step.ticket.readNeeded).toBe(false);
+    await expect(act(m, state, { type: 'background', choice: 'ticket' })).rejects.toThrow(/Jira is not configured/);
+    await expect(m.startRun(REVIEW_KIND, state.id, state.revision, { type: 'read-ticket' })).rejects.toThrow(/Jira is not configured/);
+
+    state = await act(m, state, { type: 'background', choice: 'text' });
+    state = await act(m, state, { type: 'own-text', text: 'watch thread safety' });
+    expect(viewOf(state).firstStep).toMatchObject({ choice: 'text', canStart: true });
+    state = await act(m, state, { type: 'background', choice: 'none' });
+    expect(viewOf(state).firstStep).toMatchObject({ choice: 'none', canStart: true });
   });
 });
 
 describe('Start and the regular pass', () => {
-  it('runs the regular pass with the upfront question and shows the findings by severity, with the passes run and the model', async () => {
+  it('runs the regular pass with the own text and shows the findings by severity, with the passes run and the model', async () => {
     const m = manager();
     let state = await open(m);
-    state = await act(m, state, { type: 'question', text: 'does this handle retries?' });
+    state = await act(m, state, { type: 'background', choice: 'text' });
+    state = await act(m, state, { type: 'own-text', text: 'does this handle retries?' });
     state = await runAndWait(m, state, { type: 'start' });
 
     const results = viewOf(state).results!;
@@ -424,8 +480,9 @@ describe('Start and the regular pass', () => {
       [2, 'critical', 'src/f1.ts:4', 'SQL built from input'],
       [1, 'suggestion', 'src/f1.ts:2', 'Unchecked input'],
     ]);
-    expect(results).toMatchObject({ model: 'GPT Review (copilot)', passesRun: ['Regular'], requirements: 'none' });
+    expect(results).toMatchObject({ model: 'GPT Review (copilot)', passesRun: ['Regular'] });
     expect(calls.filter(c => c.kind === 'review').every(c => c.prompt.includes('does this handle retries?'))).toBe(true);
+    expect((await storedWorking(state.id)).startedWith?.background).toEqual({ kind: 'text', text: 'does this handle retries?' });
     expect(recorded.length).toBe(calls.length);
     expect(completed).toBe(1);
   });
@@ -438,6 +495,18 @@ describe('Start and the regular pass', () => {
     const state = await runAndWait(m, await open(m), { type: 'start' });
     expect(viewOf(state).results?.findings[0].markers).toEqual(['low confidence']);
   });
+
+  it('marks a finding the reviewer says goes against the background', async () => {
+    respond = async kind => kind === 'review'
+      ? [JSON.stringify({ ...JSON.parse(findingLine(1, 2, 'Expiry set to 0', 'warning')), againstGoal: true }), JSON.stringify({ additionalFilesNeeded: [] })].join('\n')
+      : defaultRespond(kind);
+    const m = manager();
+    let state = await open(m);
+    state = await act(m, state, { type: 'background', choice: 'text' });
+    state = await act(m, state, { type: 'own-text', text: 'sessions must expire after the configured TTL' });
+    state = await runAndWait(m, state, { type: 'start' });
+    expect(viewOf(state).results?.findings[0].markers).toEqual(['against goal']);
+  });
 });
 
 describe('a stored review', () => {
@@ -447,7 +516,7 @@ describe('a stored review', () => {
     const store = new SessionStore(dir);
     const stored = (await store.load(state.id))!.session;
     const working = stored.working as ReviewWorking;
-    await store.save({ ...stored, working: { ...working, explanations: { 2: { text: 'The query concatenates user input.' } } } });
+    await store.save({ ...stored, working: { ...working, threads: { 2: [{ answer: 'The query concatenates user input.' }] } } });
     return state.id;
   }
 
@@ -467,7 +536,7 @@ describe('a stored review', () => {
     state = await runAndWait(m, state, { type: 'start' });
     expect(confirms).toEqual(['Replace the stored review?']);
     expect(calls).toEqual([]);
-    expect((await new SessionStore(dir).load(id))!.session.working).toMatchObject({ explanations: { 2: { text: 'The query concatenates user input.' } } });
+    expect((await new SessionStore(dir).load(id))!.session.working).toMatchObject({ threads: { 2: [{ answer: 'The query concatenates user input.' }] } });
 
     state = await act(m, state, { type: 'back-to-review' });
     expect(viewOf(state).results?.findings).toHaveLength(2);
@@ -480,7 +549,7 @@ describe('a stored review', () => {
     state = await act(m, state, { type: 'new-review' });
     state = await runAndWait(m, state, { type: 'start' });
     const working = (await new SessionStore(dir).load(state.id))!.session.working as ReviewWorking;
-    expect(working.explanations).toEqual({});
+    expect(working.threads).toEqual({});
     expect(viewOf(state).stage).toBe('review');
   });
 
@@ -503,6 +572,31 @@ describe('a stored review', () => {
     const results = viewOf(state).results!;
     expect(results.outOfDate).toEqual({ reviewed: HEAD.slice(0, 12), head: 'fff000fff000' });
     expect(results.findings).toHaveLength(2);
+    expect(calls).toEqual([]);
+    expect(client.getPullRequestDiffCalls).toEqual([]);
+  });
+
+  it('a review stored by the earlier format, with its requirements coverage, reopens on the first step with the rebuilt notice and runs nothing', async () => {
+    const first = manager();
+    const done = await runAndWait(first, await open(first), { type: 'start' });
+    const file = path.join(dir, `${done.id}.json`);
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    stored.formatVersion = 1;
+    stored.working.review.requirements = { kind: 'ticket', key: 'PROJ-12' };
+    stored.working.review.coverage = { ticketKey: 'PROJ-12', reading: 'old', requirements: [], outOfScope: [], noClearRequirements: true, unseenFileCount: 0 };
+    fs.writeFileSync(file, JSON.stringify(stored));
+    calls = [];
+    client.getPullRequestDiffCalls = [];
+
+    const state = await open(manager());
+
+    expect(state.id).toBe(done.id);
+    expect(state.notice).toMatch(/rebuilt after an update/);
+    expect(state.running ?? []).toEqual([]);
+    const view = viewOf(state);
+    expect(view.stage).toBe('first-step');
+    expect(view.pr.label).toBe('PROJ/app#482');
+    expect(view.firstStep?.storedReview).toBe(false);
     expect(calls).toEqual([]);
     expect(client.getPullRequestDiffCalls).toEqual([]);
   });

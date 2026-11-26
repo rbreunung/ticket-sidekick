@@ -719,6 +719,17 @@ export class SessionManager {
     return this.withoutRun(reg, stored.session);
   }
 
+  /**
+   * Whether the cache holds this session in another format than the kind's: one an update left
+   * behind, which `peek` does not return and opening the board rebuilds from its recipe.
+   */
+  async storedInOtherFormat(kindName: string, id: string): Promise<boolean> {
+    const reg = this.kind(kindName);
+    if (this.entries.has(id)) return false;
+    const stored = await this.deps.store.load(id);
+    return stored !== undefined && stored.session.kind === reg.kind.kind && stored.session.formatVersion !== reg.kind.formatVersion;
+  }
+
   /** The session itself, for a tool that reads from it (review findings). */
   async read(kindName: string, id: string): Promise<Session | undefined> {
     return (await this.find(this.kind(kindName), id))?.session;

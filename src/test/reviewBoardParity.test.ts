@@ -130,7 +130,7 @@ const SKIPPED_FILES: BoardEquivalent = {
 };
 const INSTRUCTIONS: BoardEquivalent = {
   actions: ['start', 'passes'],
-  tests: [[ENGINE, 'gives the review instructions and the upfront question to every review call, the persona passes and the critic, and the ticket text only to the requirements check']],
+  tests: [[ENGINE, 'gives the review instructions and the own-text background to every review call, the persona passes and the critic']],
 };
 const PERSONAS: BoardEquivalent = {
   actions: ['pick-pass', 'passes'],
@@ -153,8 +153,12 @@ const STORED_REVIEW: BoardEquivalent = {
 const BOARD_PARITY: Record<string, BoardEquivalent> = {
   // Follow-up intents and reply words
   explain: {
-    actions: ['explain'],
-    tests: [[FINDINGS, 'explaining #3 makes one model call with its code, the pull request and the upfront question, and shows the answer; explaining again replaces it']],
+    actions: ['explain', 'follow-up'],
+    tests: [
+      [FINDINGS, 'explaining #3 makes one model call with its code, the pull request and the own-text background, and shows the answer as the first turn of its discussion'],
+      [FINDINGS, 'a follow-up on #1 appends below the first answer, the call carries both earlier messages, and the draft says the discussion changed since it was made'],
+      [FINDINGS, 'the discussion survives a restart of the board'],
+    ],
   },
   copy: {
     requests: ['copy'],
@@ -170,16 +174,13 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     tests: [[FINDINGS, 'previews each selected draft as it is, and declining the native confirmation posts nothing and keeps the drafts']],
   },
   refinement: {
-    actions: ['rewrite', 'undo-rewrite'],
-    tests: [[FINDINGS, 'a successful Rewrite uses the instruction and offers Undo, which restores the previous text until the next edit']],
-  },
-  goal: {
-    actions: ['source', 'goal', 'recheck'],
+    actions: ['rewrite', 'regenerate', 'undo-rewrite'],
     tests: [
-      [RUNS, 'switching from the ticket to a reworded goal and re-checking makes one requirements call, replaces the coverage and leaves the findings'],
-      [ENGINE, 'runs exactly one model call on the stored diff and replaces only the coverage'],
+      [FINDINGS, 'a successful Rewrite uses the instruction and offers Undo, which restores the previous text until the next edit'],
+      [FINDINGS, 'Regenerate of a draft made before a follow-up writes it from the finding and the discussion, and Undo restores the hand-edited text'],
     ],
   },
+
   'finding-not-found': {
     actions: ['explain'],
     tools: ['bitbucket_read_findings'],
@@ -189,16 +190,17 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     ],
   },
   'diff-question': {
-    tools: ['bitbucket_read_findings', 'bitbucket_getPullRequestDiff'],
+    tools: ['bitbucket_read_findings', 'bitbucket_getPullRequestDiff', 'bitbucket_read_file'],
     tests: [
       [TOOLS, 'lists every finding by severity, and leaves a finding labelled probably a false alarm out of the verdict'],
       [TOOLS, 'bitbucket_getPullRequestDiff asks for the configured context lines when the call gives none'],
+      [TOOLS, 'returns a file of the repository at the reviewed commit'],
     ],
   },
   'follow-up-failure': {
-    actions: ['explain', 'rewrite'],
+    actions: ['follow-up', 'rewrite'],
     tests: [
-      [FINDINGS, 'a failed explanation shows an error line under the finding and keeps the earlier answer'],
+      [FINDINGS, 'a failed follow-up keeps the discussion and shows an error line under the finding'],
       [FINDINGS, 'a failed Rewrite leaves the hand-edited text unchanged and shows the error under the draft'],
     ],
   },
@@ -216,7 +218,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     actions: ['open'],
     tools: ['bitbucket_open_review'],
     tests: [
-      [TOOLS, 'answers "opened" without waiting for the review: the board stops on its first step and nothing is reviewed'],
+      [TOOLS, 'answers "opened" without waiting for the review: the board stops on its first step with the background text, and nothing is reviewed'],
       [START, 'opens the review board for a pull request link, by its normalised address'],
     ],
   },
@@ -231,7 +233,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
   // Review modes
   standard: {
     actions: ['start'],
-    tests: [[BOARD, 'runs the regular pass with the upfront question and shows the findings by severity, with the passes run and the model']],
+    tests: [[BOARD, 'runs the regular pass with the own text and shows the findings by severity, with the passes run and the model']],
   },
   smart: {
     actions: ['pick-pass', 'passes'],
@@ -346,52 +348,38 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     tests: [[RUNS, 'whose batches all failed shows the failure banner and Run again, and no picker or findings']],
   },
   'upfront-question': {
-    actions: ['question', 'start'],
+    actions: ['background', 'own-text', 'start'],
     tools: ['bitbucket_open_review'],
     tests: [
-      [BOARD, 'runs the regular pass with the upfront question and shows the findings by severity, with the passes run and the model'],
+      [BOARD, 'runs the regular pass with the own text and shows the findings by severity, with the passes run and the model'],
       ...INSTRUCTIONS.tests,
-      [TOOLS, 'answers "opened" without waiting for the review: the board stops on its first step and nothing is reviewed'],
+      [TOOLS, 'answers "opened" without waiting for the review: the board stops on its first step with the background text, and nothing is reviewed'],
     ],
   },
   'ticket-choice': {
-    actions: ['source', 'ticket-key'],
+    actions: ['background', 'ticket-key'],
     tests: [
-      [BOARD, 'preselects the ticket when Jira is configured and the PR title has a key'],
+      [BOARD, 'preselects the ticket when Jira is configured and the PR title has a key, and reads nothing until the read is asked for'],
       [BOARD, 'preselects the ticket the request names over the one in the title'],
-      [BOARD, 'preselects none when no key is named, and with Jira not configured the ticket is unavailable with its reason'],
-      [BOARD, 'with none picked, reads no ticket and shows no coverage'],
+      [BOARD, 'with Jira not configured, the ticket choice shows the setup reason, and own text and none still work'],
     ],
   },
   'ticket-read': {
-    actions: ['start', 'recheck'],
+    actions: ['read-ticket', 'ticket-text'],
     tests: [
-      [RUNS, 'a ticket that cannot be read: the findings stand, the coverage position names the failed read, and Re-check runs only the check'],
-      ['ticketRead.test.ts', 'turns a read that never settles into a failure the review can continue from'],
-      ['requirementsSource.test.ts', 'caps many long comments within the total budget, keeps the newest, and says how many older ones were left out'],
+      [BOARD, 'reading the ticket fills the box with its summary, description and newest comments'],
+      [BOARD, 'a read that Jira answers with 404 shows the reason in the box, and Start stays available'],
+      [BOARD, 'Start with a ticket that could not be read runs with no background, and says why'],
     ],
   },
-  'requirements-call': {
-    actions: ['start', 'recheck'],
-    tests: [
-      [ENGINE, 'with a ticket reads it and checks the whole diff against it after the findings'],
-      ...INSTRUCTIONS.tests,
-      ['requirementsPass.test.ts', 'makes one second call with the files the model asked for, and no third'],
-      [RUNS, 'a check whose model reply is unreadable says it failed and offers Re-check'],
-    ],
-  },
-  'coverage-block': {
-    actions: ['start'],
-    tests: [
-      [BOARD, 'reads the ticket and shows the coverage when the ticket is the source'],
-      [PAGE, 'shows crafted finding and coverage text as plain text: no HTML or link becomes an element'],
-    ],
-  },
+
+
+
   'token-meter': {
-    actions: ['start', 'explain', 'rewrite'],
+    actions: ['start', 'explain', 'follow-up', 'regenerate', 'rewrite'],
     tests: [
-      [BOARD, 'runs the regular pass with the upfront question and shows the findings by severity, with the passes run and the model'],
-      [FINDINGS, 'Explain and Rewrite each count toward the monthly per-model counters, and Post makes no model call'],
+      [BOARD, 'runs the regular pass with the own text and shows the findings by severity, with the passes run and the model'],
+      [FINDINGS, 'Explain, a follow-up, Regenerate and Rewrite each count toward the monthly per-model counters, and Post makes no model call'],
       ['tokenMeter.test.ts', 'meters a frozen model and counts a frozen reply'],
     ],
   },
@@ -408,10 +396,10 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
   },
   'review-completed': {
     actions: ['start'],
-    tests: [[BOARD, 'runs the regular pass with the upfront question and shows the findings by severity, with the passes run and the model']],
+    tests: [[BOARD, 'runs the regular pass with the own text and shows the findings by severity, with the passes run and the model']],
   },
   'diagnostic-timeline': {
-    actions: ['start', 'passes', 'recheck'],
+    actions: ['start', 'passes'],
     tests: [
       [ENGINE, 'opens with the configuration and the model in use, then logs one call line per model call naming its pass and batch'],
       [ENGINE, 'after a transient failure logs the failed call and the identical retry, and after one that is not transient says it does not retry'],
@@ -436,7 +424,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
       [RUNS, 'lists the batch that failed with its file, the finding outside the pull request and the findings the critic removed'],
       [RUNS, 'names the files left out by the exclude patterns'],
       [ENGINE, 'names files that failed after retrying only for a transient error'],
-      [PAGE, 'lists what the passes did not review and the findings they dropped under the banners, as text'],
+      [PAGE, 'lists what the passes did not review and the findings they dropped in the band, as text'],
       [TOOLS, 'names in the summary what the review did not review and the findings it dropped'],
     ],
   },
@@ -444,18 +432,10 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
     actions: ['start'],
     tests: [
       [RUNS, 'shows its description, recommendation, line with the related lines, provenance, confidence and source'],
-      [PAGE, 'shows each finding\'s line, provenance, confidence and source, its description and its recommendation, as text'],
+      [PAGE, 'shows the finding\'s line, provenance, confidence and source, its description and recommendation, as text'],
     ],
   },
-  'title-key-alternative': {
-    actions: ['ticket-key', 'recheck'],
-    tests: [
-      [RUNS, 'names the title\'s key on the failure line, offers it on the first step and the results, and Re-check reads it after the switch'],
-      [RUNS, 'offers nothing when the title names the same key, or no key'],
-      [PAGE, 'on the results, offers the key the pull request title names when the ticket in use was not found, and Use sends it as the ticket key'],
-      [PAGE, 'on the first step, offers the title\'s key the same way, and offers nothing without one'],
-    ],
-  },
+
 };
 
 /** Code with its comments removed. */

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { BitbucketApiClient, BitbucketApiError, summarizeDcDiffShape } from '../bitbucket/BitbucketApiClient';
+import { NotAFileError } from '../bitbucket/IBitbucketClient';
 
 function errorFetch(status: number): ReturnType<typeof vi.fn> {
   return vi.fn().mockResolvedValue({
@@ -100,6 +101,26 @@ describe('BitbucketApiClient.getFileContent — URL encoding (#4)', () => {
     const [url] = f.mock.calls[0] as [string];
     expect(url).toContain('/src/abc123/src/my%20dir/a%20file.ts');
     expect(url).not.toContain('a file.ts'); // no raw space
+  });
+
+  it('says a Data Center folder path is not a file instead of failing on the missing lines', async () => {
+    vi.stubGlobal('fetch', jsonFetch({ path: { toString: 'src' }, children: { values: [{ path: { toString: 'a.ts' }, type: 'FILE' }] } }));
+    const client = new BitbucketApiClient(DC_CONFIG);
+    const err = await client.getFileContent('PROJ', 'repo', 'src', 'abc123').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotAFileError);
+  });
+
+  it('says a Cloud folder path is not a file instead of returning its listing as the file', async () => {
+    vi.stubGlobal('fetch', textFetch(JSON.stringify({ pagelen: 10, values: [{ type: 'commit_file', path: 'src/a.ts' }, { type: 'commit_directory', path: 'src/b' }] })));
+    const client = new BitbucketApiClient(CLOUD_CONFIG);
+    const err = await client.getFileContent('ws', 'repo', 'src', 'abc123').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotAFileError);
+  });
+
+  it('returns a Cloud JSON file that is not a folder listing as it is', async () => {
+    vi.stubGlobal('fetch', textFetch('{"values": [1, 2]}'));
+    const client = new BitbucketApiClient(CLOUD_CONFIG);
+    expect(await client.getFileContent('ws', 'repo', 'config.json', 'abc123')).toBe('{"values": [1, 2]}');
   });
 });
 

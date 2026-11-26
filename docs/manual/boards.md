@@ -9,7 +9,7 @@ A **board** is a page Ticket Sidekick opens in its own editor tab: a large table
 | Cleanup (a ticket list loaded from a cleanup rule) | "run the cleanup Close released bugs" | `/ts-jira cleanup <rule> [in VERSION]` | `Ticket Sidekick: Run a cleanup rule` |
 | Stored sessions | "show the stored sessions" | `/ts-jira sessions` | `Ticket Sidekick: Open stored sessions` |
 | Import (Veracode or OSS report) | "create tickets from this Veracode report", with the file's path or the file dragged into the chat | `/ts-jira create from <veracode or waltz> [PATH]` (or `/ts-jira import <kind>`) | `Ticket Sidekick: Open Jira Import Board` |
-| Pull request review | "review this pull request", with the link | `/ts-bitbucket review <link> [question]` | `Ticket Sidekick: Review a pull request` |
+| Pull request review | "review this pull request", with the link | `/ts-bitbucket review <link> [PROJ-123] [text]` | `Ticket Sidekick: Review a pull request` |
 
 ## What you need
 
@@ -156,14 +156,15 @@ When no tab has work left, the board says there is nothing left to do and offers
 
 ## Pull request review
 
-The review board reviews one Bitbucket pull request. It needs Bitbucket set up ([README](../../README.md#bitbucket-setup)); Jira only when you check the pull request against a ticket.
+The review board reviews one Bitbucket pull request. It needs Bitbucket set up ([README](../../README.md#bitbucket-setup)); Jira only when a ticket is the background for the reviewer.
 
-- **First step.** The board always stops here: the review model, the requirements source (a Jira ticket, a goal you type and **Reword**, or none) and an optional question. No model call runs before **Start**, except a **Reword** you press.
-- **Regular pass, then your choice.** **Start** runs the regular pass with live steps and **Stop**. The board then suggests extra passes; keep the findings, run the suggestion, or pick any of Security, Performance, Reliability, Maintainability and the Critic under **Passes to run**, now or later.
-- **Findings.** Each finding has **Explain**, a draft comment you edit with **Rewrite** and **Undo**, and a checkbox for **Post** and **Copy**. **Post** writes the selected drafts to Bitbucket after the VS Code confirmation; **Copy … for Teams** and **Copy … as Markdown** put them on the clipboard.
+- **First step.** The board always stops here: the review model and one background for the reviewer: a Jira ticket, read into a box you can trim, your own text, or none. No model call runs before **Start**.
+- **Summary band.** Above the findings, a band follows the review: the progress by batch with **Stop** while a pass runs, then the counts, the next passes to run with **Run selected** and **Not now**, the background, what was not reviewed and the tokens. It folds to one line once you open a finding; **More passes** opens it again.
+- **Regular pass, then your choice.** **Start** runs the regular pass; findings appear in the list as each batch finishes. Keep the findings, run the suggested extra passes, or pick any of Security, Performance, Reliability, Maintainability and the Critic, now or later. The picked persona passes run at the same time and the critic last.
+- **Findings.** The list is on the left and the opened finding on the right; on a narrow tab the finding opens over the list. A finding shows its code, a discussion that starts with **Explain** and takes follow-up questions, **Discuss in chat** for Copilot Chat, and a draft comment with **Preview**, **Rewrite**, **Regenerate** and **Undo**. The footer under the list has **Select all**, **Post** (writes the selected drafts to Bitbucket after the VS Code confirmation), **Copy for Teams** and **Copy as Markdown**.
 - **Out of date.** A new commit on the pull request never starts a review by itself; the board says the review is out of date and **Run again** reviews it at the new commit.
 
-Copilot can read a finished review with `bitbucket_read_findings`. See [Pull Request Review](bitbucket-pr-review.md) for the whole review.
+Copilot can read a finished review with `bitbucket_read_findings` and a file at the reviewed commit with `bitbucket_read_file`. See [Pull Request Review](bitbucket-pr-review.md) for the whole review.
 
 ## How a board keeps its data
 
@@ -178,7 +179,7 @@ Every board shows a **session**: the data it read and what you set on the board.
 
 ## Stored sessions
 
-Sessions are kept in VS Code's storage for the workspace, outside your repository. They hold what the board shows: for the security report the keys, summaries and Due Dates of open vulnerabilities, for a ticket list its rows, your selection and the chosen change, for an import the report's rows, the matched tickets, your choices and a running ticket merge, for a pull request review the reviewed diff, the findings, explanations, drafts and coverage. They never hold credentials.
+Sessions are kept in VS Code's storage for the workspace, outside your repository. They hold what the board shows: for the security report the keys, summaries and Due Dates of open vulnerabilities, for a ticket list its rows, your selection and the chosen change, for an import the report's rows, the matched tickets, your choices and a running ticket merge, for a pull request review the reviewed diff, the background, the findings, their discussions and the drafts. They never hold credentials.
 
 - `/ts-jira sessions` opens a board listing every stored session with its source, when its data was read, when it was last used and its size, with **Reopen**, **Delete** and **Delete all**.
 - A session not used for `ticketSidekick.sessions.retentionDays` days (default 14) is deleted.

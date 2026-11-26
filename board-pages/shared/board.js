@@ -99,6 +99,46 @@ export function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * Where the developer was in the elements with ids under `root`: how far each scrolled box was
+ * scrolled, and the caret or text selection in the field with the focus. A repaint replaces every
+ * element, so without this a live list would jump to the top on each progress tick.
+ */
+function keptPlaces(root, active) {
+  const places = [];
+  const visit = el => {
+    for (const child of el.children ?? []) {
+      if (child.id) {
+        const top = child.scrollTop ?? 0;
+        const left = child.scrollLeft ?? 0;
+        const caret = child === active && typeof child.selectionStart === 'number'
+          ? { start: child.selectionStart, end: child.selectionEnd, direction: child.selectionDirection } : undefined;
+        if (top > 0 || left > 0 || caret) places.push({ id: child.id, top, left, caret });
+      }
+      visit(child);
+    }
+  };
+  visit(root);
+  return places;
+}
+
+function restorePlaces(places) {
+  for (const place of places) {
+    const el = document.getElementById(place.id);
+    if (!el) continue;
+    if (place.top > 0) el.scrollTop = place.top;
+    if (place.left > 0) el.scrollLeft = place.left;
+    if (place.caret && el === document.activeElement) {
+      try {
+        if (typeof el.setSelectionRange === 'function') el.setSelectionRange(place.caret.start, place.caret.end, place.caret.direction ?? 'none');
+        else { el.selectionStart = place.caret.start; el.selectionEnd = place.caret.end; }
+      } catch {
+        // A field whose type has no selection keeps the browser's own.
+      }
+    }
+  }
+}
+
 /** A request to the extension about this tab's board; throws an Error carrying the extension's short message. */
 export function api(op, body) {
   return new Promise((resolve, reject) => {
@@ -311,21 +351,36 @@ export function startBoard({ root, render, loading }) {
   document.addEventListener('pointercancel', released, true);
   window.addEventListener('blur', released);
 
+  // Text the developer selected on the board (to copy it) would go with the elements it is in, so
+  // drawing waits while a selection is open too, until it closes or five seconds at most.
+  const selectingText = () => {
+    // A selection inside a text box is the box's own, and the redraw keeps its caret.
+    if (/^(INPUT|TEXTAREA|VSCODE-TEXTAREA|VSCODE-TEXTFIELD)$/.test(document.activeElement?.tagName ?? '')) return false;
+    const selection = document.getSelection?.();
+    return !!selection && !selection.isCollapsed && selection.rangeCount > 0 && root.contains(selection.anchorNode);
+  };
+  document.addEventListener('selectionchange', () => {
+    if (paintWaiting && !pointerHeld && !selectingText()) setTimeout(paintNow, 0);
+  });
+
   function paint() {
-    if (!pointerHeld) {
+    const selecting = selectingText();
+    if (!pointerHeld && !selecting) {
       paintNow();
       return;
     }
     if (paintWaiting) return;
-    paintWaiting = setTimeout(() => { pointerHeld = false; paintNow(); }, 1000);
+    paintWaiting = setTimeout(() => { pointerHeld = false; paintNow(); }, selecting ? 5000 : 1000);
   }
 
   function paintNow() {
     if (paintWaiting) clearTimeout(paintWaiting);
     paintWaiting = undefined;
     const focusId = document.activeElement?.id;
+    const kept = keptPlaces(root, document.activeElement);
     const applying = state?.applying;
-    const pass = passRun();
+    // A board whose view says it shows its own run line and Stop gets neither in the header.
+    const pass = state?.view?.ownRunLine ? undefined : passRun();
     const header = h('header', {},
       h('h1', {}, state?.title ?? rootElement.dataset.title ?? ''),
       state ? h('p', { class: 'muted', role: 'status' },
@@ -347,6 +402,7 @@ export function startBoard({ root, render, loading }) {
       : state && !stopped && loading ? loading(state) : null;
     root.replaceChildren(header, ...banners(), content ?? '');
     if (focusId) document.getElementById(focusId)?.focus();
+    restorePlaces(kept);
   }
 
   async function load(tick) {

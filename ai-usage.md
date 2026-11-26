@@ -1,462 +1,109 @@
 # AI Usage in Ticket Sidekick
 
-This document describes every place the extension invokes an AI language model — what data goes in, how the prompt is constructed and grounded, and what comes back.
+This document describes every place the extension invokes an AI language model: what data goes in, how the prompt is built and what comes back. It describes the current design (tools, skills and boards). The chat participants `@jira` and `@bitbucket`, which used to own most model calls (intent parsing, comment synthesis, content generation, finding matching), were removed on 2026-11-16 and 2026-11-23; their calls are gone.
 
 ---
 
-## Part 1 — User-facing overview
+## Part 1: User-facing overview
 
-### What model is used
+### Who calls the model
 
-Ticket Sidekick uses whichever model the user has selected in the VS Code GitHub Copilot Chat panel. There is no hardcoded model, no Anthropic or OpenAI API key, and no data sent directly to a third-party AI provider. All requests flow through the VS Code Language Model API and the GitHub Copilot backend.
+There are two kinds of model use, and they differ in who picks the model and who makes the call.
 
-### `@jira` — when AI fires
+| Kind | Who calls the model | Which model | Examples |
+| --- | --- | --- | --- |
+| **Copilot's agent** | GitHub Copilot Chat, in your chat | The model you picked in the Copilot Chat panel | Reading a ticket through a tool, writing a brief, finding spelling errors, drafting a ticket from a template, choosing which tool to call |
+| **The extension's boards** | The extension itself, outside any chat request | The model a setting names (`ticketSidekick.bitbucket.reviewModel`, `ticketSidekick.email.checkModel`) | The pull request review, the discussion of a finding, Regenerate, Rewrite, the email boilerplate check |
 
-| Trigger | What the AI does | Data sent to the model |
+There is no hardcoded model, no Anthropic or OpenAI API key and no data sent to a third-party AI provider. Every request flows through the VS Code Language Model API and the GitHub Copilot backend.
+
+### Copilot's agent (Jira and Bitbucket tools, `/ts-` skills)
+
+The extension makes **no model call of its own** for single-ticket Jira work. Its tools (`jira_view_ticket`, `jira_create_ticket`, `jira_add_comment` and the rest) return data or write what the agent passes them; the agent, on your chat's model, does the reading, summarizing and drafting. What goes to the model is whatever a tool returns into the chat: ticket fields, description, comments and, for `bitbucket_getPullRequestDiff`, the diff.
+
+| Skill | What the agent does with the model | Where the text comes from |
 | --- | --- | --- |
-| Every `@jira` message | Parses your command into a structured intent (operation, ticket key, field values, etc.) | Your prompt text |
-| `@jira show <ticket>` | Summarizes up to 20 comments into numbered one-liners | Comment bodies, authors, dates |
-| `@jira summarize <ticket>` | Writes a prose paragraph overview of the ticket | Description text, comment bodies |
-| `@jira get comments` / `what do comments say?` | Synthesizes comments; filters by topic if one is named | Comment bodies, authors, dates |
-| `@jira write a comment…` / `update the description…` | Drafts content; shows a preview for your approval | Your instruction; optionally conversation history and ticket context |
-| After a content preview — refinement reply | Rewrites the draft based on your feedback | Previous draft, your feedback, original context |
-| `@jira create` + template with `descriptionSections` | Detects which template sections your description already covers | Your description text, section names |
+| `/ts-jira-create` (also started by the agent for a new ticket) | Drafts the ticket from a template, asks for missing fields, shows the draft before `jira_create_ticket` writes | Your request, the template, the project's fields |
+| `/ts-jira-brief` | Writes a developer brief of one ticket | Description, comments and relevant attachments of the ticket |
+| `/ts-jira-spell-check` | Proposes corrections to a description; `jira_correct_description` applies only the corrections you approve | The ticket description |
+| `/ts-jira-template` | Builds a template from a ticket; `jira_create_template` saves it under the next free number | An existing ticket's fields and description |
+| `/ts-jira`, `/ts-bitbucket` | Run the command you type through the matching tools | The command and what the tools return |
 
-AI does **not** write to Jira without your explicit confirmation. Content generation always shows a preview first.
+A tool that writes shows a confirmation with every value before it runs, so the agent never writes to Jira or Bitbucket on its own.
 
-### `@bitbucket` — when AI fires
+### The extension's boards
 
-| Trigger | What the AI does | Data sent to the model |
-| --- | --- | --- |
-| `@bitbucket <PR URL>` — per diff batch | Reviews changed files, returns structured findings | PR metadata (title, author, branch), unified diff for the batch |
-| Same, second pass (if needed) | Re-reviews with full file content added | Diff + full source files requested in first pass |
-| Follow-up without a finding number | Matches your question to the most relevant finding | Your question, all finding titles and severities |
-| Follow-up referencing a specific finding | Answers your question about that finding | Finding detail (file, line, severity, description, recommendation), your question |
+A board calls the model for these tasks, and only after you started the board's step:
+
+| Board | Task | What the model gets | Setting |
+| --- | --- | --- | --- |
+| Review | The regular pass: review each batch of changed files | PR title, author, branch and description, the unified diff of the batch, context files read at the reviewed commit, `ticketSidekick.bitbucket.reviewInstructions`, the background (a Jira ticket's text as you left it in the box, as data, or your own text, as instructions) | `reviewModel` |
+| Review | Persona passes (security, performance, reliability, maintainability), the critic | The same diff batches and the background; a persona pass never gets another pass's findings, the critic gets the findings it checks. The picked persona passes run at the same time (up to four requests at once), the critic after them | `reviewModel` |
+| Review | Discussion of a finding (Explain and each follow-up), Regenerate a draft comment | The finding with its code, the PR title and description, the background and the discussion so far (the first answer and the newest turns that fit); Regenerate writes the draft from the finding and the whole discussion | `reviewModel` |
+| Review | Rewrite a draft comment | The draft and your instruction | `reviewModel` |
+| Import | Email boilerplate check, only after you consent | The converted Markdown body of one email, to find signature and disclaimer blocks | `ticketSidekick.email.checkModel`, else `reviewModel` |
+| Import | The model check after a pick (start screen) | The fixed prompt `Reply with the single word: ready`; no ticket, email or PR data | the model you picked |
+
+A board never calls a model before you picked one: the review board's first step and the import start screen ask for the model and save the pick when the setting is empty or the model is no longer available. Every board model call counts toward the monthly token counters (`bitbucket_token_usage`, `/ts-bitbucket usage`).
 
 ### Privacy and data handling
 
-Every LLM call sends only the data described in the tables above — ticket fields, comment bodies, diff content, conversation history. No credentials, no base URLs, and no personal information beyond what is already in the Jira ticket or Bitbucket PR. Sensitive values (base URLs, tokens) are redacted from error messages displayed in chat via `redactUrls()`.
+Every model call sends only the data listed above. No credentials, no base URLs and no personal information beyond what is already in the Jira ticket, email or pull request. Diagnostic log lines are redacted by `logRedaction.ts` and never contain ticket or diff text; the content-free shape of a Data Center diff response is the only diff-related line logged.
 
 ---
 
-## Part 2 — Use case reference
+## Part 2: Use case reference (boards)
 
-### Quick reference
+The prompts, batching, anchor verification, retries and the critic are described in full in [`docs/review-process.md`](docs/review-process.md); this part says only where each call lives.
 
-| # | Use case | Function | File |
-| --- | --- | --- | --- |---|
-| 1 | Intent parsing | `parseIntent` | `src/participant/jira/llmHelpers.ts` |
-| 2 | Comment synthesis — summarize | `synthesizeComments` | `src/participant/jira/llmHelpers.ts` |
-| 3 | Comment synthesis — topic filter | `synthesizeComments` | `src/participant/jira/llmHelpers.ts` |
-| 4 | Content generation | `generateContent` | `src/participant/jira/llmHelpers.ts` |
-| 5 | Content refinement | `generateContent` (re-invocation) | `src/participant/jira/contentHandler.ts` |
-| 6 | Ticket summarization | `generateDescriptionAndCommentsSummary` | `src/participant/jira/llmHelpers.ts` |
-| 7 | Template section coverage | `checkSectionCoverage` | `src/participant/jira/createHandler.ts` |
-| 8 | Spell check (removed) | — | — |
-| 9 | PR code review (two-pass) | `PrReviewService.buildPrompt` + `callLLMWithProgress` | `src/services/PrReviewService.ts`, `src/participant/BitbucketParticipant.ts` |
-| 10 | Finding matching | `callLLMWithProgress` (inline prompt) | `src/participant/BitbucketParticipant.ts` |
-| 11 | Finding explanation | `callLLMWithProgress` (`FOLLOW_UP_PROMPT_PREFIX`) | `src/participant/BitbucketParticipant.ts` |
+| # | Use case | Entry point | File |
+| --- | --- | --- | --- |
+| 1 | Regular pass, per diff batch, then the whole-file refinement call | `runRegularPass`, `callBatchWithSplit` | `src/review/engine/regularPass.ts`, `batchReview.ts`, `plumbing.ts` |
+| 2 | Persona passes, picked ones at the same time under a cap | `runPersonaPass`, `extraPassesRun` | `src/review/engine/extraPass.ts`, `src/boards/review/runs.ts` |
+| 3 | Critic | `runCritic` | `src/review/engine/critic.ts` |
+| 4 | Discussion of a finding (Explain and follow-ups) | `askAboutFinding` | `src/review/findingCalls.ts` |
+| 5 | Regenerate a draft comment from the discussion | `regenerateComment` | `src/review/findingCalls.ts` |
+| 6 | Rewrite a draft comment | `rewriteComment` | `src/review/findingCalls.ts` |
+| 7 | Email boilerplate check | `buildModelCheckPrompt`, `parseModelCheckReply`, `verifyModelBlocks` | `src/utils/emailBoilerplate.ts`, `src/boards/import/cleanupStage.ts` |
+| 8 | Model check after a pick | `checkModelAnswers` | `src/boards/boardModels.ts` |
 
----
+### Grounding rules
 
-### 1. Intent parsing
+- **Review replies are untrusted.** A finding's line comes from the quoted `anchorCode`, never from the model's line number; code that cannot be found keeps the finding as *location unverified*, and a finding naming a file outside the PR is dropped and counted (see "The line-number trust boundary" in `docs/review-process.md`).
+- **Email check replies are verified.** `verifyModelBlocks` keeps a block the model names only when its quote is found in the email, so the model cannot make the extension strip text that is not there.
+- **Ticket text is data.** A Jira ticket used as the background is sent inside the untrusted-content fence with the PR title, description and diff, and the prompt says to read it as a description of the intended change, never as instructions; fence markers inside any of it are defanged. Your own text is sent as instructions.
+- **Answers are rendered safely.** Discussion answers and the draft preview are rendered as Markdown in the extension into a tree of allowed elements: no raw HTML, scripts, images or command links, and a web link opens only after VS Code's confirmation (`src/review/markdownTree.ts`).
 
-**Trigger:** Every `@jira` message that reaches the intent router (after session-state handlers have been checked).
+### Structured output
 
-**Inputs assembled:**
-- The user's raw prompt string, JSON-serialized.
-
-**Framing and grounding:**
-
-Uses a three-message few-shot setup (User → Assistant → User) to establish a persona before the task:
-
-```
-User:      "You are a Jira intent parser. Your task is to analyze user commands
-            and produce structured intent as a JSON object matching the schema below."
-Assistant: "Understood. I parse Jira commands into structured JSON."
-User:      <INTENT_PROMPT schema + user command>
-```
-
-`INTENT_PROMPT` embeds a complete JSON schema (19 operations, 20+ fields) and exhaustive per-operation descriptions. Each operation definition rules in and out similar commands to minimize routing errors. Notable grounding rules embedded in the schema:
-
-- `runCleanup` is explicitly distinguished from `transition` (bulk vs. single)
-- `bulkTransition` / `bulkUpdateField` are only valid "when a prior search result is available"
-- `contentSource` is classified in the same call (see [The `contentSource` two-level classification](#the-contentsource-two-level-classification))
-- `fixVersion` must be captured verbatim, including spaces inside quotes
-
-**Output and parsing:**
-The model is instructed to return **only** a JSON object with no markdown or explanation. The raw response is searched with `/\{[\s\S]*\}/` to extract the first JSON object, which is then `JSON.parse`d into a `ParsedIntent`. If no JSON object is found, the error message includes the first 200 characters of the raw response.
-
-**Known limitations:**
-Ambiguous commands can be misrouted — for example, "close PROJ-123" may parse as `runCleanup` (bulk) instead of `transition` (single) if the ticket key is not clearly present. The schema descriptions attempt to minimize this but cannot eliminate it. The fallback is a follow-up question to the user.
+Review replies are JSON and parsed tolerantly (`parseReviewReply`: NDJSON, pretty-printed, arrays, wrappers, cut-off replies); the critic's `keep` list has its own parser. A reply with no usable JSON throws `UnparseableReplyError` and is retried like a provider error. The discussion, Regenerate and Rewrite return free text (Markdown).
 
 ---
 
-### 2. Comment synthesis — summarize mode
+## Part 3: Cross-cutting mechanics
 
-**Trigger:** `getTicket` (comments section), `getComments` (no query), `showTicket`, and "load all" confirmation in the more-comments session.
+### Calling a model outside a chat request
 
-**Inputs assembled:**
-- All comment bodies serialized by `serializeCommentsForLLM`: each comment formatted as `**Author** (YYYY-MM-DD):\n<formatted body>`, joined by `\n\n---\n\n`.
-- `query` is `null` in this mode.
+A board has no `request.model` to use, so it asks VS Code for the models you have (`vscode.lm`) and calls the one a setting names. `BoardModels` (`src/boards/boardModels.ts`, vscode-free) lists the models, sends a single prompt and hands out a stoppable handle; `registerBoards.ts` binds it to `vscode.lm`. Stop on a board aborts the request through an `AbortSignal`, and the text sent before the stop is not kept as a partial reply. Calls are made with `model.sendRequest(messages, options, token)`; responses are consumed with `for await (const chunk of response.text)`.
 
-**Framing and grounding:**
+### Retries and splitting
 
-Three-message few-shot:
+`src/utils/lmRetry.ts` makes up to three tries per call. A transient failure (`isTransientLmError`) is retried; for a batch the third try splits the batch in half (`withEasierRetry`), for a single prompt it repeats the call (`withLmRetry`). A stopped request is rethrown at once. A batch that still fails is reported with the others kept. `refusalOf` tells Copilot's refusals apart: a rate-limited batch of passes running together makes the rest run one after another and the refused batch run once more after a wait; a blocked or quota refusal stops the run at once. See "Resilience & debugging" in `docs/review-process.md`.
 
-```
-User:      "You are a Jira comment analyst. Your task is to produce concise
-            numbered summaries of each comment."
-Assistant: "Understood. I produce concise numbered summaries of each comment."
-User:      "Comments:\n\n<serialized comments>\n\n
-            Summarise each comment in one sentence. Number each one.
-            Format: N. **Author** (date): one-sentence summary.
-            Produce only the final content, no preamble.
-            Base your response ONLY on the comments provided above.
-            Do not add information not present in the source."
-```
+### Token budget and metering
 
-The grounding rule at the end ("Base your response ONLY on…") is explicit hallucination prevention.
-
-**Output and parsing:**
-Plain text. Streamed directly into chat with no parsing — the numbered list format is enforced by the prompt.
-
-**Known limitations:**
-Comment quality degrades with very long individual comments because the model summarizes them into one sentence regardless of length. The format instruction (N. **Author** (date): …) may be violated by some models.
-
----
-
-### 3. Comment synthesis — topic filter mode
-
-**Trigger:** `getComments` when `commentQuery` is non-null (user asked "what do comments say about X?").
-
-**Inputs assembled:**
-- Same serialized comment blocks as summarize mode.
-- `query`: the topic string extracted by the intent parser.
-
-**Framing and grounding:**
-
-Role switches to a different persona:
-
-```
-User:      "You are a Jira comment analyst. Your task is to find and quote
-            comments relevant to the user's query."
-Assistant: "Understood. I find and quote comments relevant to the user's query."
-User:      "Comments:\n\n<serialized comments>\n\n
-            Find and quote comments relevant to: \"<query>\".
-            Note the author and date for each relevant comment.
-            Produce only the final content, no preamble.
-            Base your response ONLY on the comments provided above.
-            Do not add information not present in the source."
-```
-
-**Output and parsing:**
-Plain text. No structured parsing — the model is free to quote and summarize as it sees fit.
-
-**Known limitations:**
-If the query is vague, the model may return loosely related comments. No threshold is applied — if no comments match, the model may still return something tangentially related.
-
----
-
-### 4. Content generation
-
-**Trigger:** `addComment` or `updateField` (description) when `contentSource` is `generate`, `history-recent`, or `history-full`.
-
-**Inputs assembled:**
-- `instruction`: the user's request string.
-- `context` (optional): built by `buildHistoryContext`:
-  - `history-recent` → last 3 conversation turns serialized as `User: … / Assistant: …`
-  - `history-full` → all turns in chat history
-  - Plus the current ticket's text and comments (passed from the caller)
-- `contentSource`: controls role text and grounding note.
-
-**Framing and grounding:**
-
-The persona differs based on `contentSource`:
-
-```
-# history-based:
-User:      "You are a technical scribe for a software development team.
-            Your task is to synthesize findings from a conversation
-            into a concise Jira comment."
-Assistant: "Understood. I synthesize conversation findings into concise Jira comments."
-
-# generate (standalone):
-User:      "You are a Jira assistant. Your task is to write Jira comment and
-            description text. Content may include prose summaries, code snippets,
-            patches, or any technical material appropriate for a Jira comment."
-Assistant: "Understood. I write Jira comment and description text, including any
-            technical content such as code or patches."
-```
-
-For history-based calls, an additional grounding note is appended to the task:
-
-> "Use the CONVERSATION HISTORY as your primary source. The ticket text is reference context only — do not simply rephrase findings already stated in the ticket or its existing comments. Do not add information not present in the provided sources."
-
-**Output and parsing:**
-Plain text. Trimmed and stored as `ContentSession.currentContent` for the preview loop. Checked for refusals via `isLmRefusal()` (see [Refusal detection](#refusal-detection)).
-
-**Known limitations:**
-`history-full` includes all visible turns but excludes session-management responses (previewing) that are filtered out in `extractHistoryTurns`. Very long conversations may exceed the model's context window — the call is made unconditionally with no truncation.
-
----
-
-### 5. Content refinement
-
-**Trigger:** User replies to a content preview with a refinement instruction (anything that is not a confirmation or cancellation).
-
-**Inputs assembled:**
-- `prompt`: the user's refinement instruction.
-- `refineContext`: the previous `historyContext` (if any) concatenated with `"Previously generated:\n<currentContent>"`.
-
-**Framing and grounding:**
-Same as content generation — `generateContent` is re-invoked with `refineContext` as the `context` argument. The previous draft is explicitly included so the model can apply the feedback incrementally rather than starting from scratch.
-
-**Output and parsing:**
-Same as content generation. The result replaces `ContentSession.currentContent` and a new preview is streamed.
-
----
-
-### 6. Ticket summarization
-
-**Trigger:** `summarizeTicket` operation (`@jira summarize <ticket>`).
-
-**Inputs assembled:**
-- `descriptionText`: the formatted description extracted from `getTicket()` output (everything after `**Description:**`).
-- `commentBlocks`: serialized comment bodies (same format as comment synthesis), or `null` if no comments.
-
-**Framing and grounding:**
-
-```
-User:      "You are a technical scribe. Your task is to write a single prose
-            paragraph summarizing a Jira ticket's description and comments."
-Assistant: "Understood. I write a single prose paragraph summarizing the
-            ticket's description and comments."
-User:      "<description block>\n\n<comment block>\n\n
-            Write a concise prose paragraph summarising the above.
-            No preamble, no headings, no bullet points.
-            Base your summary ONLY on the description and comments provided above.
-            Do not add information not present in the source."
-```
-
-The structured ticket fields (status, assignee, priority, etc.) are output directly from `getTicket()` without AI involvement. Only the description + comments go through the model.
-
-**Output and parsing:**
-Plain text. Appended to the fields header as an `**Overview:**` section.
-
----
-
-### 7. Template section coverage
-
-**Trigger:** `createTicket` when a template with `descriptionSections` is selected and the user has provided a description in their prompt.
-
-**Inputs assembled:**
-- `prompt`: the user's description text.
-- `sections`: the array of section names from the template (e.g. `["Steps to reproduce", "Expected behavior", "Actual behavior"]`).
-
-**Framing and grounding:**
-
-```
-User:      "You are a content coverage analyst. Your task is to determine which
-            template sections are addressed by the given text."
-Assistant: "Understood. I identify which sections are covered."
-User:      "Does this text address any of these sections?
-            Reply with ONLY a JSON array of section names that are clearly covered.
-            Sections: <JSON array>
-            Text: <JSON string>"
-```
-
-The instruction "clearly covered" is intentional — partial or tangential coverage should not be claimed. Both inputs are JSON-encoded to avoid injection from user text containing special characters.
-
-**Output and parsing:**
-The response is searched with `/\[[\s\S]*\]/` to extract the first JSON array. On parse failure an empty array is returned, causing all sections to be asked interactively. This is the safe fallback.
-
----
-
-### 8. Spell check (removed)
-
-`@jira spell check` and its `spellCheckValue` model call were removed on 2026-11-14. `/ts-jira-spell-check` replaces it: Copilot's own agent, on the model of your chat, reads the description through `jira_view_ticket` and proposes the corrections, and the `jira_correct_description` tool writes only the ones you approve. Ticket Sidekick itself sends nothing to a model for it. See [Jira Tools for Copilot Chats](docs/manual/copilot-tools.md).
-
----
-
-### 9. PR code review (two-pass)
-
-**Trigger:** `@bitbucket <PR URL>`.
-
-**Inputs assembled — Pass 1:**
-- `REVIEW_PROMPT_PREFIX`: a fixed system preamble (see below).
-- PR header: id, title, author, target branch, description.
-- Per-file sections: `### File: <path>\n**Diff:**\n<unified diff>`.
-- Applied to each batch produced by `buildAdaptiveChunks` (greedy packing within the token budget).
-- Optional `additionalInstructions` from the `ticketSidekick.bitbucket.reviewInstructions` setting.
-
-**Inputs assembled — Pass 2** (skipped in `quick` mode):
-- Same as Pass 1, plus `**Full content:**\n<source>` appended to each file section for files listed in `additionalFilesNeeded`.
-- A pass-2 note prepended: "This is a second-pass review. Full file contents have been provided… if a finding was speculative due to missing context and the full file shows no issue, omit it from your response."
-
-**Framing and grounding:**
-
-`REVIEW_PROMPT_PREFIX` is a hardcoded system preamble with five explicit grounding rules:
-
-1. Only report findings for files whose exact path appears in a `diff --git` header.
-2. Treat JSON fixtures and test data as data, not production logic.
-3. Only cite line numbers visible in the diff context; omit the `line` field otherwise.
-4. Only report confirmed issues — omit speculative findings.
-5. Only request real source files in `additionalFilesNeeded`; never request fixtures or inferred paths.
-
-The review categories are fixed: security vulnerabilities, best-practice violations, bugs and logic errors.
-
-The output schema is specified inline:
-
-```json
-{"findings":[{"file":"…","line":42,"severity":"critical|warning|suggestion",
-  "title":"…","description":"…","recommendation":"…","codeExample":"…"}],
-"additionalFilesNeeded":["…"]}
-```
-
-**Output and parsing:**
-`extractJsonObject` searches for the first `{…}` block in the raw response. `JSON.parse` is called on it; if it fails, the error message includes the extracted text (up to 400 chars) and the raw response head (up to 600 chars) for diagnosis. Findings are accumulated across all batches and merged before formatting.
-
-**Token budget:**
-Resolved as: `ticketSidekick.bitbucket.modelContextTokens` → `request.model.maxInputTokens` (VS Code API) → 60 000. Multiplied by `contextBudgetRatio` (default 0.7) to leave headroom for the response. Each chunk is estimated as `1500 + 50×files + ceil(diff.length / 4)` tokens.
-
-**Known limitations:**
-JSON non-compliance by the model causes a hard error surfaced to the user. The error message includes raw model output to help diagnose whether the issue is a bad diff, a model limitation, or a token overflow.
-
----
-
-### 10. Finding matching
-
-**Trigger:** Follow-up `@bitbucket` message when no finding number (`#N`) is present in the prompt.
-
-**Inputs assembled:**
-- The user's follow-up question.
-- A listing of all findings: `#<id>: [<severity>] <title> (<file>)` — one per line.
-
-**Framing and grounding:**
-
-Inline prompt (no few-shot, no system role):
-
-```
-The developer asked: "<prompt>"
-
-Available findings:
-#1: [critical] SQL injection (src/db/query.ts)
-#2: [warning] Token in localStorage (src/auth/store.ts)
-…
-
-Reply with ONLY the finding number (e.g. "2") that best matches the question,
-or "none" if no match.
-```
-
-The constraint "ONLY the finding number" minimizes parsing work and prevents the model from embedding the answer in prose.
-
-**Output and parsing:**
-`parseInt(matchRaw.trim(), 10)` — if the result is `NaN`, no match is assumed and the user is asked to reference a finding by number.
-
----
-
-### 11. Finding explanation
-
-**Trigger:** Follow-up `@bitbucket` message after a finding has been matched (either by number or via use case 10).
-
-**Inputs assembled:**
-- The selected finding: file path, line (if present), severity, title, description, recommendation.
-- The user's follow-up question.
-
-**Framing and grounding:**
-
-`FOLLOW_UP_PROMPT_PREFIX` is a fixed preamble:
-
-```
-A developer is asking a follow-up question about a specific finding from a
-code review. Answer their question directly and thoroughly. If they state an
-assumption, evaluate it. Include specific conditions under which this could be
-acceptable or needs fixing, and any concrete code changes where relevant.
-```
-
-The finding detail and the developer's question are appended verbatim. No JSON output — this is a free-form prose response.
-
-**Output and parsing:**
-Plain text streamed directly into chat. No parsing.
-
----
-
-## Part 3 — Cross-cutting mechanics
-
-### VS Code LM API
-
-All calls use `model.sendRequest(messages, {}, token)` where:
-- `messages` is an array of `vscode.LanguageModelChatMessage` objects.
-- `{}` is an empty options object (no tool definitions, no temperature overrides).
-- `token` is a `vscode.CancellationToken` that propagates chat panel cancellation.
-- Responses are consumed with `for await (const chunk of response.text)` and manually buffered into a string.
-
-The model is never selected inside the extension — it is always passed in as `request.model` from the VS Code chat participant API, so the user's active Copilot Chat model is used.
-
-### Few-shot prompting pattern
-
-Most calls use a three-message User → Assistant → User pattern rather than a system message, because the VS Code LM API does not have a distinct system role. The pattern:
-
-```
-User:      <role description — what kind of expert you are>
-Assistant: "Understood. <brief restatement of the role>"
-User:      <actual task with data>
-```
-
-This establishes persona before the task arrives, which improves instruction-following compared to embedding the role in the task message.
-
-### The `contentSource` two-level classification
-
-Intent parsing produces two orthogonal classifications in one call:
-
-1. **`operation`** — what to do (`addComment`, `updateField`, …)
-2. **`contentSource`** — how to produce the content (`literal`, `generate`, `history-recent`, `history-full`)
-
-`contentSource` encodes the user's epistemological intent: did they provide the exact text, invent something new, point at something from a few messages ago, or refer to the whole investigation? This drives fundamentally different downstream behavior:
-
-- `literal` → skip AI generation entirely, post verbatim
-- `generate` → call `generateContent` with standalone persona
-- `history-recent` → serialize last 3 turns, call `generateContent` with scribe persona
-- `history-full` → serialize all turns, call `generateContent` with scribe persona
-
-The schema description for `contentSource` contains a deliberate tie-breaking rule: "when in doubt between `generate` and `history-full`, prefer `history-full`" — this avoids creative invention when the user likely means to document prior work.
-
-A complementary regex shortcut, `isPointerPrompt`, detects unambiguous pointer phrases ("post it", "copy it", "add this as a comment") before the intent parser runs. When it fires, `contentSource` is forced to `history-recent` without an LLM call, and the last assistant message is posted verbatim. This covers the most common "just post what you wrote" case at zero latency.
-
-### Token budget management (Bitbucket)
-
-The review token budget is resolved in priority order:
-
-1. `ticketSidekick.bitbucket.modelContextTokens` (user setting, hard override)
-2. `request.model.maxInputTokens` (VS Code LM API, model-reported)
-3. 60 000 (safe fallback for models that do not report their context size)
-
-This is multiplied by `contextBudgetRatio` (default 0.7) to reserve space for the model's response. The estimate per diff chunk (`1500 + 50×files + ceil(diff.length / 4)`) approximates token count without tokenizing — the 4-bytes-per-token ratio is a conservative heuristic for mixed-language code.
-
-### JSON robustness
-
-Three calls require structured JSON output: intent parsing (`ParsedIntent`), section coverage (`string[]`), and PR review (`{findings, additionalFilesNeeded}`). All three use regex extraction before `JSON.parse` to tolerate models that wrap their output in markdown fences or add preamble text:
-
-- `ParsedIntent`: `/\{[\s\S]*\}/` — extracts first JSON object
-- Section coverage: `/\[[\s\S]*\]/` — extracts first JSON array; returns `[]` on failure
-- PR review: `extractJsonObject()` — same object extraction; throws a descriptive error on failure
-
-The safe fallback for section coverage (`[]`) causes all sections to be asked interactively — a worse user experience but not a crash. The PR review throws because there is no safe partial result.
-
-### Refusal detection
-
-Only `generateContent` checks for model refusals. The check (`isLmRefusal`) looks for common decline phrases (`"can't assist"`, `"unable to assist"`, etc.) in responses shorter than 300 characters. If a refusal is detected, the content preview step is skipped and an error is surfaced to the user. Other call sites do not perform refusal detection — intent parsing and structured outputs are expected to succeed or return a well-defined fallback.
+The review's token budget is resolved as `ticketSidekick.bitbucket.modelContextTokens`, else the model's own `maxInputTokens`, else 60 000, multiplied by `ticketSidekick.bitbucket.contextBudgetRatio` (default 0.7) and capped at 24 000 tokens per batch. `createTokenMeter` wraps the model, counts each request's input and output (falling back to `chars/4`, flagged as an estimate) and records it per month and model (`TokenUsageService`). See "Token usage" in `docs/review-process.md`.
 
 ### No prompt caching
 
-The extension does not use the VS Code LM API's prompt caching features. Each call starts from scratch. The fixed preambles (`REVIEW_PROMPT_PREFIX`, `INTENT_PROMPT`, `FOLLOW_UP_PROMPT_PREFIX`) are candidates for caching if latency becomes a concern — they are long, static, and repeated on every request.
+The extension does not use prompt caching. Each call starts from scratch. The fixed preambles of the review prompts are long, static and repeated, so they are the candidates if latency becomes a concern.
 
-### Adding a new LLM call
+### Adding a new model call
 
-1. Add a helper function in `src/participant/jira/llmHelpers.ts` (Jira) or inline in `BitbucketParticipant.ts` (Bitbucket).
-2. Use the three-message User → Assistant → User pattern to establish a role.
-3. End the task message with output format instructions and a grounding rule ("Base your response ONLY on the data provided above. Do not add information not present in the source.").
-4. If the output is JSON, use regex extraction before `JSON.parse` and define a safe fallback.
-5. Accept and forward `vscode.CancellationToken` — all async LLM calls must be cancellable.
-6. If the call is in a user-visible critical path, wrap it in `callLLMWithProgress` to show a status-bar spinner.
+1. Decide whether the model call belongs to a board or to the agent. A single-ticket task belongs to the agent: add a tool that returns the data and a skill that tells the agent what to do with it; the extension makes no call.
+2. For a board, put the prompt builder and the reply parser in a vscode-free module (`src/review/`, `src/boards/<kind>/` or `src/utils/`) and send through the board's injected `BoardModels` or model handle, never through `vscode.lm` directly.
+3. End the task with the output format and a grounding rule ("Base your response only on the data above").
+4. If the reply is JSON, parse it tolerantly, define a safe fallback or throw `UnparseableReplyError` so the call is retried.
+5. Take the stop signal (`AbortSignal`) and let the call be cancelled; wrap a call you retry in `withLmRetry` or `withEasierRetry`.
+6. Meter the call through the token meter and log it through `logDiag`/`onDiag` without content.
+7. Add the call to the tables above and, if it is a setting or consent the user sees, to the user manual.

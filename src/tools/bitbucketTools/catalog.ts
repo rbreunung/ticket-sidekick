@@ -5,6 +5,7 @@ import { getPullRequestTool } from './getPullRequest';
 import { getPullRequestDiffTool } from './getPullRequestDiff';
 import { openReviewTool } from './openReview';
 import { postCommentTool } from './postComment';
+import { readFileTool } from './readFile';
 import { readFindingsTool } from './readFindings';
 import { tokenUsageTool } from './tokenUsage';
 
@@ -20,5 +21,6 @@ export const BITBUCKET_TOOLS: readonly ToolDefinition<BitbucketToolDeps>[] = [
   postCommentTool,
   openReviewTool,
   readFindingsTool,
+  readFileTool,
   tokenUsageTool,
 ];

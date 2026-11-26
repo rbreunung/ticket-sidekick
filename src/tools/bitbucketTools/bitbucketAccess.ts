@@ -27,12 +27,17 @@ export interface BitbucketToolDeps {
    */
   recentWrites: RecentCallGuard;
   /** Opens the review board of a pull request in an editor tab; absent where boards are not available. */
-  openReview?(input: { url: string; ticketKey?: string; question?: string }): Promise<{ ok: true; title: string } | { ok: false; reason: string }>;
+  openReview?(input: { url: string; ticketKey?: string; background?: string }): Promise<{ ok: true; title: string } | { ok: false; reason: string }>;
   /**
    * The stored review session with this id, as it is: no check starts and nothing is read from
    * Bitbucket. Undefined when none is stored.
    */
   storedReview(id: string): Promise<StoredReview | undefined>;
+  /**
+   * Whether a review with this id is stored in the format of an earlier version, which the update
+   * discarded: it is not read, and opening its board starts it again. Absent: never said.
+   */
+  discardedReview?(id: string): Promise<boolean>;
   /** The monthly per-model token counters of the reviews. */
   tokenUsage(): UsageStore;
   now(): Date;

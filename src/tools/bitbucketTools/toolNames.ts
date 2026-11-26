@@ -9,3 +9,7 @@ export const OPEN_REVIEW_TOOL = 'bitbucket_open_review';
 export const READ_FINDINGS_TOOL = 'bitbucket_read_findings';
 export const CHECK_CONNECTION_TOOL = 'bitbucket_check_connection';
 export const TOKEN_USAGE_TOOL = 'bitbucket_token_usage';
+export const READ_FILE_TOOL = 'bitbucket_read_file';
+
+/** The name a chat prompt references the read-findings tool by after `#`, as package.json declares it. */
+export const READ_FINDINGS_REFERENCE = 'bitbucketReadFindings';

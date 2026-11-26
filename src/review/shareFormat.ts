@@ -3,9 +3,9 @@ import { countFindings, formatReviewForSharing, normalizeShareText, SHARE_SEVERI
 
 // The review as text to share: plain text for Teams, which shows pasted Markdown as raw characters,
 // and Markdown for places that render it, such as a Bitbucket comment or Confluence. Both are built
-// from the stored review, never from what a page sends. Finding, explanation and coverage text is
-// untrusted model output: the plain text strips Markdown from it, the Markdown escapes it, so a
-// title like "[click](https://x)" or "**urgent**" shows as the characters it is. vscode-free.
+// from the stored review, never from what a page sends. Finding and explanation text is untrusted
+// model output: the plain text strips Markdown from it, the Markdown escapes it, so a title like
+// "[click](https://x)" or "**urgent**" shows as the characters it is. vscode-free.
 
 export type ShareFormat = 'teams' | 'markdown';
 
@@ -16,8 +16,6 @@ export interface ShareInput {
   /** Finding numbers to copy; undefined copies every finding. */
   targets?: number[];
   explanations: Record<number, string>;
-  /** The requirements coverage block as plain text, when the review has one. */
-  coverageText?: string;
   confidenceThreshold: number;
 }
 
@@ -48,7 +46,7 @@ export function markdownToPlain(value: string): string {
     .join('\n');
 }
 
-/** Copy for Teams: plain text, with the explanations and the coverage block. */
+/** Copy for Teams: plain text, with the explanations. */
 export function formatShareTeams(input: ShareInput): SharedText {
   const plain = (f: ReviewFinding): ReviewFinding => ({ ...f, title: markdownToPlain(f.title), recommendation: markdownToPlain(f.recommendation) });
   const explanations: Record<number, string> = {};
@@ -63,8 +61,6 @@ export function formatShareTeams(input: ShareInput): SharedText {
   }, {
     ...(input.targets ? { targets: input.targets } : {}),
     confidenceThreshold: input.confidenceThreshold,
-    ...(input.coverageText ? { coverageText: markdownToPlain(input.coverageText) } : {}),
-    coverageWithTargets: true,
     explanations,
   });
   return { text, count: copiedCount };
@@ -109,7 +105,6 @@ export function formatShareMarkdown(input: ShareInput): SharedText {
   const parts: string[] = [
     `**PR #${input.pr.id}: ${inline(input.pr.title)}**  \n${by} · ${countLabel}  \n<${input.url.replace(/[<>\s]/g, '')}>`,
   ];
-  if (input.coverageText?.trim()) parts.push(paragraphs(input.coverageText));
   if (selected.length === 0) {
     parts.push('No issues found.');
     return { text: parts.join('\n\n'), count: 0 };

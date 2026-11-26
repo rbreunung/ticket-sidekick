@@ -14,7 +14,7 @@ This page describes how Ticket Sidekick is built once the chat participants are 
 - **Host:** a board is a webview in an editor tab the extension opens (`src/boards/boardPanels.ts`). The tab loads the page from the extension's own files and the page talks to the extension with `postMessage`. Decisions D18 and D20.
 - **Removed on 2026-11-13:** the MCP server with its lifecycle, keys, request guard and diagnostics command; the `ticketSidekick.jira.toolsFrom` setting; the local HTTP server and the `http.noProxy` requirement; the canvas program, the agent plugin and the `@github/copilot-sdk` and `@modelcontextprotocol/sdk` dependencies. Why: an organisation's Copilot policy blocked the MCP server while extension tools got through, VS Code 1.146 did not register an extension's canvas, and two routes for the same tools was a switch nobody wanted to operate.
 - **Built:** the session core, the board message handling, the security report board, the ticket list board (search with narrowing, paging, configurable columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules`, the out-of-date state), the sessions board, the import board for Veracode and Waltz reports and for emails (with the boilerplate cleanup stage and the consented model check) with its start screen (`src/boards/import/`, over the shared import engine in `src/imports/`), the PR review board with its start screen (`src/boards/review/`, over the staged review engine in `src/review/engine/`) and the Bitbucket tools in the catalog shape with `/ts-bitbucket`, and of the plan's step 1 tools R40 to R42, plus spell check (R28) and template from a ticket (R29) as `/ts-jira-spell-check` and `/ts-jira-template` with their tools.
-- **Open points:** the full list, with the requirement each belongs to and the participant flow it blocks, is in [`migration-status.md`](migration-status.md).
+- **Open points:** the code side of the migration is done. What is left is manual: the checklist runs on the managed machine, the keyboard and screen reader check and a restart with a board open. The list, with the requirement each belongs to, is in [`migration-status.md`](migration-status.md).
 - **Removed on 2026-11-14:** every Step 1 flow of `@jira`.
 - **Removed on 2026-11-15:** `@jira`'s Veracode and Waltz imports and their two Command Palette commands.
 - **Removed on 2026-11-16:** `@jira` itself, with its email import, its help screen, its sessions and the "Create Jira ticket from email (.eml)" command.
@@ -371,7 +371,7 @@ There is no `src/participant/` any more: `@jira` went on 2026-11-16 and `@bitbuc
 1. Add the service method behind the client interface, with fixture and tests, as today.
 2. Add the tool in `src/tools/jiraTools/` with `defineTool`, its name in `toolNames.ts` and its entry in `catalog.ts`. Mark it `readOnlyHint` only if it changes nothing; every other tool gets the confirmation automatically.
 3. A write tool uses the shared duplicate guard (`writeGuard.ts`).
-   Run `node scripts/sync-jira-tools.mjs`, which writes the tool into `package.json`'s `contributes.languageModelTools`; a test fails while they differ.
+   Run `node scripts/sync-tools.mjs`, which writes the tool into `package.json`'s `contributes.languageModelTools`; a test fails while they differ.
 4. Add its row to `docs/manual/copilot-tools.md` and `docs/manual/agent-mode-tools.md` and, if it has a typed form, to the `/ts-jira` or `/ts-bitbucket` skill. The guard tests fail until both exist.
 
 **A new skill**
@@ -414,7 +414,7 @@ Logged in full, with rejected alternatives, in `copilot-harness-migration.md` fr
 | D19 | Superseded by D21 (was: tools over MCP or as extension tools, chosen by a setting) | Maintainer |
 | D20 | A board page is loaded by the webview itself and talks to the extension over the webview message channel; the local server, its keys and the `http.noProxy` requirement are removed, and so is the canvas route | Maintainer |
 | D21 | The Jira tools are VS Code language model tools only; the MCP server and the `toolsFrom` setting are removed | Maintainer |
-| D22 | `@jira` and `@bitbucket` are deprecated now and documented as such; they are removed when the import and review boards exist | Maintainer |
+| D22 | `@jira` and `@bitbucket` were deprecated, then removed once the import and review boards existed: `@jira` on 2026-11-16, `@bitbucket` on 2026-11-23 | Maintainer |
 | D23 | A stored session of another format is rebuilt from its stored recipe when the kind's `revalidate` accepts it, with a notice and without the earlier choices; still never migrated (narrows D17) | Maintainer |
 | D24 | Every board saves its session after each write of an Apply, so an interrupted Apply resumes with only the rest | Maintainer |
 
@@ -422,6 +422,8 @@ Logged in full, with rejected alternatives, in `copilot-harness-migration.md` fr
 
 ## 12. Not yet observed
 
+Verified by the maintainer on 2026-11-24: Copilot choosing the tools and opening a board in a live chat with this build, the boards against real Jira Data Center data, and the organisation's Copilot policy allowing extension tools. Still open:
+
 - A VS Code restart with a board open, in a real VS Code. The restore path is unit-tested against a stubbed VS Code (`boardPanels.test.ts`).
-- Copilot choosing the tools in a real chat is confirmed by the maintainer on their machine, not by an automated test. In a real VS Code the smoke suite calls the tools directly, sees a board tab open, and sees its page get an answer from the extension.
-- Real Jira and Bitbucket Data Center behind the boards.
+- The review board against real Bitbucket Data Center (the Step 3 part of [`manual-checklist.md`](manual-checklist.md)).
+- Every board control with a keyboard and a screen reader.

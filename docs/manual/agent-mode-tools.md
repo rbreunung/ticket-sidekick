@@ -18,7 +18,8 @@ These run without asking. The review board tool only opens the board.
 | `bitbucket_getPullRequest` | `#bitbucketGetPullRequest` | Shows a pull request's title, description, author and target branch |
 | `bitbucket_getPullRequestDiff` | `#bitbucketGetPullRequestDiff` | Shows a pull request's diff |
 | `bitbucket_open_review` | `#bitbucketOpenReview` | Opens the review board of a pull request in an editor tab; the review runs there when you start it |
-| `bitbucket_read_findings` | `#bitbucketReadFindings` | Reads a stored review: the summary (findings by severity, passes run, verdict, requirements coverage), the findings list (each marked when its comment is drafted, posted or failed to post), or one finding with its code, explanation and draft comment |
+| `bitbucket_read_findings` | `#bitbucketReadFindings` | Reads a stored review: the summary (background, findings by severity, passes run and running, verdict), the findings list (each marked when it was discussed and when its comment is drafted, posted or failed to post), or one finding with its code, its discussion, its draft comment, the review's background, and the commit the review read, with a note when the pull request has a newer one |
+| `bitbucket_read_file` | `#bitbucketReadFile` | Reads one file of a reviewed pull request's repository at the commit the review read, from your configured Bitbucket server only. Takes the pull request link and a path relative to the repository's root; a path with `.`, `..` or a backslash, an absolute path, a link on another server and a pull request with no stored review are refused. Files over 60,000 characters are cut, binary files are not read |
 | `bitbucket_token_usage` | `#bitbucketTokenUsage` | Shows the tokens the reviews used, per month and model |
 
 ## Tools that change something
@@ -34,7 +35,7 @@ This shows a confirmation with the exact comment text before it runs. Nothing ha
 - **One pull request at a time.** Each tool works on a single pull request.
 - **No accidental duplicates.** If Copilot repeats the same comment within a minute, the repeat is skipped. A retry after a real failure still goes through.
 - **Auto-approve skips the confirmation.** If you turned on VS Code's `chat.tools.autoApprove`, the comment tool runs without asking. It still checks its own inputs.
-- **The review runs on the board.** `bitbucket_open_review` answers as soon as the board is open; Copilot reads the result with `bitbucket_read_findings` once the review has run. See [Pull Request Review](bitbucket-pr-review.md).
+- **The review runs on the board.** `bitbucket_open_review` answers as soon as the board is open; Copilot reads the result with `bitbucket_read_findings` once the review has run. **Discuss in chat** under a finding opens Copilot Chat with a prompt that names the pull request and the finding; add your question and send it. If the chat cannot be opened, the prompt is copied to the clipboard instead. See [Pull Request Review](bitbucket-pr-review.md).
 
 ## Jira tools
 

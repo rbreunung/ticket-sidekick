@@ -15,7 +15,7 @@ export type ReviewBitbucketAccess = { configured: true; client: IBitbucketClient
 export const DEFAULT_CONFIDENCE_THRESHOLD = 0.7;
 
 /** The review settings, plus the confidence below which a finding is marked as low confidence. */
-export type ReviewSettings = Omit<EngineSettings, 'focus'> & { confidenceThreshold: number };
+export type ReviewSettings = Omit<EngineSettings, 'background'> & { confidenceThreshold: number };
 
 export interface ReviewBoardDeps {
   bitbucket(): Promise<ReviewBitbucketAccess>;

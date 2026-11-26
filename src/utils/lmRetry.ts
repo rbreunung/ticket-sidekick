@@ -188,3 +188,46 @@ async function tryOnceEasier<TItem, TResult>(
     return { items, error: err };
   }
 }
+
+/**
+ * The three refusals Copilot sends instead of an answer. Rate-limited passes after a wait; blocked
+ * and quota used up refuse every call for minutes, so nothing more should be sent.
+ */
+export type RefusalKind = 'rate-limited' | 'blocked' | 'quota';
+
+export interface Refusal {
+  kind: RefusalKind;
+  /** How long the refusal asked to wait before trying again, when it said. */
+  retryAfterMs?: number;
+}
+
+const RATE_LIMITED_NAME = 'ChatRateLimited';
+const QUOTA_NAME = 'ChatQuotaExceeded';
+
+/**
+ * Classifies a refusal: by the `LanguageModelError` code first (`Blocked`), then by the error name
+ * (`ChatRateLimited`, `ChatQuotaExceeded`), then by the message. Undefined for any other failure.
+ */
+export function refusalOf(err: unknown): Refusal | undefined {
+  if (!(err instanceof Error)) return undefined;
+  const code = (err as { code?: unknown }).code;
+  const marks = [typeof code === 'string' ? code : undefined, err.name];
+  if (marks[0] === 'Blocked') return { kind: 'blocked' };
+  if (marks.includes(QUOTA_NAME)) return { kind: 'quota' };
+  const hint = retryHintOf(err.message);
+  const rateLimited = (): Refusal => ({ kind: 'rate-limited', ...(hint !== undefined ? { retryAfterMs: hint } : {}) });
+  if (marks.includes(RATE_LIMITED_NAME)) return rateLimited();
+  if (/\bquota\b/i.test(err.message)) return { kind: 'quota' };
+  if (/rate[- ]?limit|too many requests|\b429\b/i.test(err.message)) return rateLimited();
+  return undefined;
+}
+
+const UNIT_MS: Array<[RegExp, number]> = [[/^m(?:s|illiseconds?)$/i, 1], [/^s(?:ecs?|econds?)?$/i, 1000], [/^m(?:ins?|inutes?)?$/i, 60_000]];
+
+/** The wait a refusal message asks for, e.g. "Please wait 45 seconds" or "retry after 2 minutes". */
+function retryHintOf(message: string): number | undefined {
+  const m = /(?:retry|wait|try again)\D{0,30}?(\d+(?:\.\d+)?)\s*([a-z]+)/i.exec(message);
+  if (!m) return undefined;
+  const unit = UNIT_MS.find(([pattern]) => pattern.test(m[2]));
+  return unit ? Math.round(Number(m[1]) * unit[1]) : undefined;
+}

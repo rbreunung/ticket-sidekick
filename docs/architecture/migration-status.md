@@ -1,6 +1,6 @@
 # Migration status: from chat participants to tools and boards
 
-Last updated: 2026-11-23.
+Last updated: 2026-11-24.
 
 This page says where the migration stands and what is still open. It is the working list; the other documents hold the detail:
 
@@ -10,7 +10,7 @@ This page says where the migration stands and what is still open. It is the work
 
 Update this page in every change that closes or adds an open point.
 
-**Where it stands (2026-11-23).** The code side of the migration is done: `@bitbucket` is removed, and no chat participant is left. What is open is manual: the checklist runs on the managed machine (O6, O21, O22), the keyboard and screen reader check (O17), the remaining Jira flow prose (O20) and the not-verified points in section 5. The stable release waits for those.
+**Where it stands (2026-11-23).** The code side of the migration is done: `@bitbucket` is removed, and no chat participant is left. What is open is manual: the checklist runs on the managed machine (O6, O21, O22), the keyboard and screen reader check (O17), the Agents window check (O23), the remaining Jira flow prose (O20) and the one not-verified point left in section 5 (V1, a restart with a board open). The stable release waits for those.
 
 **Release rule for the whole migration.** Every release made while the migration runs is a **preview** (`channel: preview`). The stable channel stays on its current version, with no hotfix release, until the whole migration is done and tested, so colleagues are not interrupted and work in the middle of a branch never has to stop for a release. Each step adds its part to the [manual checklist](manual-checklist.md) and runs it on the preview build; the one normal release at the end reruns the whole checklist. This replaces "each step is a preview release first" in the boards plan (R35, AE9).
 
@@ -29,14 +29,14 @@ Update this page in every change that closes or adds an open point.
 | Area | State |
 | --- | --- |
 | Single-ticket Jira work | 16 tools: check connection, view, find, list filters, workflow, list templates, list fields, check required fields, load, move, create, comment, update any field (set, add, remove), upload, correct a description, create a template from a ticket |
-| Opening boards | `jira_open_board` tool (with cleanup rules, fix version, sprint, assignee and team narrowing, and the import board with a report kind and path, or emails with their paths), five Command Palette commands, `/ts-jira search`, `cleanup`, `security-report`, `sessions`, `import` |
+| Opening boards | `jira_open_board` tool (with cleanup rules, fix version, sprint, assignee and team narrowing, and the import board with a report kind and path, or emails with their paths), five Command Palette commands (six with the review board), `/ts-jira search`, `cleanup`, `security-report`, `sessions`, `import` |
 | Skills | `/ts-jira` (typed commands), `/ts-jira-create`, `/ts-jira-brief`, `/ts-jira-spell-check`, `/ts-jira-template` |
 | Removed `@jira` flows | Every Step 1 flow: create, view, summarize, show fields, check required fields, comments, field, move, load, upload, workflow, check, search, filters, bulk transition, bulk field update, cleanup, `/security-report`, the description and comment preview, spell check and template generation. `@jira` has no slash command left. The Veracode and Waltz imports and their two Command Palette commands followed on 2026-11-15. On 2026-11-16 the email import, its Command Palette command, the `ticketSidekick.jira.showConnectionInfo` setting and `@jira` itself were removed ([`../plans/2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md`](../plans/2026-11-16-0628-feat-email-import-board-and-jira-removal-plan.md)) |
 | Session model | Sessions stored per workspace, shown from cache and checked in the background, conflicts, single-use write plans, native confirmation for risky writes, expiry and a clear command; on every board a save after each write of an Apply, Apply progress with the controls locked, a rebuild from the stored recipe after an update that changes the stored format (`revalidate`), a `prepare` read before a plan's preview, and `relocate` to give a session a new source |
 | Boards | Security report (filters, sort, CSV and Excel export), ticket list (search, 50 rows a page up to 300, `searchFields`/`cleanupFields` columns, bulk move, bulk field update with add and remove, cleanup by `cleanupRules` with nested subtasks, an out-of-date state that offers only Refresh), stored sessions, the import board for Veracode and Waltz reports (start screen with the template settings, tabs New, Already ticketed, Stale and Accepted, the ticket merge tab with its resumable run, per-tab out-of-date marks, Pick the file again, search, CSV and Excel export) and for emails (several `.eml` files, the boilerplate cleanup with the model check as a previewed step, the model pick and check, likely repeats by subject, a ticket or a comment per email with the attachments read from the file at the write). Close discards a board's session and closes its tab |
-| Review board | Built in PR #140 (2026-11-20), units U1 to U10 of [`../plans/2026-11-19-0828-feat-pr-review-board-and-bitbucket-removal-plan.md`](../plans/2026-11-19-0828-feat-pr-review-board-and-bitbucket-removal-plan.md). A start screen that asks for the PR link, and a first step that always stops before Start: the review model (`ticketSidekick.bitbucket.reviewModel`, asked for and saved when empty), the requirements source (Jira ticket, a goal reworded on Reword, or none) and an optional question. Then the staged review: the regular pass, the suggested or picked extra passes (Security, Performance, Reliability, Maintainability) and the critic, now or later, with live steps and Stop. Findings with Explain, draft comments with Rewrite and Undo, Post after the native confirmation, Copy for Teams and as Markdown, the requirements coverage with Re-check, token usage per pass. The review core moved to `src/review/` (vscode-free); `@bitbucket` still runs on it |
-| Bitbucket tools and skill | The Bitbucket tools are in the catalog shape of the Jira tools (`src/tools/bitbucketTools/`, generated `package.json` entries): `bitbucket_check_connection`, `bitbucket_getPullRequest`, `bitbucket_getPullRequestDiff`, `bitbucket_postComment`, `bitbucket_open_review`, `bitbucket_read_findings` and `bitbucket_token_usage`. `/ts-bitbucket` (`review`, `check`, `usage`, `help`). The review parity ledger below and `src/test/reviewBoardParity.test.ts` |
-| Documentation | README, manual, `CLAUDE.md`, glossary, architecture page, onboarding and `docs/review-process.md` describe tools and boards only; both participants are described as removed. Superseded plans, specs and the older AI-usage and slide notes are kept as history |
+| Review board | Built in PR #140 (2026-11-20), units U1 to U10 of [`../plans/2026-11-19-0828-feat-pr-review-board-and-bitbucket-removal-plan.md`](../plans/2026-11-19-0828-feat-pr-review-board-and-bitbucket-removal-plan.md). A start screen that asks for the PR link, and a first step that always stops before Start: the review model (`ticketSidekick.bitbucket.reviewModel`, asked for and saved when empty), and one background for the reviewer (a Jira ticket read into an editable box, the developer's own text, or none). Then the staged review: the regular pass, the suggested or picked extra passes (Security, Performance, Reliability, Maintainability) and the critic, now or later, with Stop. Redesigned on 2026-11-25 ([`../plans/2026-11-25-0902-feat-review-board-layout-redesign-plan.md`](../plans/2026-11-25-0902-feat-review-board-layout-redesign-plan.md)): a summary band that follows the stage, a findings list and a detail pane (an overlay on a narrow tab), findings that appear while a pass runs, picked persona passes that run at the same time with the critic last, a discussion thread per finding, draft comments with Preview, Rewrite, Regenerate and Undo, Markdown rendered safely, Discuss in chat, Post after the native confirmation, Copy for Teams and as Markdown, token usage per pass. The requirements coverage check, Reword and Re-check were removed with it. The review core moved to `src/review/` (vscode-free). `@bitbucket` was removed on 2026-11-23, so the board is the only way to review |
+| Bitbucket tools and skill | The Bitbucket tools are in the catalog shape of the Jira tools (`src/tools/bitbucketTools/`, generated `package.json` entries): `bitbucket_check_connection`, `bitbucket_getPullRequest`, `bitbucket_getPullRequestDiff`, `bitbucket_postComment`, `bitbucket_open_review`, `bitbucket_read_findings`, `bitbucket_read_file` and `bitbucket_token_usage`. `/ts-bitbucket` (`review`, `check`, `usage`, `help`). The review parity ledger below and `src/test/reviewBoardParity.test.ts` |
+| Documentation | README, manual, `CLAUDE.md`, glossary, architecture page, onboarding and `docs/review-process.md` describe tools and boards only; both participants are described as removed. `ai-usage.md` and the intro slides were rewritten for tools and boards on 2026-11-24, and `docs/report-import.md` and `docs/jira-flows.md` no longer carry the chat reply grammar. `docs/ai-usecases-review.md` and `docs/bitbucket-follow-up-improvements.md` carry a superseded banner. Superseded plans and specs are kept as history; [`docs/README.md`](../README.md) says which documents are current |
 
 ## 3. Open points
 
@@ -119,7 +119,7 @@ O12, O13 and O14 are closed by PR #140 (the review board, `bitbucket_read_findin
 
 | # | Open point | Requirement | Blocks removal of |
 | --- | --- | --- | --- |
-| O22 | Run the Step 3 part of the [manual checklist](manual-checklist.md) on the preview build on the managed machine, against Bitbucket Data Center. Run after the removal by the maintainer's decision, so a failure is fixed on the review board, with no `@bitbucket` to fall back to | R35 | — (the stable release) |
+| O22 | Run the Step 3 part of the [manual checklist](manual-checklist.md) on the preview build on the managed machine, against Bitbucket Data Center, including the redesigned board and its managed-machine probe. Run after the removal by the maintainer's decision, so a failure is fixed on the review board, with no `@bitbucket` to fall back to | R35 | — (the stable release) |
 
 #### Review board parity ledger
 
@@ -129,15 +129,15 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 
 | Behaviour | Board | Note |
 | --- | --- | --- |
-| `explain` | Carry over | `#N <question>`: Explain under the finding, one call with its code, the PR title and description and the upfront question; explaining again replaces the answer |
+| `explain` | Carry over | `#N <question>`: a discussion under the finding. Explain asks the first question and each follow-up adds a question and its answer below; each is one call with the finding, its code, the PR title and description, the background and the discussion so far |
 | `copy` | Carry over | Copy for Teams as plain text, plus Copy as Markdown, for the selected findings or all of them; the typed word goes |
 | `add` | Carry over | `add … to review`: select the findings, edit one draft comment each, Post after the native confirmation; inline on a verified line, else on the activity feed; each comment reported, only the failed ones offered again |
 | `post it` | Carry over | The comment preview's confirmation is Post's preview and native confirmation |
-| `refinement` | Carry over | A refinement instruction in the comment preview is Rewrite with a typed instruction, with Undo |
-| `goal` | Carry over | "the goal is …" after a review: change the source or edit the goal, then Re-check runs only the requirements check on the stored diff and replaces the coverage |
+| `refinement` | Carry over | A refinement instruction in the comment preview is Rewrite with a typed instruction, with Undo; Regenerate writes the draft again from the finding and its discussion, with Undo |
+| `goal` | Dropped | The requirements coverage check and Reword were removed, so a goal is no longer checked; it is given as the own-text background on the first step, which goes into every review call |
 | `finding-not-found` | Carry over | An unknown finding number is refused on the board; the read-findings tool names the numbers the review has |
-| `diff-question` | Carry over | A general question about the PR: the agent reads the findings and the diff through the tools |
-| `follow-up-failure` | Carry over | A failed follow-up or refinement keeps what was there: the earlier explanation or the hand-edited draft stays, with an error line |
+| `diff-question` | Carry over | A general question about the PR: the agent reads the findings, the diff and whole files at the reviewed commit through the tools |
+| `follow-up-failure` | Carry over | A failed follow-up or refinement keeps what was there: the discussion so far or the hand-edited draft stays, with an error line |
 | `finding-match` | Dropped | Scope: the extension's call that matches a free-text question to a finding; the agent does it from the findings list |
 | `done`, `cancel` | Dropped | Scope: the reply words; a board is left by closing its tab |
 | `smart-fallback-reply` | Dropped | Scope: the smart-mode fallback question and its replies `all` and `standard`; a review with no usable recommendation says so and the developer picks passes |
@@ -155,7 +155,7 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 
 | Session | Board | Note |
 | --- | --- | --- |
-| `bitbucket.session.review` | Carry over | The review is the board's session: findings, passes run, explanations, drafts, coverage and the reviewed diff survive a restart, and a repeat request opens it |
+| `bitbucket.session.review` | Carry over | The review is the board's session: findings, passes run, discussions, drafts and the reviewed diff survive a restart, and a repeat request opens it |
 | `bitbucket.session.commentPreview` | Carry over | Drafts are kept in the session until posted |
 | `bitbucket.session.smartFallback` | Dropped | Scope: the smart-mode fallback question |
 | `session-continuity` | Dropped | The removal takes out the chat sessions with `@bitbucket` (a settled decision of the plan): expiry through the chat history, a PR link that starts a fresh review over a live session (a repeat request now opens the stored review, also settled), `check` and `usage` keeping a session alive, and `/review` without a link or a lone mode word ending one |
@@ -172,7 +172,7 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 
 | Mode | Board | Note |
 | --- | --- | --- |
-| `standard` | Carry over | The regular pass every review starts with: pass 1, the budget-aware call with whole files, the requirements check when a source is chosen |
+| `standard` | Carry over | The regular pass every review starts with: pass 1 and the budget-aware call with whole files |
 | `smart` | Carry over | The regular pass suggests persona passes from every batch's recommendation; the developer runs the suggestion or picks others |
 | `deep` | Carry over | Picking all four persona passes and the critic, now or later |
 | `quick` | Dropped | Scope: the quick review (pass 1 without the call with whole files) |
@@ -208,25 +208,25 @@ What `@bitbucket` does and what the review board and the Bitbucket tools do with
 | `continuation` | Carry over | A cut-off reply gets one continuation call that lists the findings already reported |
 | `whole-file-call` | Carry over | The call with the whole files a batch asked for refines the first findings and retracts one only by its number |
 | `context-files` | Carry over | Context files are read at the reviewed commit, within the budget, and later passes see what the regular pass saw |
-| `persona-passes` | Carry over | Security, performance, reliability and maintainability, each over every batch |
+| `persona-passes` | Carry over | Security, performance, reliability and maintainability, each over every batch; the passes picked in one run run at the same time (all at most four batches, else two at once) and the critic after them |
 | `dedupe` | Carry over | Findings on the same line with the same meaning merge: stronger severity, combined sources, the corroboration bump |
 | `finding-numbers` | Carry over | Numbers are assigned once per review and never change, so a removed finding leaves a gap (the chat renumbered after each review) |
 | `critic` | Carry over | Removes what it cannot confirm, or labels it probably a false alarm when the developer worked on it; checks only unchecked findings |
 | `partial-results` | Carry over | A pass with failed batches shows the other batches' findings under a banner |
 | `failed-review` | Carry over | No batch readable: a failure banner, no findings, Run again |
-| `upfront-question` | Carry over | The question goes into every review call; the agent passes it to the board instead of the prompt syntax (`question:`, `--`, a sentence ending in `?`) |
-| `ticket-choice` | Carry over | An explicit key wins over the PR title's, none without a key, the ticket unavailable with a reason while Jira is not configured; the title-key pause (Use / Skip) is the first step, which always stops before Start, and the quick/standard hint chip goes with the chips |
-| `ticket-read` | Carry over | The capped ticket text, read with a 20-second guard; a failed read lets the review finish without the check |
-| `requirements-call` | Carry over | One call over the whole PR after the findings, the only call that sees ticket text, with at most one extra-file round; an unreadable reply says the check failed |
-| `coverage-block` | Carry over | Shown above the findings as plain text |
+| `upfront-question` | Carry over | The question becomes the developer's own text as the background on the first step, which goes into every review call; the agent passes it to the board as `background` instead of the prompt syntax (`question:`, `--`, a sentence ending in `?`) |
+| `ticket-choice` | Carry over | The background choice on the first step: an explicit key wins over the PR title's, none without a key, own text preselected when the request also names text, the ticket unavailable with a reason while Jira is not configured; the title-key pause (Use / Skip) is the first step, which always stops before Start, and the quick/standard hint chip goes with the chips |
+| `ticket-read` | Carry over | The ticket is read before Start into an editable box (summary, description, newest comments, within the size caps), with the reason shown when it cannot be read; it is background for the reviewer, not a coverage check |
+| `requirements-call` | Dropped | The requirements coverage check was removed by the maintainer's decision of 2026-11-25: the background (a ticket or own text) is context for the reviewer in every review call, not a checklist, and changes that go against it are ordinary findings marked against goal |
+| `coverage-block` | Dropped | Goes with the coverage check (see `requirements-call`); the summary band, Copy and `bitbucket_read_findings` name the background instead |
 | `token-meter` | Carry over | Every model call is metered, a frozen host model included, and recorded toward the counters |
 | `monthly-counters` | Carry over | Per month and model, the current month and the two before |
-| `token-footer` | Carry over | The board shows the token usage per pass |
+| `token-footer` | Carry over | The summary band shows the token usage per pass, and the tokens so far while a pass runs |
 | `review-completed` | Carry over | The first finished review sets the context key the Bitbucket walkthrough waits for |
 | `diagnostic-timeline` | Carry over | Every pass logs to the output channel under `bitbucket.review`: its configuration (model, token budget and ratio, the pass, critic, context lines), the model in use with metering and frozen state, one line per model call (pass, batch, attempt, sizes, duration, status), the retry, split and give-up decisions, a cut-off reply, the findings funnel, "no file could be reviewed" and the last stage of an aborted pass |
 | `not-reviewed-notes` | Carry over | The board, under the banners, and the read-findings summary list what was not reviewed (cut short, not fetched, excluded, no text change, a failed batch part with its files, "after retrying" only for a transient error), the findings dropped for naming a file outside the PR and the findings the critic removed |
-| `finding-detail` | Carry over | Under each finding: its description, recommendation, line with the related lines ("L19 (also L12, L15)"), provenance (new, existing or removed code), confidence and source, as text |
-| `title-key-alternative` | Carry over | When the ticket key in use is not found and the PR title names another, the failure line says so, and the first step and the results offer Use with that key, which sets the ticket key for Start or Re-check |
+| `finding-detail` | Carry over | In the detail pane of the opened finding: its description, recommendation, line with the related lines ("L19 (also L12, L15)"), provenance (new, existing or removed code), confidence and source, as text, and the code around it from the reviewed commit |
+| `title-key-alternative` | Dropped | The "Use the title's key" offer after a ticket was not found went with the coverage check; on the first step the ticket field holds the request's or the title's key, and the developer types another or switches to own text or none |
 
 ### Across all steps
 
@@ -235,6 +235,7 @@ O18 (no deprecation mark in the chat UI) and O19 (participant steps in the `CLAU
 | # | Open point | Note |
 | --- | --- | --- |
 | O17 | Keyboard and screen reader check of every board control | R46. The built boards use VS Code Elements and plain tables; not yet checked with a screen reader |
+| O23 | Tools and `/ts-` skills in sessions started from VS Code's Agents window | Reported 2026-11-24: there the extension's tools were missing and `/ts-bitbucket` was not found, while the Editor Chat panel had both. The Agents window starts an extension only when `package.json` declares `capabilities.agentsWindow.supported`, which was missing; added on 2026-11-24 with a guard in `bundleSmoke.test.ts`. Verify on the preview build with the Agents window part of the [manual checklist](manual-checklist.md); if skills are still missing while tools work, the Copilot CLI agent host's skill loading is the next suspect |
 | O20 | `docs/jira-flows.md` and `docs/report-import.md` still describe the removed `@jira` flows | Each marks the removed flows as removed and keeps their rules as the reference the boards and tools follow. The Bitbucket part (`docs/onboarding.md`, `docs/review-process.md`) was rewritten with the `@bitbucket` removal. Rewrite or trim the Jira prose when it next changes |
 
 ## 4. Open decisions
@@ -249,12 +250,14 @@ O18 (no deprecation mark in the chat UI) and O19 (participant steps in the `CLAU
 
 ## 5. Not verified
 
-| # | What | Why it is open |
+V2 to V4 were verified by the maintainer on 2026-11-24. Only V1 is open.
+
+| # | What | State |
 | --- | --- | --- |
-| V1 | A VS Code restart with a board open, in a real VS Code | The restore path is unit-tested against a stubbed VS Code only |
-| V2 | Copilot choosing the tools and opening a board in a live chat, with this build | Confirmed by the maintainer on an earlier build of this branch; the smoke suite calls the tools directly |
-| V3 | Boards against real Jira Data Center data | Needs real credentials (KL26) |
-| V4 | The organisation's Copilot policy keeps allowing extension tools | Held on the managed machine in November 2026; if it changes, only the Command Palette boards remain |
+| V1 | A VS Code restart with a board open, in a real VS Code | **Open.** The restore path is unit-tested against a stubbed VS Code only |
+| V2 | Copilot choosing the tools and opening a board in a live chat, with this build | Verified 2026-11-24 in the Editor Chat panel. The Agents window is open point O23 |
+| V3 | Boards against real Jira Data Center data | Verified 2026-11-24 (KL26 covered the missing credentials) |
+| V4 | The organisation's Copilot policy keeps allowing extension tools | Verified 2026-11-24. If the policy changes, only the Command Palette boards remain |
 
 ## 6. Removal checklist for the end of the migration
 

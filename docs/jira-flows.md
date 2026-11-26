@@ -2,7 +2,7 @@
 
 > **Removed surface.** `@jira` was removed on 2026-11-16 with its email import, its help screen and its sessions. Veracode and Waltz reports moved to the import board (`src/boards/import/`) on 2026-11-15 and emails on 2026-11-16; every other Jira task runs from a tool, a `/ts-jira` skill or a board. New work is built as extension tools and boards; see [`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md). The imports are documented in [`docs/report-import.md`](report-import.md).
 
-The removed participant's code (`src/participant/JiraParticipant.ts`, `src/participant/jira/`, `src/participant/session/`, `src/participant/sessionState.ts`) is gone; the cleanup rules the ticket list board keeps live in `src/boards/ticketList/`, and the default-project notice in `src/services/defaultProjectNotice.ts`.
+The removed participant's code (`src/participant/`) is gone; the cleanup rules the ticket list board keeps live in `src/boards/ticketList/`, and the default-project notice in `src/services/defaultProjectNotice.ts`.
 
 ## Where the removed flows went
 
@@ -45,26 +45,4 @@ Apply writes the selected parents of the page in view, after the R39 native conf
 
 ## Jira sessions
 
-> **Removed.** These chat sessions went with `@jira` on 2026-11-16; a value an older build left under one of their `workspaceState` keys is never read. The email import's state lives in the import board's session instead (see [`docs/report-import.md`](report-import.md#email-import-on-the-board)). The rest of this section is the record of how they worked.
-
-Each session below is looked up by its `workspaceState` key; liveness is checked by round-tripping a `kind` through `ChatResult.metadata.jiraSession` (read by `getActiveJiraSession()` in `ticketContext.ts`). If the user moved on, the last turn carries no such kind and the session is ignored.
-
-| Session | workspaceState key | Liveness check |
-| --- | --- | --- |
-| `AwaitIssueTypeSession` | `jira.session.awaitIssueType` | metadata — `jiraSession.kinds: ['await-issue-type']` |
-| `EmailCleanupSession` | `jira.session.emailCleanup` | metadata — `jiraSession.kinds: ['email-cleanup']` |
-| `EmailContentSession` | `jira.session.emailContent` | metadata — `jiraSession.kinds: ['email-content']` |
-| `EmailTemplateSelectionSession` | `jira.session.emailTemplateSelection` | metadata — `jiraSession.kinds: ['email-template']` |
-| `EmailReviewSession` | `jira.session.emailReview` | metadata — `jiraSession.kinds: ['email-review']` |
-
-Detection order in the Jira handler is the order of this table. The Veracode and Waltz sessions (`jira.session.veracodeTemplateSelection`, `veracodeReview`, `waltzTemplateSelection`, `waltzReview`) and the stale close's `StaleCloseSession` (`jira.session.staleResolution`) went with their chat imports; a value an older build left under one of those keys is never read. A stored `AwaitIssueTypeSession` from an older build whose `resume` is a ticket create, not an import, is cleared with the expired-session message.
-
-The shared issue-type ask (`AwaitIssueTypeSession`) asks for an issue type when an import's template names none. Its `resume` carries the identity of what the user already picked (a template name and the rest of the originating session); only a `descriptorKind` of `'email'` is resumed; one stored for a Veracode or Waltz import by an older build is cleared as expired. See `src/participant/jira/ticketContext.ts` (`resolveIssueTypeOrPrompt`/`streamAwaitIssueType`).
-
-### Clickable replies
-
-Every reply a session above can currently only be answered by typing — a numbered pick, a confirm/cancel word, or a per-row batch-review toggle — also renders as a clickable element wrapping that exact text (`buildChatCommandLink()` in `sessionState.ts`), so clicking resubmits the identical reply a typed message would have sent; typing continues to work unchanged. The shared issue-type ask (`AwaitIssueTypeSession`) is the one exception — their cancel word must be the literal `(c)` (`isExplicitCancelToken()`), so their clickable "Cancel" resubmits `(c)` rather than the word "cancel".
-
-The email import review screens render each row's inclusion state as its own per-row toggle link — clicking flips that row's `included` flag and re-renders the table; typing the same row numbers/keys does the same thing. They run one group's action at a time from that group's own screen (see [`docs/report-import.md`](report-import.md#overview-and-group-screens-all-three-importers)).
-
-Any response containing one of these links is a trusted `vscode.MarkdownString` (`trustedChatMarkdown()` in `src/utils/chatMarkdown.ts`, enabled only for `workbench.action.chat.open`). Every externally-influenced string combined into such a response — a ticket summary, a custom field value, an email subject — is neutralized first via `neutralizeMarkdownLinks()` (`sessionState.ts`), which also runs automatically inside `buildChatCommandLink()` on its own `label` argument. Without this, a crafted `[text](command:...)` sequence in that content could render as a second, attacker-chosen live command once the response is trusted.
+There are no Jira chat sessions any more. They went with `@jira` on 2026-11-16, and a value an older build left under one of their `workspaceState` keys (`jira.session.*`) is never read. Multi-step Jira work is a board's session: the ticket list board's session and the import board's session (email, Veracode and Waltz) are described in [`docs/architecture/boards-and-sessions.md`](architecture/boards-and-sessions.md) and [`docs/report-import.md`](report-import.md#import-board-veracode--waltz). The clickable replies, the confirm and cancel words and the per-row toggle links of the chat went with them; a board has controls instead.

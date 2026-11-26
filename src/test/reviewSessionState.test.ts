@@ -3,9 +3,12 @@ import {
   neutralizeMarkdownLinks,
   ALL_PERSONA_IDS,
   formatReviewForSharing,
+  resolveFindingAnchors,
+  dedupeFindings,
   type ReviewFinding,
   type ReviewSession,
 } from '../review/reviewSessionState';
+import { addFindings, emptyStore } from '../review/engine/findingStore';
 
 describe('neutralizeMarkdownLinks', () => {
   it('replaces [ and ] with visually similar full-width brackets, leaving other characters untouched', () => {
@@ -165,38 +168,53 @@ describe('formatReviewForSharing (Copy for Teams)', () => {
   });
 });
 
-describe('formatReviewForSharing with a requirements coverage section', () => {
-  const PR_URL = 'https://bb.example.com/projects/PROJ/repos/app/pull-requests/42';
-  const finding = (id: number): ReviewFinding => ({
-    id, file: `src/file${id}.ts`, line: 10, severity: 'warning', title: `Title ${id}`, description: 'd', recommendation: `Rec ${id}`, confidence: 0.9,
-  });
-  const session = (findings: ReviewFinding[]): ReviewSession => ({
-    prTitle: 'Fix login race', prUrl: PR_URL, project: 'PROJ', repo: 'app', prId: 42, findings, prAuthor: 'Jane', prTargetBranch: 'main',
-  });
-  const COVERAGE = 'Requirements coverage (PROJ-1)\nmet — Add key (comment)';
-
-  it('puts the coverage after the header and before the severity groups when the whole review is copied', () => {
-    const { text } = formatReviewForSharing(session([finding(1)]), { coverageText: COVERAGE });
-    expect(text.indexOf(PR_URL)).toBeLessThan(text.indexOf('Requirements coverage (PROJ-1)'));
-    expect(text.indexOf('Requirements coverage (PROJ-1)')).toBeLessThan(text.indexOf('🟡 Warning'));
+describe('the "against goal" mark on findings', () => {
+  const diffs = [{ path: 'src/session.ts', diff: '@@ -1,1 +1,2 @@\n const a = 1;\n+const ttl = 0;' }];
+  type Raw = Omit<ReviewFinding, 'id'> & { againstGoal?: unknown };
+  const reply = (extra: Record<string, unknown> = {}): Raw => ({
+    file: 'src/session.ts', line: 2, anchorCode: 'const ttl = 0;', severity: 'warning',
+    title: 'Sessions never expire', description: 'TTL 0', recommendation: 'Use the configured TTL', ...extra,
   });
 
-  it('keeps the coverage on a review with no findings', () => {
-    const { text } = formatReviewForSharing(session([]), { coverageText: COVERAGE });
-    expect(text).toContain('Requirements coverage (PROJ-1)');
-    expect(text).toContain('No issues found.');
-    expect(text.indexOf('Requirements coverage')).toBeLessThan(text.indexOf('No issues found.'));
+  it('keeps againstGoal on a reply finding after its anchor is resolved, when the prompt asked for it', () => {
+    const { findings } = resolveFindingAnchors([reply({ againstGoal: true })], diffs, { keepAgainstGoal: true });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ line: 2, provenance: 'new', againstGoal: true });
   });
 
-  it('leaves the coverage out when only some findings are copied', () => {
-    const { text } = formatReviewForSharing(session([finding(1), finding(2)]), { targets: [2], coverageText: COVERAGE });
-    expect(text).not.toContain('Requirements coverage');
-    expect(text).toContain('Title 2');
+  it('drops a stray againstGoal when no background asked for it, and any value other than true', () => {
+    const stray = resolveFindingAnchors([reply({ againstGoal: true })], diffs).findings[0];
+    expect(stray).not.toHaveProperty('againstGoal');
+    const odd = resolveFindingAnchors([reply({ againstGoal: 'yes' })], diffs, { keepAgainstGoal: true }).findings[0];
+    expect(odd).not.toHaveProperty('againstGoal');
   });
 
-  it('is unchanged when there is no coverage', () => {
-    const base = formatReviewForSharing(session([finding(1)]));
-    expect(formatReviewForSharing(session([finding(1)]), { coverageText: undefined }).text).toBe(base.text);
-    expect(base.text).not.toContain('Requirements coverage');
+  it('merges two duplicate findings, one marked against goal, into one finding that keeps the mark, either way round', () => {
+    const plain = { ...reply(), sources: ['general' as const] };
+    const marked = { ...reply(), againstGoal: true as const, sources: ['security' as const] };
+    for (const pair of [[plain, marked], [marked, plain]]) {
+      const merged = dedupeFindings(resolveFindingAnchors(pair, diffs, { keepAgainstGoal: true }).findings);
+      expect(merged).toHaveLength(1);
+      expect(merged[0].againstGoal).toBe(true);
+    }
+  });
+
+  it('keeps the mark when the marked copy is the unlocated one dropped for its located twin', () => {
+    const located = { ...reply(), sources: ['general' as const] };
+    const unlocated = { ...reply({ anchorCode: 'no such line' }), againstGoal: true as const, sources: ['general' as const] };
+    const merged = dedupeFindings(resolveFindingAnchors([located, unlocated], diffs, { keepAgainstGoal: true }).findings);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ line: 2, againstGoal: true });
+  });
+
+  it('marks a numbered finding against goal when a later duplicate carries the mark', () => {
+    const first = addFindings(emptyStore(), [{ ...resolveFindingAnchors([reply()], diffs).findings[0], sources: ['general'], batch: 0 }]);
+    const later = addFindings(first.store, [{
+      ...resolveFindingAnchors([reply({ againstGoal: true, description: 'Expiry is zero' })], diffs, { keepAgainstGoal: true }).findings[0],
+      sources: ['security'], batch: 0,
+    }]);
+    expect(later.merged).toEqual([1]);
+    expect(later.store.findings).toHaveLength(1);
+    expect(later.store.findings[0]).toMatchObject({ id: 1, description: 'TTL 0', againstGoal: true });
   });
 });

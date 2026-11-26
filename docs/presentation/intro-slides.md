@@ -57,23 +57,24 @@ _No browser. No context switching. No MCP server required._
 
 ## What is Ticket Sidekick?
 
-A VS Code extension with two **Copilot Chat participants**:
+A VS Code extension that gives **GitHub Copilot Chat** tools, skills and boards:
 
-| Participant | What it does |
-|-------------|-------------|
-| `@jira` | Read, create, update tickets · search · bulk transitions · email import |
-| `@bitbucket` | PR review with numbered findings · inline comments · follow-up Q&A |
+| Piece | What it does |
+|-------|-------------|
+| **Tools** | Copilot's agent views, finds, creates, comments on, moves and updates Jira tickets, and reads and comments on pull requests |
+| **Skills** | `/ts-jira <command>`, `/ts-jira-create`, `/ts-jira-brief`, `/ts-jira-spell-check`, `/ts-jira-template`, `/ts-bitbucket <command>` |
+| **Boards** | Editor tabs for the security report, ticket lists with bulk changes, report and email imports, and the pull request review |
 
-- Natural language — type what you want, not the API call
+- Natural language in Agent mode, or a typed command: your choice
+- Writes always show a confirmation with every value first
 - Credentials in VS Code SecretStorage — never in settings.json
 - Configurable per-repo via `.jira-templates.json`
-- easily extendable - any agent knows how to write Typescript - lot of tests
 
 ---
 
 <!-- _class: section-break -->
 
-## `@jira` — Daily ticket work
+## Jira — Daily ticket work
 
 ---
 
@@ -82,15 +83,15 @@ A VS Code extension with two **Copilot Chat participants**:
 Load the full context into your workspace:
 
 ```
-@jira load PROJ-123
+/ts-jira load PROJ-123
 ```
 
-Or just show it inline:
+Or ask Copilot in Agent mode:
 
 ```
-@jira show PROJ-123
-@jira summarise PROJ-123
-@jira what do the comments say about the login bug on PROJ-123?
+show me PROJ-123
+write a developer brief for PROJ-123      (/ts-jira-brief)
+what do the comments say about the login bug on PROJ-123?
 ```
 
 - Description, comments, attachments — all rendered as Markdown
@@ -102,111 +103,82 @@ Or just show it inline:
 ## Writing back
 
 ```
-@jira add comment: investigated root cause — SQL index missing on user_id
-@jira add comment: summarise the findings from our discussion
-@jira set priority to High on PROJ-123
-@jira update description with the analysis above
+add a comment to PROJ-123: investigated root cause — SQL index missing on user_id
+set priority to High on PROJ-123
+move PROJ-123 to In Review
 ```
 
-Content preview before posting — refine if needed, confirm with **post it**.
+Copilot shows a **confirmation with every value** before a tool writes.
 
 ```
-@jira create Bug in PROJ: Login fails on Safari
-  Steps to reproduce: ...
+/ts-jira-create Bug in PROJ: Login fails on Safari
 ```
 
-Templates in `.jira-templates.json` pre-fill custom fields, assignee, sprint, and guide you through a structured description with follow-up questions.
+Templates in `.jira-templates.json` pre-fill custom fields, assignee, sprint, and guide a structured description; the draft is shown before the ticket is created.
 
 ---
 
 <!-- _class: section-break -->
 
-## `@bitbucket` — PR Review
+## Bitbucket — PR Review Board
 
 ---
 
 ## Reviewing a pull request
 
-Paste the PR URL — that's it:
+Type the PR link — the review opens as a **board in an editor tab**:
 
 ```
-@bitbucket https://bitbucket.company.com/projects/PROJ/repos/backend/pull-requests/42
+/ts-bitbucket review https://bitbucket.company.com/projects/PROJ/repos/backend/pull-requests/42
 ```
 
-Returns **numbered findings** grouped by severity:
+First step: pick the review model and a background for the reviewer (a Jira ticket, your own text, or nothing). Then the staged review runs, with a summary band and **Stop**:
 
-```
-🔴 #1 Bug, security issue, or data risk — fix before merge
-🟡 #2 Performance problem, code smell, or fragile assumption — worth addressing
-🔵 #3 Readability, naming, or structure — low urgency, team call
-```
+- the regular pass, then the persona passes you pick (security, performance, reliability, maintainability) at the same time, and the critic last
+- findings appear as each batch finishes, numbered once, with severity, verified line and confidence
+- changes that go against the background are marked *against goal*
 
-Then ask follow-ups:
-
-```
-@bitbucket explain #2
-@bitbucket is #1 actually a problem if the caller already validates input?
-```
+Per finding: a discussion that starts with **Explain** and takes follow-ups, or **Discuss in chat** to hand it to Copilot.
 
 ---
 
 ## Posting review comments
 
-Select findings and post as **inline Bitbucket comments** in one step:
+Select findings, edit one **draft comment** each (or **Rewrite** it with an instruction, with Undo), then **Post**:
 
-```
-#1 #2 add to review
-```
+- native confirmation before anything is written
+- inline on a verified line, otherwise on the pull request's activity
+- each comment reported, only the failed ones offered again
 
-Preview shows where each comment will land (inline on the diff or activity feed). Confirm with **post it**.
-
-Quick mode for large PRs:
-
-```
-@bitbucket review quick https://...url.../pull-requests/55
-```
+**Copy for Teams** or as Markdown shares the review as text. Token usage per pass is on the board; `/ts-bitbucket usage` shows the month.
 
 ---
 
 <!-- _class: section-break -->
 
-## `@jira` — Power features
+## Jira — Power features
 
 ---
 
-## Email → Jira ticket
+## Imports: reports and emails
 
-Client sends an email with screenshots. Download the `.eml` from OWA:
+`Ticket Sidekick: Open Jira Import Board`, `/ts-jira import <kind>` or "import this Veracode report":
 
-```
-@jira create ticket from mail
-@jira import email
-```
-
-A file picker opens → email preview with subject, sender, body, attachments.
-
-- Inline images embedded as thumbnails in the description
-- File attachments uploaded to the ticket
-- Choose a template or issue type, or just **post it**
-
-Or add it as a **comment on an existing ticket**:
-
-```
-@jira add email to PROJ-42
-@jira add comment from mail to PROJ-42
-```
+- **Veracode** and **Waltz** reports: New, Already ticketed, Stale and Accepted tabs, finding folding, ticket merge, SLA due dates
+- **Emails** (`.eml`): boilerplate cleanup with an optional model check, a ticket or a comment per email, inline images and attachments carried over
+- Every tab has its own Preview and Apply; nothing is written before you confirm
 
 ---
 
 ## Bulk cleanup & mass transitions
 
-Close all released bugs in one command:
+Close all released bugs on the **ticket list board**:
 
 ```
-@jira run cleanup "Close released bugs"
+/ts-jira cleanup "Close released bugs"
 ```
 
-Review screen before anything runs:
+Review table before anything runs:
 
 ```
 | Type     | Key       | Summary              | From   | → To | Resolution |
@@ -214,17 +186,9 @@ Review screen before anything runs:
 | Bug      | PROJ-101  | Login timeout        | Open   | Done | Fixed      |
 | Sub-task | ↳ PROJ-102| Fix session handling | Open   | Done | Fixed      |
 | Bug      | PROJ-103  | Crash on export      | Review | Done | Fixed      |
-
-ok · (c) · key numbers to skip
 ```
 
-Scope by fix version:
-
-```
-@jira run cleanup "Close released bugs" in released
-@jira run cleanup "Close released bugs" in "Release 3.2"
-@jira run cleanup "Close released bugs" in "Release*"
-```
+Scope by fix version, sprint, assignee or team; Preview, then Apply with progress.
 
 ---
 
@@ -248,7 +212,7 @@ Scope by fix version:
 }
 ```
 
-- Templates guide ticket creation with per-turn Q&A
+- Templates guide ticket creation (`/ts-jira-create`), and `/ts-jira-template` builds one from a ticket
 - Cleanup rules encode your team's release process
 - Committed to the repo — everyone picks up changes automatically
 
@@ -265,9 +229,9 @@ VS Code → Extensions → search **Ticket Sidekick**
 
 **3. First commands**
 ```
-@jira show PROJ-123
-@jira check               ← verify Jira connection
-@bitbucket check          ← verify Bitbucket connection
+/ts-jira check            ← verify Jira connection
+/ts-bitbucket check       ← verify Bitbucket connection
+show me PROJ-123          ← Agent mode
 ```
 
 **4. Add templates** — create `.jira-templates.json` in your workspace root
@@ -280,6 +244,6 @@ _Questions / feature requests → open an issue or ping me directly_
 
 # Questions?
 
-`@jira` · `@bitbucket` · Ticket Sidekick
+Tools · Skills · Boards · Ticket Sidekick
 
 _Slides: `docs/presentation/intro-slides.md`_

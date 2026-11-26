@@ -78,6 +78,7 @@ export interface IBitbucketClient {
     contextLines?: number,
     srcPath?: string,
   ): Promise<PullRequestFileDiff>;
+  /** One file's text at a commit; throws `NotAFileError` when the path names a folder. */
   getFileContent(project: string, repo: string, path: string, commitHash: string): Promise<string>;
   addPrComment(
     project: string,
@@ -86,4 +87,23 @@ export interface IBitbucketClient {
     text: string,
     inline?: InlineAnchor,
   ): Promise<BitbucketCommentResult>;
+}
+
+/** The path given to `getFileContent` names a folder, not a file. */
+export class NotAFileError extends Error {
+  constructor(readonly path: string) {
+    super(`${path} is not a file`);
+    this.name = 'NotAFileError';
+  }
+}
+
+/** Whether a Bitbucket Cloud `src` response body is a folder listing rather than a file. */
+export function isCloudFolderListing(body: string): boolean {
+  if (!body.startsWith('{')) return false;
+  try {
+    const data = JSON.parse(body) as { values?: unknown };
+    return Array.isArray(data.values) && data.values.every(v => typeof v === 'object' && v !== null && /^commit_(?:file|directory)$/.test(String((v as { type?: unknown }).type)));
+  } catch {
+    return false;
+  }
 }
