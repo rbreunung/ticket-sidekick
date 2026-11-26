@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildEmailCommentWiki, checkEmailBatchCaps, createEmailDescriptor } from '../imports/email';
+import { buildEmailCommentHeader, buildEmailCommentWiki, buildEmailJiraWiki, checkEmailBatchCaps, createEmailDescriptor } from '../imports/email';
 import type { TicketService } from '../services/TicketService';
 import type { EmailReviewRow } from '../utils/emlParser';
 
@@ -63,6 +63,36 @@ describe('email comment', () => {
   it('starts with the sender and date, then the body as wiki markup', () => {
     expect(buildEmailCommentWiki({ senderName: 'Ann', receivedDateTime: '2026-11-16T08:00:00Z', markdownBody: '**Hi**' }))
       .toBe('*From:* Ann  ·  *Date:* 2026-11-16\n\n*Hi*');
+  });
+});
+
+describe('email text that goes into Jira markup outside the converter', () => {
+  // An inline image's file name and the sender's display name come from the email and are put into
+  // live Jira wiki markup after markdownToJiraWiki() ran, so only the value is sanitized: the
+  // template's own `!`, `|` and `*` must survive and nothing the sender typed may add another.
+  const count = (text: string, ch: string) => text.split(ch).length - 1;
+
+  it('keeps an inline image a single thumbnail when its file name carries a "!" image trigger', () => {
+    const wiki = buildEmailJiraWiki('See [📎 evil!http://attacker.example/t.gif!.png] attached');
+    expect(count(wiki, '!')).toBe(2);
+    expect(wiki).toMatch(/!evil[^!|]*\|thumbnail!/);
+    expect(wiki).not.toContain('!http://attacker.example/t.gif!');
+  });
+
+  it('keeps a single thumbnail attribute when the file name carries a "|"', () => {
+    const wiki = buildEmailJiraWiki('[📎 report|align=right.pdf]');
+    expect(count(wiki, '|')).toBe(1);
+    expect(wiki).toContain('|thumbnail!');
+  });
+
+  it('puts a sender name with Jira macros and an image trigger into the header as plain text', () => {
+    const header = buildEmailCommentHeader('Evil{color}HACKED{color}!', '2026-11-16T08:00:00Z');
+    expect(header).toBe('*From:* EvilcolorHACKEDcolor  ·  *Date:* 2026-11-16\n\n');
+  });
+
+  it('keeps an ordinary file name and sender name as they are', () => {
+    expect(buildEmailJiraWiki('[📎 screenshot.png]')).toBe('!screenshot.png|thumbnail!');
+    expect(buildEmailCommentHeader('Ann Smith')).toBe('*From:* Ann Smith\n\n');
   });
 });
 
