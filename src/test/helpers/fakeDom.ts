@@ -60,15 +60,16 @@ export class FakeElement extends FakeNode {
   addEventListener(type: string, listener: Listener): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
-  append(...nodes: Array<FakeNode | string>): void {
+  append(...nodes: Array<FakeNode | string | null | undefined>): void {
     for (const node of nodes) {
-      const child = typeof node === 'string' ? new FakeText(node) : node;
+      // Like the browser: anything that is not a node becomes its text, so a stray `null` shows as "null".
+      const child = node instanceof FakeNode ? node : new FakeText(String(node));
       child.remove();
       child.parent = this;
       this.childNodes.push(child);
     }
   }
-  replaceChildren(...nodes: Array<FakeNode | string>): void {
+  replaceChildren(...nodes: Array<FakeNode | string | null | undefined>): void {
     for (const child of [...this.childNodes]) child.remove();
     this.append(...nodes);
   }
