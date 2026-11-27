@@ -6,7 +6,7 @@ import { TemplateService } from '../../templates/TemplateService';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
 import type { JiraFieldMeta } from '../../jira/IJiraClient';
-import { isEmptyRendered, renderFieldValue } from '../../services/TicketService';
+import { isEmptyRendered, renderFieldValue } from '../../services/fieldText';
 import { resolveExtraColumns } from '../../services/extraColumns';
 import type { ExtraColumn, TicketListDeps, TicketRow } from './kind';
 

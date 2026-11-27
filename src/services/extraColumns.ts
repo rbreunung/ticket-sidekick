@@ -3,7 +3,7 @@
 // overview exports and the ticket list. Pure and vscode-free; the field names and the log come in as arguments.
 import type { JiraFieldMeta } from '../jira/IJiraClient';
 import type { DiagLogger } from '../utils/diagTypes';
-export { MAX_EXTRA_VALUE_CHARS, renderExtraValue, renderedExtras } from './TicketService';
+export { MAX_EXTRA_VALUE_CHARS, renderExtraValue, renderedExtras } from './fieldText';
 
 export interface ResolvedColumn {
   id: string;

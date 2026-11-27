@@ -2,7 +2,8 @@
 // the review rows, the accepted list and the stale check — and rebuilding it from its report file. vscode-free; logging
 // goes through the injected `onDiag`, progress through `onEvent`.
 import * as fs from 'fs';
-import { renderedExtras, type TicketService } from '../services/TicketService';
+import type { TicketService } from '../services/TicketService';
+import { renderedExtras } from '../services/fieldText';
 import type { ResolvedColumn } from '../services/extraColumns';
 import type { IJiraClient } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
