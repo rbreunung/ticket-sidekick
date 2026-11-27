@@ -23,6 +23,9 @@ interface FakePanel {
 
 const created: FakePanel[] = [];
 const clipboard: string[] = [];
+/** Board tabs VS Code lists but has not handed to the extension yet, by label. */
+const unrestored: string[] = [];
+const closedTabs: string[] = [];
 
 function fakePanel(title = ''): FakePanel {
   let receive: ((m: unknown) => unknown) | undefined;
@@ -44,12 +47,22 @@ function fakePanel(title = ''): FakePanel {
   return panel;
 }
 
-vi.mock('vscode', () => ({
+vi.mock('vscode', () => {
+  const TabInputWebview = class { constructor(public viewType: string) {} };
+  return {
   ViewColumn: { Active: -1 },
   Uri: { joinPath: (base: { fsPath: string }, ...parts: string[]) => ({ fsPath: [base.fsPath, ...parts].join('/') }) },
   env: { clipboard: { writeText: async (text: string) => { clipboard.push(text); } } },
-  window: { createWebviewPanel: (_type: string, title: string) => { const p = fakePanel(title); created.push(p); return p; } },
-}));
+  TabInputWebview,
+  window: {
+    createWebviewPanel: (_type: string, title: string) => { const p = fakePanel(title); created.push(p); return p; },
+    tabGroups: {
+      get all() { return [{ tabs: unrestored.map(label => ({ label, input: new TabInputWebview('mainThreadWebview-ticketSidekick.board') })) }]; },
+      close: async (tabs: Array<{ label: string }>) => { closedTabs.push(...tabs.map(t => t.label)); unrestored.length = 0; return true; },
+    },
+  },
+};
+});
 
 import { BoardPanels } from '../boards/boardPanels';
 import { ImportStartScreen, type ImportStartDeps } from '../boards/import/startScreen';
@@ -102,6 +115,8 @@ function startScreen(over: Partial<ImportStartDeps> = {}): ImportStartScreen {
 let errors: string[];
 
 beforeEach(async () => {
+  unrestored.length = 0;
+  closedTabs.length = 0;
   created.length = 0;
   errors = [];
   dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ts-panels-'));
@@ -338,6 +353,30 @@ describe('a ticket list opened again', () => {
     await p.open('ticket-list', request);
     expect(created).toHaveLength(2);
     expect(await selected(m, id)).toBe(0);
+  });
+
+  it('keeps its selection and opens one tab when its tab is waiting to be restored after a restart', async () => {
+    const { m, p } = listBoards();
+    await p.open('ticket-list', request);
+    const id = idOfList();
+    await selected(m, id);
+    const state = await m.state('ticket-list', id);
+    await m.action('ticket-list', id, state.revision, { type: 'select-all' });
+    const title = created[0].title;
+    created[0].close();
+    closedTabs.length = 0;
+
+    // VS Code lists the board's tab after a restart but has not handed it to the extension yet.
+    unrestored.push(title);
+    await p.open('ticket-list', request);
+    expect(await selected(m, id)).toBe(2);
+    expect(created).toHaveLength(2);
+    expect(closedTabs).toEqual([title]);
+
+    // Asked for from the sessions board's Reopen, it does not start over either.
+    unrestored.push(title);
+    expect(await p.openStored('ticket-list', id)).toEqual({ ok: true });
+    expect(await selected(m, id)).toBe(2);
   });
 
   it('starts clean from the sessions board\'s Reopen too, but keeps what a restored tab shows', async () => {
