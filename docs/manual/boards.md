@@ -23,10 +23,11 @@ A **board** is a page Ticket Sidekick opens in its own editor tab: a large table
 
 ## Security report
 
-The report lists a project's unresolved Veracode and Waltz tickets by Fix Version, in release-date order, followed by the tickets not assigned to a release. Each row shows the source, the item, its rating, the ticket with its status, the Due Date and a flag: **Overdue**, or **Due before release** when the Due Date falls before the Fix Version's release date.
+The report lists a project's unresolved Veracode and Waltz tickets by Fix Version, in release-date order, followed by the tickets not assigned to a release. Each row shows the source, the item, its rating, the ticket with its status, the assignee, the Due Date and a flag: **Overdue**, or **Due before release** when the Due Date falls before the Fix Version's release date.
 
 - **Project.** Without a project the report uses `ticketSidekick.jira.defaultProject`. A text that is not a project key is refused, never replaced by the default project.
-- **Filters and sort.** Filter by release, flag and tool, and click a column title to sort; a second click turns the order around, a third takes it off. **Clear filters** resets both.
+- **Extra columns.** The assignee is always shown. The fields you list in `ticketSidekick.jira.securityReportFields` follow the Flag column, one column each, titled with the field's name in Jira. A field Jira does not know is left out and logged; a change to the setting shows after **Refresh**.
+- **Filters and sort.** Filter by release, flag and tool, and click a column title to sort; a second click turns the order around, a third takes it off. The assignee and the extra columns sort in natural order, so "Team 2" comes before "Team 10", and empty values come last either way. **Clear filters** resets both.
 - **Save.** **Save full report as CSV** and **Save full report as Excel** always write the whole report of the reading shown, through VS Code's save dialog, in the same format as the Jira Import Board's overview export. The CSV separator is `ticketSidekick.jira.overviewCsvDelimiter`.
 - **Refresh** reads Jira again. Filters and sort stay.
 
@@ -38,7 +39,7 @@ Copilot opens this board whenever you ask to see a list of tickets or to change 
 
 - **Narrowing.** Ask for a fix version, a sprint, an assignee ("me" for yourself) or your team ("my team's open bugs", using `ticketSidekick.jira.myTeamJql`), and Copilot opens the board on the narrowed query; the query is shown under the title. A name that matches more than one version or sprint is named back in chat, and nothing opens.
 - **View in Jira.** The **View in Jira** button next to the query opens Jira's issue search on the same query in your browser, with every matching ticket, also those beyond the board's 300. A saved filter opens the filter itself in Jira. A cleanup opens the rule's query, fix version included.
-- **Extra columns.** A list shows one more column for each field id in `ticketSidekick.jira.searchFields`. A list opened with a proposed move, and a cleanup, shows `ticketSidekick.jira.cleanupFields` instead.
+- **Extra columns.** A list shows one more column for each field id in `ticketSidekick.jira.searchFields`. A list opened with a proposed move, and a cleanup, shows `ticketSidekick.jira.cleanupFields` instead. Click an extra column's title to sort by it, in natural order with empty values last; sorting starts again on the first page.
 
 **Changing several tickets**
 
@@ -96,8 +97,9 @@ The line at the top names the report kind, the file, the project, the template a
 **Already ticketed**: report items that already have a ticket.
 
 - The tab opens on **Changed**: the rows whose findings changed since their ticket was written, and the tickets that have no Due Date yet (marked "No Due Date"). **Unchanged** and **All** show the other rows. Each filter shows its count.
-- Each row shows its ticket with status, the finding, what changed, and its action: **rewrite**, **leave**, or **new ticket** when every ticket of the item is resolved. What each does is in [Report Imports](report-imports.md#reviewing-an-import).
+- Each row shows its ticket with status, the finding, what changed, the ticket's assignee, the columns you list in `ticketSidekick.jira.securityReportFields`, and its action: **rewrite**, **leave**, or **new ticket** when every ticket of the item is resolved. What each does is in [Report Imports](report-imports.md#reviewing-an-import).
 - When a finding has more than one open ticket, the Ticket cell names the others under "also open:" (up to three, then a count). A changed date shows the ticket's recorded date next to the report's, for example `Planned date none → 2026-12-15`; a Veracode ticket without a Due Date shows `Due Date missing → <date>`.
+- Click a column title to sort the rows by it (Ticket, Finding, Change, Assignee, an extra column or Action): a second click turns the order around, a third takes the sort off. Sorting is natural, so PROJ-9 comes before PROJ-10, and empty values come last. It changes only what is shown: **Preview changes…** writes in the report's order. A board saved before these columns existed shows a dash for the assignee until you press **Refresh**.
 - **Set all shown to** changes the action of the rows the filter shows, and no other row. **Preview changes…** writes the action of every row, shown or not.
 - A rewrite rebuilds the whole ticket, so the rows of one ticket are all on **rewrite** or none of them; the preview refuses a mix and names the rows.
 - A ticket that changed in Jira since the board read it is not written to. Its result says so, and the board lists it with its stored and current state until you drop it. When the board could not read the tickets' update times, it says so above the tabs, and Already ticketed writes nothing until a **Refresh** reads them.
@@ -179,7 +181,7 @@ Every board shows a **session**: the data it read and what you set on the board.
 
 ## Stored sessions
 
-Sessions are kept in VS Code's storage for the workspace, outside your repository. They hold what the board shows: for the security report the keys, summaries and Due Dates of open vulnerabilities, for a ticket list its rows, your selection and the chosen change, for an import the report's rows, the matched tickets, your choices and a running ticket merge, for a pull request review the reviewed diff, the background, the findings, their discussions and the drafts. They never hold credentials.
+Sessions are kept in VS Code's storage for the workspace, outside your repository. They hold what the board shows: for the security report the keys, summaries, assignees, Due Dates and configured extra values of open vulnerabilities, for a ticket list its rows, your selection and the chosen change, for an import the report's rows, the matched tickets with their assignees and configured extra values, your choices and a running ticket merge, for a pull request review the reviewed diff, the background, the findings, their discussions and the drafts. They never hold credentials.
 
 - `/ts-jira sessions` opens a board listing every stored session with its source, when its data was read, when it was last used and its size, with **Reopen**, **Delete** and **Delete all**.
 - A session not used for `ticketSidekick.sessions.retentionDays` days (default 14) is deleted.
