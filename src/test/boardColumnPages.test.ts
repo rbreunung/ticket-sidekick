@@ -168,7 +168,7 @@ describe('the ticket list action line', () => {
   });
 
   it('draws the cleanup board the same way, with the resolution picker on the same line', async () => {
-    const cleanup = { rule: 'Close released bugs', targetState: 'Done', targetFinal: true, needsResolution: true, resolutions: ['Fixed'], warnings: [], resolution: null };
+    const cleanup = { rule: 'Close released bugs', targetState: 'Done', needsResolution: true, resolutions: ['Fixed'], warnings: [], resolution: null };
     await load('ticket-list', '../../board-pages/ticket-list/page.js', view({ cleanup, pageOnly: true, change: null }), { state: preferences });
     const apply = must('apply-changes');
     expect(must('cleanup-resolution').parent?.parent === apply.parent || must('cleanup-resolution').parent === apply.parent).toBe(true);

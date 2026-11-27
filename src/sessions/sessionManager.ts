@@ -361,10 +361,10 @@ export class SessionManager {
     };
   }
 
-  /** Reads what the kind keeps outside its sessions the first time the board's state is asked for. */
+  /** Reads what the kind keeps outside its sessions each time the board's state is asked for, since another tab or window may have changed it; a failed read keeps the last value. */
   private async loadPreferences(entry: Entry): Promise<void> {
     const { kind } = entry.reg;
-    if (!kind.preferences || entry.preferences) return;
+    if (!kind.preferences) return;
     try {
       entry.preferences = await kind.preferences.read(await entry.reg.deps());
     } catch (err) {

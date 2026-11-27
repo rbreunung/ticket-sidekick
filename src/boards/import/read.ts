@@ -74,7 +74,6 @@ export interface ImportDeps {
   summarySearch?(projectKey: string, terms: string[]): Promise<RepeatTicket[]>;
   /** The email cleanup's patterns (`ticketSidekick.email.boilerplatePatterns`), invalid entries dropped. */
   boilerplatePatterns?(): BoilerplatePattern[];
-  /** Appends a pattern to `ticketSidekick.email.boilerplatePatterns`. */
   /** Adds a pattern to the setting unless an equal one is in it; says which. */
   savePattern?(pattern: BoilerplatePattern): Promise<'saved' | 'already-saved'>;
   /** The language models a board may call, and the model settings; without them an email import offers no model check. */

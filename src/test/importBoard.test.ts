@@ -354,6 +354,21 @@ describe('a check after a restart or another change', () => {
     expect(tab(v, 'new').outOfDate).toBe(false);
   });
 
+  it('does not count a rewritten ticket whose update time Jira now spells another way, but does count another moment', async () => {
+    const file = writeVeracode([{ id: '201', file: 'Same.java' }, { id: '202', file: 'Same.java', line: 20 }, { id: '301', file: 'Other.java' }, { id: '302', file: 'Other.java', line: 30 }]);
+    jira.tickets = { 'PROJ-1': veracodeTicket('201'), 'PROJ-2': veracodeTicket('301') };
+    let session = await open(recipe('veracode', file));
+    session = withWorking(session, w => ({ ...w, choices: { ...w.choices, actions: { [key('301', '302')]: 'leave' } } }));
+    // The board recorded PROJ-1's time as +0100; Jira now answers the same moment as +01:00.
+    jira.tickets['PROJ-1'] = { ...veracodeTicket('201', '202'), updated: '2026-05-01T10:00:00.000+01:00' };
+    session = withWorking(session, w => ({ ...w, writes: { ...w.writes, tickets: { 'PROJ-1': { updated: '2026-05-01T10:00:00.000+0100' } } } }));
+    expect(tab(view(await check(session)), 'ticketed').outOfDate).toBe(false);
+
+    // A really different moment on a ticket whose row holds a choice does mark the tab.
+    jira.tickets['PROJ-2'] = { ...veracodeTicket('301', '302'), updated: '2026-05-01T11:00:00.000+01:00' };
+    expect(tab(view(await check(session)), 'ticketed').outOfDate).toBe(true);
+  });
+
   it('does not count a ticket the board rewrote itself, but marks one someone else changed', async () => {
     const file = writeVeracode([{ id: '201', file: 'Same.java' }, { id: '202', file: 'Same.java', line: 20 }, { id: '301', file: 'Other.java' }, { id: '302', file: 'Other.java', line: 30 }]);
     jira.tickets = { 'PROJ-1': veracodeTicket('201'), 'PROJ-2': veracodeTicket('301') };

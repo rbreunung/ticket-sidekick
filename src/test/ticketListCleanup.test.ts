@@ -273,9 +273,9 @@ describe('choosing tickets on a cleanup', () => {
     const rule: CleanupRule = { ...RULE, targetState: 'Shipped' };
     const graph: WorkflowGraph = { Open: [{ id: '8', name: 'Ship', to: 'Shipped' }], 'In Progress': [{ id: '9', name: 'Ship', to: 'Shipped' }] };
     const withCategories = ticketListKind.view(await open(fake({ rules: [rule], graph, done: ['Shipped'] })));
-    expect(withCategories.cleanup).toMatchObject({ needsResolution: true, targetFinal: true });
+    expect(withCategories.cleanup).toMatchObject({ needsResolution: true });
     const withoutCategories = ticketListKind.view(await open(fake({ rules: [rule], graph })));
-    expect(withoutCategories.cleanup).toMatchObject({ needsResolution: false, targetFinal: false });
+    expect(withoutCategories.cleanup).toMatchObject({ needsResolution: false });
   });
 
   it('can move without a resolution when none is chosen on purpose', async () => {
@@ -308,6 +308,31 @@ describe('applying a cleanup', () => {
       { target: 'PROJ-11', outcome: 'done' },
       { target: 'PROJ-12', outcome: 'failed', reason: 'Jira refused the transition' },
       { target: 'PROJ-10', outcome: 'refused', reason: 'not moved, because subtask PROJ-12 was not moved' },
+    ]);
+  });
+
+  it('still moves a parent whose own update time Jira changed when its subtask moved', async () => {
+    const deps = fake({ rules: [{ ...RULE, closeSubtasks: true, resolution: 'Fixed' }], tickets: [ticket('PROJ-10'), ticket('PROJ-11', 'Open', { parent: 'PROJ-10' })] });
+    const move = deps.move;
+    deps.move = async (key, status, resolution) => {
+      const result = await move(key, status, resolution);
+      if (key === 'PROJ-11') deps.jira.get('PROJ-10')!.updated = 'bumped-by-subtask';
+      return result;
+    };
+    const { applied } = await apply(await open(deps), deps);
+    expect(deps.moved).toEqual(['PROJ-11→Done (Fixed)', 'PROJ-10→Done (Fixed)']);
+    expect(applied.results.map(r => `${r.target} ${r.outcome}`)).toEqual(['PROJ-11 done', 'PROJ-10 done']);
+  });
+
+  it('leaves a parent and its subtasks alone when the parent changed before the Apply', async () => {
+    const deps = fake({ rules: [{ ...RULE, closeSubtasks: true, resolution: 'Fixed' }], tickets: [ticket('PROJ-10'), ticket('PROJ-11', 'Open', { parent: 'PROJ-10' })] });
+    const s = await open(deps);
+    deps.jira.get('PROJ-10')!.updated = 't9';
+    const { applied } = await apply(s, deps);
+    expect(deps.moved).toEqual([]);
+    expect(applied.results).toEqual([
+      { target: 'PROJ-11', outcome: 'refused', reason: 'not moved, because its parent PROJ-10 was not moved' },
+      { target: 'PROJ-10', outcome: 'refused', reason: 'changed in Jira since the board read it' },
     ]);
   });
 

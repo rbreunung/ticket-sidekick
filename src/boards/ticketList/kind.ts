@@ -95,7 +95,6 @@ export interface CleanupInfo {
   rule: string;
   targetState: string;
   /** Moving a ticket to the target closes it (Jira's Done category, or the usual names). */
-  targetFinal: boolean;
   subtaskTargetState?: string;
   /** The rule names no resolution for a status that closes tickets: one is chosen on the board. */
   needsResolution: boolean;
@@ -433,11 +432,10 @@ async function readCleanup(source: Extract<ListSource, { type: 'rule' }>, deps: 
   }
 
   // A resolution is asked for only when a listed move closes a ticket and the rule names none for it.
-  const targetFinal = rows.length > 0 ? rows.some(r => r.final) : await finalOf(rule.issueType, targets.targetState);
   const needsResolution = (!targets.resolution && rows.some(r => r.final))
     || (!targets.subtaskResolution && rows.some(r => (r.subtasks ?? []).some(sub => sub.final)));
   const cleanup: CleanupInfo = {
-    rule: rule.name, targetState: targets.targetState, targetFinal,
+    rule: rule.name, targetState: targets.targetState,
     ...(rule.closeSubtasks ? { subtaskTargetState: targets.subtaskTargetState } : {}),
     needsResolution, resolutions: needsResolution ? await deps.resolutions() : [],
     ...(describeFixVersion(query.fixVersion) ? { scope: describeFixVersion(query.fixVersion) } : {}),
@@ -682,23 +680,28 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     };
     // Whether each ticket is read before it is written; the developer's choice on the board.
     const check = await deps.checkBeforeWrite();
-    /** Writes a ticket, after reading it again when the board checks and only when it is as the board read it; says whether it was written. */
-    const writeOne = async (target: { key: string; updated: string; status: string }, write: () => Promise<unknown>): Promise<boolean> => {
+    /** Reads a ticket again when the board checks; false, with the result recorded, when it is gone or moved since the board read it. */
+    const verified = async (target: { key: string; updated: string }): Promise<boolean> => {
+      // The truth is Jira: a ticket that moved since the board read it is not written to.
+      const current = check ? await deps.readTicket(target.key) : undefined;
+      if (check && !current) {
+        results[target.key] = { outcome: 'refused', reason: 'no longer exists in Jira' };
+        return false;
+      }
+      if (current && !sameUpdatedTime(current.updated, target.updated)) {
+        deps.onDiag?.('warn', `Ticket list: ${target.key} changed in Jira since the board read it, so it was not written to`, {
+          key: target.key, stored: target.updated, current: current.updated,
+        });
+        results[target.key] = { outcome: 'refused', reason: 'changed in Jira since the board read it' };
+        changed.push(target.key);
+        return false;
+      }
+      return true;
+    };
+    /** Writes a ticket, after checking it when the board checks (unless the caller already did); says whether it was written. */
+    const writeOne = async (target: { key: string; updated: string }, write: () => Promise<unknown>, alreadyChecked = false): Promise<boolean> => {
       try {
-        // The truth is Jira: a ticket that moved since the board read it is not written to.
-        const current = check ? await deps.readTicket(target.key) : undefined;
-        if (check && !current) {
-          results[target.key] = { outcome: 'refused', reason: 'no longer exists in Jira' };
-          return false;
-        }
-        if (current && !sameUpdatedTime(current.updated, target.updated)) {
-          deps.onDiag?.('warn', `Ticket list: ${target.key} changed in Jira since the board read it, so it was not written to`, {
-            key: target.key, stored: target.updated, current: current.updated,
-          });
-          results[target.key] = { outcome: 'refused', reason: 'changed in Jira since the board read it' };
-          changed.push(target.key);
-          return false;
-        }
+        if (!alreadyChecked && !(await verified(target))) return false;
         await write();
         // The time Jira gives the ticket after this write; when it cannot be read, a later check counts the ticket as changed.
         const after = check ? await deps.readTicket(target.key).catch(() => undefined) : undefined;
@@ -711,6 +714,19 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     };
     for (const target of targets) {
       if (target.move) {
+        // The parent is checked before its subtasks move, because moving a subtask can change the parent's own time.
+        let parentChecked = false;
+        if ((target.subtasks ?? []).length > 0) {
+          try { parentChecked = await verified(target); } catch (err) {
+            results[target.key] = { outcome: 'failed', reason: err instanceof Error ? err.message : String(err) };
+          }
+          if (!parentChecked) {
+            // Nothing of this parent is written; its subtasks stay as they are.
+            for (const sub of target.subtasks ?? []) results[sub.key] = { outcome: 'refused', reason: `not moved, because its parent ${target.key} was not moved` };
+            await report();
+            continue;
+          }
+        }
         // Subtasks first; a parent whose subtask was not moved stays as it is.
         let failed: string | undefined;
         for (const sub of target.subtasks ?? []) {
@@ -719,7 +735,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
         }
         const move = target.move;
         if (failed) results[target.key] = { outcome: 'refused', reason: `not moved, because subtask ${failed} was not moved` };
-        else await writeOne(target, () => deps.move(move.key, move.target, move.resolution));
+        else await writeOne(target, () => deps.move(move.key, move.target, move.resolution), parentChecked);
       } else if (change?.type === 'transition') {
         await writeOne(target, () => deps.move(target.key, change.status, change.resolution));
       } else if (change) {

@@ -1042,6 +1042,15 @@ describe('a preference kept on the board', () => {
     expect(next.revision).toBe(state.revision);
   });
 
+  it('shows a value another tab or window changed, not the one it read first', async () => {
+    source.prefs = { loud: true };
+    const m = manager(1, { preferences: true });
+    const state = await openReady(m);
+    expect(state.preferences).toEqual({ loud: true });
+    source.prefs = { loud: false };
+    expect((await m.state('demo', state.id)).preferences).toEqual({ loud: false });
+  });
+
   it('is still there when the session is gone and the board is opened again', async () => {
     const m = manager(1, { preferences: true });
     const state = await openReady(m);
