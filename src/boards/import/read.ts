@@ -264,11 +264,16 @@ async function readWith<TItem, TRow extends ReviewRowBase & ImportRow>(
   const template = await deps.templateFields(recipe, descriptor);
   if (template.problem) notices.push(template.problem);
 
+  // The extra columns are resolved once, so the tab and the export of one reading show the same columns.
+  const columns = (await deps.extraColumns?.()) ?? [];
+  const columnInfos = columns.map(({ id, name }) => ({ id, name }));
+
   let staleFailed = false;
   let descriptionsUnread = 0;
   const { session, dedupFailed } = await deps.buildReview({
     projectKey: recipe.projectKey, items: parsed.items, rawItems: parsed.rawItems, reportFilePath: recipe.reportPath,
     issueType: recipe.issueType, templateName: recipe.templateName, additionalFields: template.additionalFields,
+    extraColumns: columns,
   }, descriptor, event => {
     if (event.kind === 'stale-failed') staleFailed = true;
     else if (event.kind === 'descriptions-unread') descriptionsUnread = event.failed;
@@ -286,10 +291,6 @@ async function readWith<TItem, TRow extends ReviewRowBase & ImportRow>(
     const loaded = descriptor.accepted.service()?.load();
     accepted = { entries: loaded?.entries ?? [], warning: loaded?.warning ?? null };
   }
-
-  // The extra columns are resolved once, so the tab and the export of one reading show the same columns.
-  const columns = (await deps.extraColumns?.()) ?? [];
-  const columnInfos = columns.map(({ id, name }) => ({ id, name }));
 
   // What the export lists: the open targets of the matched rows and the stale tickets.
   const data: ImportData = {

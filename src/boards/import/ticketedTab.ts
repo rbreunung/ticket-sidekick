@@ -5,10 +5,11 @@ import {
   findPartialRewrites, isTicketedRowFinished, ticketedRowActions, ticketedTargetKey,
   type ReviewSession, type TicketedAction,
 } from '../../imports/types';
+import { compareNatural } from '../../utils/naturalCompare';
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import { descriptorOf, type HandlerPayload, type ImportHandler, type ImportSession } from './handlers';
 import { rowKeyOf, ticketedRows, type ImportData, type ImportRow } from './read';
-import { rowRef, rowWritten, type ImportWorking } from './kind';
+import { describeChange, rowRef, rowWritten, type ImportWorking } from './kind';
 
 // The import board's handler for the Already ticketed tab: filters, per-row actions and their writes. vscode-free.
 //
@@ -28,7 +29,12 @@ interface TicketedState {
   unchanged?: boolean;
   /** What the last "set all shown to" did. */
   notice?: string;
+  /** The column the rows are sorted by, and the direction; absent while the rows are in the report's order. */
+  sort?: { column: string; descending: boolean };
 }
+
+const EXTRA_PREFIX = 'extra:';
+const SORT_COLUMNS = ['ticket', 'finding', 'change', 'action', 'assignee'] as const;
 
 /** One write of an Apply: a ticket rewritten from all its rows, or one row's own action. */
 interface TicketedUnit {
@@ -125,6 +131,34 @@ function shownRows(session: ImportSession): ImportRow[] {
   });
 }
 
+function isSortColumn(column: unknown, data: ImportData): column is string {
+  if (typeof column !== 'string') return false;
+  if ((SORT_COLUMNS as readonly string[]).includes(column)) return true;
+  return column.startsWith(EXTRA_PREFIX) && (data.columns ?? []).some(c => c.id === column.slice(EXTRA_PREFIX.length));
+}
+
+/** The text a row sorts by in a column; empty where the reading holds no value. */
+function sortText(session: ImportSession, row: ImportRow, column: string): string {
+  const { data } = session.derived;
+  const { working } = session;
+  const info = data.review.ticketInfo?.[ticketedTargetKey(row)];
+  switch (column) {
+    case 'ticket': return ticketedTargetKey(row);
+    case 'finding': return rowRef(row);
+    case 'change': return describeChange(row) ?? '';
+    case 'action': return LABELS[working.choices.actions[rowKeyOf(data, row)] ?? row.action ?? 'leave'];
+    case 'assignee': return info?.assignee ?? '';
+    default: return info?.extra?.[column.slice(EXTRA_PREFIX.length)] ?? '';
+  }
+}
+
+/** The rows in the order of the sort chosen, or as they are when none is. Only what is shown changes: writes keep the review's order. */
+function sortedRows(session: ImportSession, rows: ImportRow[]): ImportRow[] {
+  const sort = stateOf(session.working).sort;
+  if (!sort || !isSortColumn(sort.column, session.derived.data)) return rows;
+  return [...rows].sort((a, b) => compareNatural(sortText(session, a, sort.column), sortText(session, b, sort.column), sort.descending));
+}
+
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : '(s)'}`;
 }
@@ -179,6 +213,15 @@ export const ticketedTabHandler: ImportHandler = {
             { ...state, unchanged: filter === 'unchanged' },
           ),
         };
+      }
+      case 'ticketed-sort': {
+        if (!isSortColumn(action.column, data)) return { ok: false, reason: 'That column cannot be sorted.' };
+        const state = stateOf(working);
+        // A second click on the same column turns the order around; a third takes the sort off.
+        const current = state.sort?.column === action.column ? state.sort : undefined;
+        const { sort: _sort, ...rest } = state;
+        const next = !current ? { column: action.column as string, descending: false } : current.descending ? undefined : { column: action.column as string, descending: true };
+        return { ok: true, working: withState(working, next ? { ...rest, sort: next } : rest) };
       }
       case 'ticketed-action': {
         if (!isAction(action.action)) return { ok: false, reason: 'That is not an action of this tab.' };
@@ -388,7 +431,8 @@ export const ticketedTabHandler: ImportHandler = {
     const unchanged = rows.filter(r => r.change === null || r.change === undefined).length;
     return {
       filter: filterOf(session),
-      shown: shownRows(session).map(r => r.id),
+      shown: sortedRows(session, shownRows(session)).map(r => r.id),
+      sort: stateOf(session.working).sort ?? null,
       noDueDate: rows.filter(r => hasNoDueDate(r) && !rowWritten(session.derived.data, session.working.writes, r)).map(r => r.id),
       notice: stateOf(session.working).notice ?? null,
       counts: { changed, unchanged, all: rows.length },

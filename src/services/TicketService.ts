@@ -68,7 +68,6 @@ const OVERVIEW_KEY_CHUNK = 50;
 function toOverviewTicket(issue: JiraIssue, fallbackSource: OverviewTicket['source'], columns: readonly ResolvedColumn[] = []): OverviewTicket {
   const labels = issue.fields.labels ?? [];
   const due = issue.fields.duedate;
-  const fields = issue.fields as unknown as Record<string, unknown>;
   const assignee = issue.fields.assignee;
   return {
     key: issue.key,
@@ -79,7 +78,7 @@ function toOverviewTicket(issue: JiraIssue, fallbackSource: OverviewTicket['sour
     fixVersions: (issue.fields.fixVersions ?? []).map(v => v.name),
     source: labels.includes(OVERVIEW_MARKER_LABELS.veracode) ? 'veracode' : labels.includes(OVERVIEW_MARKER_LABELS.waltz) ? 'waltz' : fallbackSource,
     assignee: typeof assignee?.displayName === 'string' ? assignee.displayName : '',
-    extra: Object.fromEntries(columns.filter(c => c.meta).map(c => [c.id, renderExtraValue(fields[c.id], c.meta!)])),
+    extra: renderedExtras(issue.fields as unknown as Record<string, unknown>, columns),
   };
 }
 
@@ -279,6 +278,11 @@ export function renderExtraValue(value: unknown, meta: JiraFieldMeta): string {
   }
   text = text.replace(/\s+/g, ' ').trim();
   return text.length > MAX_EXTRA_VALUE_CHARS ? text.slice(0, MAX_EXTRA_VALUE_CHARS) : text;
+}
+
+/** The configured extra columns' values of one issue's fields as plain text by field id; a column with no field description is left out. */
+export function renderedExtras(fields: Record<string, unknown>, columns: readonly ResolvedColumn[]): Record<string, string> {
+  return Object.fromEntries(columns.filter(c => c.meta).map(c => [c.id, renderExtraValue(fields[c.id], c.meta!)]));
 }
 
 /**

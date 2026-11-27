@@ -29,10 +29,16 @@ interface Ticket {
   updated: string;
   description?: string;
   duedate?: string | null;
+  /** The assignee's display name; unassigned when absent. */
+  assignee?: string;
+  /** Custom field values by field id. */
+  fields?: Record<string, unknown>;
 }
 
 class FakeJira extends MockJiraClient {
   tickets: Record<string, Ticket> = {};
+  /** The extra field ids each search asked for. */
+  extraRequested: string[][] = [];
   links: Array<{ from: string; to: string }> = [];
   private next = 500;
   private tick = 0;
@@ -49,11 +55,17 @@ class FakeJira extends MockJiraClient {
         labels: t.labels, summary: t.summary ?? `Ticket ${key}`, status: { name: t.status ?? 'Open' },
         resolution: t.resolved ? { name: 'Done' } : null, created: '2026-01-01T09:00:00.000+0000', duedate: t.duedate ?? null,
         updated: t.updated, issuetype: { name: 'Bug' }, fixVersions: [], description: t.description ?? '',
+        assignee: t.assignee === undefined ? null : { displayName: t.assignee }, ...t.fields,
       },
     } as unknown as JiraIssue;
   }
 
-  override async searchJql(jql: string): Promise<JiraSearchResult> {
+  override async getFields(): Promise<never> {
+    return [{ id: 'customfield_1', name: 'Squad', schema: { type: 'string' } }] as never;
+  }
+
+  override async searchJql(jql: string, _max?: number, _startAt?: number, extra?: string[]): Promise<JiraSearchResult> {
+    this.extraRequested.push(extra ?? []);
     const all = Object.keys(this.tickets);
     let keys: string[] = [];
     if (jql.includes('labels in (')) {
@@ -157,7 +169,7 @@ function makeDeps(): ImportDeps {
   // The Waltz report's components, with remediation dates the sample workbook does not carry.
   const waltz = { ...waltzBase, parseAndFilter: async () => ({ items: waltzItems.map(c => [c]), rawItems: waltzItems }) };
   return importJiraDeps({
-    getJira: async () => ({ configured: true, client: jira, config: { baseUrl: 'https://jira.example.com' } }) as never,
+    getJira: async () => ({ configured: true, client: jira, config: { baseUrl: 'https://jira.example.com', securityReportFields: reportFields } }) as never,
     workspaceFolder: () => dir,
     descriptors: { veracode, waltz, email: createEmailDescriptor({ deleteEmlAfterImport: () => false, maxBatchBytes: () => 1024 * 1024 }) },
     now: () => 1_000,
@@ -165,12 +177,15 @@ function makeDeps(): ImportDeps {
 }
 
 let deps: ImportDeps;
+/** What `ticketSidekick.jira.securityReportFields` holds in the test window. */
+let reportFields: string[] = [];
 
 beforeEach(async () => {
   dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ts-import-ticketed-'));
   jira = new FakeJira();
   slaDays = undefined;
   waltzItems = [];
+  reportFields = [];
   deps = makeDeps();
 });
 
@@ -673,5 +688,100 @@ describe('what an Already ticketed row shows', () => {
     const session = onTicketed(await open(recipe('veracode', writeVeracode([{ id: '101', file: 'A.java' }]))));
     const change = rowOf(view(session), 'PROJ-1').change!;
     expect(change).toBe('Due Date missing → 2026-07-19');
+  });
+});
+
+describe('assignee and extra columns on Already ticketed', () => {
+  const OWNERS: Record<string, Ticket> = {
+    'PROJ-1': veracodeTicket(['101'], { assignee: 'Team 10', fields: { customfield_1: 'Team 10' } }),
+    'PROJ-2': veracodeTicket(['102'], { assignee: 'Team 2', fields: { customfield_1: 'Team 2' } }),
+    'PROJ-3': veracodeTicket(['103'], { fields: { customfield_1: '' } }),
+  };
+  const FLAWS: Flaw[] = [{ id: '101', file: 'A.java' }, { id: '102', file: 'B.java' }, { id: '103', file: 'C.java' }];
+  const openOwned = async (fields: string[] = ['customfield_1']): Promise<ImportSession> => {
+    reportFields = fields;
+    deps = makeDeps();
+    jira.tickets = structuredClone(OWNERS);
+    return onTicketed(await open(recipe('veracode', writeVeracode(FLAWS))));
+  };
+  const order = (s: ImportSession) => ext(view(s)).shown.map(id => view(s).ticketed!.rows.find(r => r.id === id)!.ticket);
+  const sortBy = (s: ImportSession, column: string) => act(s, { type: 'ticketed-sort', column });
+
+  it('shows who owns each ticket and one column per configured field', async () => {
+    const v = view(await openOwned());
+    expect(v.ticketed!.columns).toEqual([{ id: 'customfield_1', name: 'Squad' }]);
+    expect(v.ticketed!.rows.map(r => [r.ticket, r.assignee, r.values])).toEqual([
+      ['PROJ-1', 'Team 10', ['Team 10']], ['PROJ-2', 'Team 2', ['Team 2']], ['PROJ-3', 'Unassigned', ['']],
+    ]);
+  });
+
+  it('asks the dedup search for the configured fields, and for none when the setting is empty', async () => {
+    await openOwned();
+    expect(jira.extraRequested.some(extra => extra.includes('created') && extra.includes('customfield_1'))).toBe(true);
+    jira.extraRequested = [];
+    await openOwned([]);
+    expect(jira.extraRequested.flat()).not.toContain('customfield_1');
+  });
+
+  it('sorts by assignee in natural order with the empty value last, either way round, and then not at all', async () => {
+    const s = await openOwned();
+    const asc = sortBy(s, 'assignee');
+    expect(order(asc)).toEqual(['PROJ-2', 'PROJ-1', 'PROJ-3']);
+    const desc = sortBy(asc, 'assignee');
+    expect(order(desc)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+    expect(order(sortBy(desc, 'assignee'))).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+    expect(ext(view(sortBy(desc, 'assignee'))).sort).toBeNull();
+    expect(ext(view(asc)).sort).toEqual({ column: 'assignee', descending: false });
+  });
+
+  it('sorts by a configured column, by ticket key as numbers, and by the action shown', async () => {
+    const s = await openOwned();
+    expect(order(sortBy(s, 'extra:customfield_1'))).toEqual(['PROJ-2', 'PROJ-1', 'PROJ-3']);
+    expect(order(sortBy(s, 'ticket'))).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+    expect(order(sortBy(sortBy(s, 'action'), 'action'))).toHaveLength(3);
+  });
+
+  it('puts PROJ-9 before PROJ-10 when sorting by ticket', async () => {
+    jira.tickets = { 'PROJ-10': veracodeTicket(['101']), 'PROJ-9': veracodeTicket(['102']) };
+    const s = onTicketed(await open(recipe('veracode', writeVeracode([{ id: '101', file: 'A.java' }, { id: '102', file: 'B.java' }]))));
+    expect(order(sortBy(s, 'ticket'))).toEqual(['PROJ-9', 'PROJ-10']);
+  });
+
+  it('refuses to sort by Pick, Result or a column it does not show', async () => {
+    const s = await openOwned();
+    for (const column of ['pick', 'result', 'nope', 'extra:nope']) {
+      expect(importKind.reduce(s, { type: 'ticketed-sort', column } as never).ok).toBe(false);
+    }
+  });
+
+  it('keeps the order of the writes and of the preview when the rows are sorted', async () => {
+    jira.tickets = {
+      'PROJ-1': veracodeTicket(['101'], { assignee: 'Zed' }), 'PROJ-2': veracodeTicket(['102'], { assignee: 'Amy' }),
+    };
+    const flaws: Flaw[] = [{ id: '101', file: 'A.java' }, { id: '102', file: 'B.java' }, { id: '111', file: 'A.java', line: 20 }, { id: '112', file: 'B.java', line: 20 }];
+    const s = onTicketed(await open(recipe('veracode', writeVeracode(flaws))));
+    const before = plan(s).lines.map(l => l.target);
+    expect(plan(sortBy(s, 'assignee')).lines.map(l => l.target)).toEqual(before);
+  });
+
+  it('opens a board saved before the columns existed with a dash for the assignee and no extra columns, and keeps its choices', async () => {
+    const s = await openOwned();
+    const row = view(s).ticketed!.rows[0];
+    const chosen = act(s, { type: 'ticketed-action', id: row.id, action: 'leave' });
+    const info = chosen.derived.data.review.ticketInfo!;
+    const old: ImportSession = {
+      ...chosen,
+      derived: {
+        ...chosen.derived,
+        data: {
+          ...chosen.derived.data, columns: undefined,
+          review: { ...chosen.derived.data.review, ticketInfo: Object.fromEntries(Object.entries(info).map(([k, v]) => [k, { summary: v.summary, status: v.status }])) },
+        },
+      },
+    };
+    const v = view(old);
+    expect(v.ticketed!.columns).toEqual([]);
+    expect(v.ticketed!.rows.every(r => r.assignee === '\u2014' && r.values.length === 0)).toBe(true);
+    expect(old.working.choices.actions).toEqual(chosen.working.choices.actions);
   });
 });
