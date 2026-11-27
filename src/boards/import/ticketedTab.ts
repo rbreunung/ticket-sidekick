@@ -10,6 +10,7 @@ import { BATCH_LIMIT } from '../../utils/reportImport';
 import { descriptorOf, type HandlerPayload, type ImportHandler, type ImportSession } from './handlers';
 import { rowKeyOf, ticketedRows, type ImportData, type ImportRow } from './read';
 import { describeChange, rowRef, rowWritten, type ImportWorking } from './kind';
+import { sameUpdatedTime } from '../../utils/updatedTime';
 
 // The import board's handler for the Already ticketed tab: filters, per-row actions and their writes. vscode-free.
 //
@@ -351,7 +352,10 @@ export const ticketedTabHandler: ImportHandler = {
         await finish({ target: unit.ticket, outcome: 'failed', reason: `could not be read: ${messageOf(err)}` });
         continue;
       }
-      if (current !== expected) {
+      if (current === undefined || !sameUpdatedTime(current, expected)) {
+        deps.onDiag?.('warn', `Import board: ${unit.ticket} changed in Jira since the board read it, so it was not written to`, {
+          key: unit.ticket, stored: expected, current: current ?? 'gone',
+        });
         conflicts.push({ id: unit.ticket, target: unit.ticket, message: 'changed in Jira and was not written to.', stored: expected, fresh: current ?? 'gone' });
         await finish({ target: unit.ticket, outcome: 'refused', reason: 'changed in Jira since the board read it' });
         continue;

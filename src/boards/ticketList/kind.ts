@@ -7,6 +7,8 @@ import type { WorkflowGraph } from '../../services/WorkflowService';
 import type { CleanupRule } from '../../templates/TemplateService';
 import { SUBTASK_KEYS_PER_QUERY, buildCleanupQuery, buildSubtaskQueries, cleanupTargets, describeFixVersion, lookupCleanupRule, pathProblem } from './cleanupSource';
 import { isFinalStatus } from '../../utils/finalStatus';
+import type { DiagLogger } from '../../utils/diagTypes';
+import { sameUpdatedTime } from '../../utils/updatedTime';
 
 // The ticket list board: the tickets of a JQL query or a saved filter, with a selection and one
 // change (a move to a status, or a field value) that is applied to the selected tickets after a
@@ -173,6 +175,8 @@ export interface TicketListDeps {
   /** The resolution names Jira offers. */
   resolutions(): Promise<string[]>;
   now(): number;
+  /** Where the board logs what it refuses, for the Ticket Sidekick output channel. */
+  onDiag?: DiagLogger;
 }
 
 export type ViewRow = TicketRow & { url: string | null; selected: boolean; result: Omit<RowResult, 'updated'> | null; subtasks?: ViewRow[] };
@@ -331,8 +335,9 @@ function differences(shownRows: TicketRow[], freshRows: TicketRow[], results: Re
   const written = (key: string) => results[key]?.outcome === 'done';
   const changed = shown.filter(row => {
     const current = now.get(row.key);
-    if (!current || current.updated === row.updated) return false;
-    return !(written(row.key) && results[row.key].updated === current.updated);
+    if (!current || sameUpdatedTime(current.updated, row.updated)) return false;
+    const own = results[row.key]?.updated;
+    return !(written(row.key) && own !== undefined && sameUpdatedTime(own, current.updated));
   }).map(row => row.key);
   const gone = shown.filter(row => !now.has(row.key) && !written(row.key)).map(row => row.key);
   const added = fresh.filter(row => !before.has(row.key)).length;
@@ -676,7 +681,10 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
           results[target.key] = { outcome: 'refused', reason: 'no longer exists in Jira' };
           return false;
         }
-        if (current.updated !== target.updated) {
+        if (!sameUpdatedTime(current.updated, target.updated)) {
+          deps.onDiag?.('warn', `Ticket list: ${target.key} changed in Jira since the board read it, so it was not written to`, {
+            key: target.key, stored: target.updated, current: current.updated,
+          });
           results[target.key] = { outcome: 'refused', reason: 'changed in Jira since the board read it' };
           conflicts.push({ id: target.key, target: target.key, message: 'changed in Jira and was not written to.', stored: target.status, fresh: current.status });
           return false;

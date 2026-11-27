@@ -84,6 +84,7 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
       return access.configured ? access.config.baseUrl : undefined;
     },
     now: options.now,
+    ...(options.onDiag ? { onDiag: options.onDiag } : {}),
 
     resolveFilter: async filter => {
       try {

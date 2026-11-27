@@ -577,6 +577,30 @@ describe('applying the Already ticketed actions', () => {
     expect(applied.conflicts).toEqual([]);
   });
 
+  it('writes to a ticket whose update time Jira now spells another way but is the same moment', async () => {
+    jira.tickets = { 'PROJ-1': veracodeTicket(['101', '201'], { updated: '2026-05-01T10:00:00.000+0100' }) };
+    const file = writeVeracode([
+      { id: '101', file: 'A.java' }, { id: '102', file: 'A.java', line: 20 },
+      { id: '201', file: 'B.java' }, { id: '202', file: 'B.java', line: 20 },
+    ]);
+    const session = onTicketed(await open(recipe('veracode', file)));
+    jira.tickets['PROJ-1'].updated = '2026-05-01T10:00:00.000+01:00';
+
+    const applied = await apply(session, plan(session));
+    expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'done' })]);
+  });
+
+  it('logs the ticket and both update times when it refuses a ticket that changed', async () => {
+    const session = await twoRowsOneTicket();
+    const logs: Array<{ level: string; details?: unknown }> = [];
+    deps = { ...deps, onDiag: (level, _message, details) => { logs.push({ level, details }); } };
+    jira.tickets['PROJ-1'].updated = 'x9';
+
+    const applied = await apply(session, plan(session));
+    expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'refused', reason: 'changed in Jira since the board read it' })]);
+    expect(logs.filter(l => l.level === 'warn').map(l => l.details)).toContainEqual({ key: 'PROJ-1', stored: 't1', current: 'x9' });
+  });
+
   it('refuses to write when the tickets\' update times could not be read, and says so', async () => {
     jira.tickets = { 'PROJ-1': veracodeTicket(['101', '201']) };
     const file = writeVeracode([

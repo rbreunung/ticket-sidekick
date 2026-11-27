@@ -206,6 +206,27 @@ describe('applying a change', () => {
     expect(applied.conflicts).toEqual([{ id: 'PROJ-2', target: 'PROJ-2', message: 'changed in Jira and was not written to.', stored: 'Open', fresh: 'In Progress' }]);
   });
 
+  it('writes a ticket whose update time Jira now spells another way but is the same moment', async () => {
+    const deps = fake([row(1, 'Open', '2026-05-01T10:00:00.000+0100')]);
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup' } });
+    deps.jira.get('PROJ-1')!.updated = '2026-05-01T10:00:00.000+01:00';
+    const { applied } = await apply(s, deps);
+    expect(deps.fields).toEqual(['PROJ-1.labels=cleanup']);
+    expect(applied.results).toEqual([{ target: 'PROJ-1', outcome: 'done' }]);
+  });
+
+  it('logs the ticket and both update times when it refuses a ticket that changed', async () => {
+    const deps = fake();
+    const logs: Array<{ level: string; message: string; details?: unknown }> = [];
+    deps.onDiag = (level, message, details) => { logs.push({ level, message, details }); };
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup' } });
+    Object.assign(deps.jira.get('PROJ-2')!, { updated: 't9' });
+    await apply(s, deps);
+    expect(logs.filter(l => l.level === 'warn').map(l => l.details)).toEqual([{ key: 'PROJ-2', stored: 't1', current: 't9' }]);
+  });
+
   it('reports a ticket Jira refused and goes on with the others', async () => {
     const deps = fake();
     let s = await open(deps);
@@ -449,6 +470,25 @@ describe('an Apply interrupted and the board restored', () => {
     ]);
     const planned = ticketListKind.plan!(shown, { type: 'apply' });
     expect(planned.ok && planned.plan.lines.map(l => l.target)).toEqual(['PROJ-3', 'PROJ-4', 'PROJ-5']);
+  });
+
+  it('does not call a ticket it moved changed when the search spells its new update time another way', async () => {
+    const deps = five();
+    const move = deps.move;
+    deps.move = async (key, status, resolution) => {
+      const note = await move(key, status, resolution);
+      deps.jira.get(key)!.updated = '2026-05-01T11:00:00.000+0100';
+      return note;
+    };
+    deps.search = async () => ({
+      rows: [...deps.jira.values()].map(r => ({ ...r, updated: r.updated.replace(/([+-]\d\d)(\d\d)$/, '$1:$2') })),
+      truncated: false,
+    });
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'transition', status: 'In Review' } });
+    const { working } = await interruptedApply(s, deps, 2);
+    const checked = ticketListKind.reconcile({ ...s, working }, await ticketListKind.read(s.recipe, deps), 'background');
+    expect(checked.working.outOfDate).toBeNull();
   });
 
   it('is out of date when a ticket it moved was changed again in Jira by someone else', async () => {

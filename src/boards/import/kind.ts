@@ -12,6 +12,7 @@ import { buildReviewPage } from '../../imports/rows';
 import type { AcceptedHidden, TicketedAction } from '../../imports/types';
 import { countedNoun } from '../../utils/chatPrimitives';
 import type { DateKind } from '../../utils/waltzDates';
+import { sameUpdatedTime } from '../../utils/updatedTime';
 import {
   ReportNotFoundError, isEmailRow, isLeftOut, newRows, readImport, rowKeyOf, slicesOf, staleTickets, ticketedRows,
   type ImportData, type ImportDeps, type ImportRow, type ImportTab, type SliceEntry,
@@ -395,7 +396,7 @@ function hasUnfinishedChoices(data: ImportData, working: ImportWorking, tab: Imp
   return false;
 }
 
-const sameUpdated = (a?: string, b?: string) => a === undefined || b === undefined || a === b;
+const sameUpdated = (a?: string, b?: string) => a === undefined || b === undefined || sameUpdatedTime(a, b);
 
 /**
  * The tabs whose slice differs between the stored and the fresh reading, after taking off what the
@@ -409,7 +410,7 @@ function changedTabs(stored: DerivedPart<ImportData>, fresh: DerivedPart<ImportD
   const createdTickets = new Set(writes.created.map(c => c.key));
   const own = (ticket: string | undefined, updated: string | undefined) => {
     const record = ticket ? writes.tickets[ticket] : undefined;
-    return record !== undefined && record.updated !== undefined && record.updated === updated;
+    return record !== undefined && record.updated !== undefined && updated !== undefined && sameUpdatedTime(record.updated, updated);
   };
   const changed = new Set<ImportTab>();
 
