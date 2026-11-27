@@ -570,7 +570,7 @@ function render(view, board, locked, state) {
       h('vscode-button', { id: 'dismiss-dropped', secondary: true, disabled: locked, onClick: () => board.act({ type: 'dismiss-dropped' }) }, 'Dismiss')) : null,
     // Reload, the security overview export and the matched-ticket search belong to Veracode and Waltz reports.
     ctx.email ? null : h('div', { class: 'bar' },
-      h('vscode-button', { id: 'reload-report', secondary: true, disabled: locked || writesOff, onClick: () => { previewTab = shown; return board.apply({ type: 'reload-report' }); } }, 'Reload report'),
+      h('vscode-button', { id: 'reload-report', secondary: true, disabled: locked || writesOff, onClick: () => ctx.apply({ type: 'reload-report' }) }, 'Reload report'),
       h('vscode-button', { id: 'save-csv', secondary: true, disabled: locked, onClick: () => board.save('csv') }, 'Save overview as CSV…'),
       h('vscode-button', { id: 'save-xlsx', secondary: true, disabled: locked, onClick: () => board.save('xlsx') }, 'Save overview as Excel…')),
     ctx.email ? null : searchBox(view, board, locked),
