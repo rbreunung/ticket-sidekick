@@ -5,6 +5,7 @@ import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
 import { fetchAllPages } from '../../utils/reportImport';
 import { quoteJqlValue } from '../../utils/searchConstraints';
+import { overviewColumnsReader } from '../overviewColumns';
 import { ISSUE_KEY_PATTERN, type ImportDeps, type ImportDescriptors } from './read';
 
 // What the import board needs from Jira, built on the shared services: template resolution, the
@@ -78,9 +79,11 @@ export function importJiraDeps(options: ImportJiraOptions): ImportDeps {
       });
     },
 
-    overviewTickets: async (keys, source) => {
+    extraColumns: overviewColumnsReader(options.getJira, options.onDiag),
+
+    overviewTickets: async (keys, source, columns) => {
       const { ticketService } = await jira();
-      return guarded('Reading the matched tickets', () => ticketService.getOverviewTicketsByKeys(keys, source));
+      return guarded('Reading the matched tickets', () => ticketService.getOverviewTicketsByKeys(keys, source, columns));
     },
 
     updatedTimes: async keys => {

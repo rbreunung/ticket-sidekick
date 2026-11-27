@@ -127,7 +127,7 @@ function ticketRow(view, board, row, locked, subtask) {
     select,
     h('td', {}, subtask ? ['↳ ', key] : key),
     h('td', {}, row.summary), h('td', {}, status), h('td', {}, row.issueType), h('td', {}, row.assignee), h('td', {}, row.priority),
-    view.columns.map(column => h('td', {}, row.extra?.[column.id] ?? '')),
+    view.columns.map(column => h('td', {}, row.extra?.[column.id] || 'Not set')),
     h('td', { class: row.blocked || (row.result && row.result.outcome !== 'done') ? 'flag-overdue' : undefined }, note));
 }
 
@@ -138,7 +138,7 @@ function render(view, board, busy, state) {
     h('thead', {}, h('tr', {},
       h('th', { scope: 'col' }, 'Select'),
       COLUMNS.map(([column, text]) => sortHeader(view, board, column, text, locked)),
-      view.columns.map(column => h('th', { scope: 'col' }, column.name)),
+      view.columns.map(column => sortHeader(view, board, `extra:${column.id}`, column.name, locked)),
       h('th', { scope: 'col' }, 'Last result'))),
     h('tbody', {}, view.rows.map(row => [ticketRow(view, board, row, locked, false), (row.subtasks ?? []).map(sub => ticketRow(view, board, sub, locked, true))])));
 

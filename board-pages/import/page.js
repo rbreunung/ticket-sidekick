@@ -69,6 +69,14 @@ function headRow(...labels) {
   return h('thead', {}, h('tr', {}, labels.map(label => h('th', { scope: 'col' }, label))));
 }
 
+/** A column title that sorts the rows when clicked: a button inside the header with its own id, so keyboard focus survives the repaint. */
+function sortHeader(sort, board, column, text, locked) {
+  const active = sort?.column === column;
+  return h('th', { scope: 'col', 'aria-sort': active ? (sort.descending ? 'descending' : 'ascending') : 'none' },
+    h('button', { class: 'sort', id: `sort-ticketed-${column}`, disabled: locked, onClick: () => board.act({ type: 'ticketed-sort', column }) },
+      text, active ? (sort.descending ? ' ▼' : ' ▲') : ''));
+}
+
 /** A select with a "Choose…" first option, which `lockPlaceholder` keeps from being picked again. */
 function choiceSelect(id, off, current, options, onChange, lockPlaceholder = true) {
   return h('select', { id, disabled: off, onChange },
@@ -238,8 +246,9 @@ const MAX_ALSO_OPEN_SHOWN = 3;
 function ticketedTab(view, board, ctx) {
   const ext = view.ext.ticketed ?? { filter: view.ticketed?.show === 'decision' ? 'changed' : 'all', notice: null, noDueDate: [], counts: {}, actionLabels: {} };
   const all = view.ticketed?.rows ?? [];
-  const shownIds = ext.shown ? new Set(ext.shown) : undefined;
-  const rows = shownIds ? all.filter(r => shownIds.has(r.id)) : all;
+  const byId = new Map(all.map(r => [r.id, r]));
+  const rows = ext.shown ? ext.shown.map(id => byId.get(id)).filter(Boolean) : all;
+  const columns = view.ticketed?.columns ?? [];
   const labels = ext.actionLabels ?? {};
   const noDue = new Set(ext.noDueDate ?? []);
   for (const id of [...picked]) if (!all.some(r => r.id === id && !r.written)) picked.delete(id);
@@ -259,7 +268,13 @@ function ticketedTab(view, board, ctx) {
     actions.map(a => h('option', { value: a, selected: a === drafts.setShown }, labels[a] ?? a)));
 
   const table = h('div', { class: 'table-wrap' }, h('table', { 'aria-label': 'Already ticketed rows' },
-    headRow('Pick', 'Ticket', 'Finding', 'Change', 'Action', 'Result'),
+    h('thead', {}, h('tr', {},
+      h('th', { scope: 'col' }, 'Pick'),
+      sortHeader(ext.sort, board, 'ticket', 'Ticket', off), sortHeader(ext.sort, board, 'finding', 'Finding', off), sortHeader(ext.sort, board, 'change', 'Change', off),
+      sortHeader(ext.sort, board, 'assignee', 'Assignee', off),
+      columns.map(c => sortHeader(ext.sort, board, `extra:${c.id}`, c.name, off)),
+      sortHeader(ext.sort, board, 'action', 'Action', off),
+      h('th', { scope: 'col' }, 'Result'))),
     h('tbody', {}, rows.map(row => {
       const result = resultFor(row.ticket, ctx.results);
       const state = rowOutcome(ctx.pending.has(row.ticket) && !row.written, result, row.written, 'Written');
@@ -274,6 +289,8 @@ function ticketedTab(view, board, ctx) {
             row.alsoOpen.length > MAX_ALSO_OPEN_SHOWN ? ` +${row.alsoOpen.length - MAX_ALSO_OPEN_SHOWN}` : null) : null),
         h('td', {}, h('div', {}, row.ref), h('div', { class: 'muted' }, row.summary)),
         h('td', {}, row.change ?? 'Unchanged', noDue.has(row.id) ? h('div', {}, 'No Due Date') : null),
+        h('td', {}, row.assignee),
+        (row.values ?? []).map(value => h('td', {}, value)),
         h('td', {}, h('select', {
           id: `action-${row.id}`, 'aria-label': `Action for ${row.ref}`, disabled: off || row.written,
           onChange: e => board.act({ type: 'ticketed-action', id: row.id, action: e.target.value }),

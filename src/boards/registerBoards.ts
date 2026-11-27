@@ -32,6 +32,7 @@ import { reviewKind } from './review/kind';
 import { REVIEW_KIND } from './review/recipe';
 import { REVIEW_START_BOARD, ReviewStartScreen } from './review/startScreen';
 import { SECURITY_REPORT_KIND, securityReportKind, type SecurityReportDeps } from './securityReport/kind';
+import { overviewColumnsReader } from './overviewColumns';
 import { ticketListJiraDeps } from './ticketList/jiraDeps';
 import { checkCleanupRules, describeRuleProblem, type RuleProblem } from './ticketList/cleanupSource';
 import { TICKET_LIST_KIND, ticketListKind } from './ticketList/kind';
@@ -144,6 +145,7 @@ export function registerBoards(
       const ticketService = new TicketService(access.client, (level, message, details) => logDiag('jira.ticketService', level, message, details));
       return { ticketService, baseUrl: access.config.baseUrl };
     },
+    extraColumns: overviewColumnsReader(getJira, (level, message, details) => logDiag('jira.ticketService', level, message, details)),
     defaultProject: () => vscode.workspace.getConfiguration('ticketSidekick').get<string>('jira.defaultProject') ?? '',
     csvDelimiter: () => resolveCsvDelimiter(vscode.workspace.getConfiguration('ticketSidekick').get('jira.overviewCsvDelimiter')),
     today: () => localDate(),

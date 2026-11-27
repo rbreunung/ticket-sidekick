@@ -135,6 +135,81 @@ describe('filters and sort', () => {
   });
 });
 
+describe('assignee and extra columns', () => {
+  const owned = (assignee: string | undefined, team: string): Partial<OverviewTicket> => ({ assignee, extra: { customfield_1: team }, fixVersions: ['1.0'] });
+  const OWNED: OverviewTicket[] = [
+    { ...TICKETS[0], ...owned('Team 10', 'Team 10') },
+    { ...TICKETS[1], ...owned('Team 2', 'Team 2') },
+    { ...TICKETS[2], ...owned('', '') },
+  ];
+  const COLUMNS = [{ id: 'customfield_1', name: 'Squad' }];
+  const withOwners = (requested: unknown[][] = []) => deps({ extraColumns: async () => COLUMNS as never }, {
+    listOverviewTickets: (async (_project: string, columns: unknown[]) => { requested.push(columns); return { tickets: OWNED, truncated: false }; }) as never,
+  });
+  const keysAfter = async (column: string, clicks: number): Promise<string[]> => {
+    let s = await session(undefined, withOwners());
+    for (let i = 0; i < clicks; i++) {
+      const next = securityReportKind.reduce(s, { type: 'sort', column: column as never });
+      if (!next.ok) throw new Error(next.reason);
+      s = { ...s, working: next.working };
+    }
+    return securityReportKind.view(s).tables[0].rows.map(r => r.ticketKey!);
+  };
+
+  it('shows who owns each ticket and one column per configured field', async () => {
+    const view = securityReportKind.view(await session(undefined, withOwners()));
+    expect(view.columns).toEqual([{ id: 'customfield_1', name: 'Squad' }]);
+    const rows = view.tables[0].rows;
+    expect(rows.map(r => [r.ticketKey, r.assignee, r.values])).toEqual([
+      ['PROJ-1', 'Team 10', ['Team 10']], ['PROJ-2', 'Team 2', ['Team 2']], ['PROJ-3', 'Unassigned', ['']],
+    ]);
+  });
+
+  it('asks for the configured columns when it reads Jira, and for none when none are configured', async () => {
+    const requested: unknown[][] = [];
+    await securityReportKind.read({ project: 'PROJ' }, withOwners(requested));
+    expect(requested).toEqual([COLUMNS]);
+    const plain: unknown[][] = [];
+    await securityReportKind.read({ project: 'PROJ' }, deps({}, { listOverviewTickets: (async (_p: string, columns: unknown[]) => { plain.push(columns); return { tickets: [], truncated: false }; }) as never }));
+    expect(plain).toEqual([[]]);
+  });
+
+  it('shows a dash where an older stored reading never read the assignee, and nothing for a row without a ticket', async () => {
+    const view = securityReportKind.view(await session());
+    expect(view.columns).toEqual([]);
+    expect(view.tables.flatMap(t => t.rows).every(r => r.assignee === '\u2014' && r.values.length === 0)).toBe(true);
+  });
+
+  it('sorts by assignee in natural order with the empty value last, either way round', async () => {
+    expect(await keysAfter('assignee', 1)).toEqual(['PROJ-2', 'PROJ-1', 'PROJ-3']);
+    expect(await keysAfter('assignee', 2)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+    expect(await keysAfter('assignee', 3)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+  });
+
+  it('sorts by a configured column the same way, and refuses a column it does not show', async () => {
+    expect(await keysAfter('extra:customfield_1', 1)).toEqual(['PROJ-2', 'PROJ-1', 'PROJ-3']);
+    expect(await keysAfter('extra:customfield_1', 2)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+    const s = await session(undefined, withOwners());
+    expect(securityReportKind.reduce(s, { type: 'sort', column: 'extra:nope' as never }).ok).toBe(false);
+  });
+
+  it('shows a value Jira sent as plain text, markup and formula characters included', async () => {
+    const hostile = [{ ...OWNED[0], assignee: '=HYPERLINK("x")', extra: { customfield_1: '<img src=x onerror=alert(1)>' } }];
+    const d = deps({ extraColumns: async () => COLUMNS as never }, { listOverviewTickets: (async () => ({ tickets: hostile, truncated: false })) as never });
+    const row = securityReportKind.view(await session(undefined, d)).tables[0].rows[0];
+    expect(row.assignee).toBe('=HYPERLINK("x")');
+    expect(row.values).toEqual(['<img src=x onerror=alert(1)>']);
+  });
+
+  it('drops a sort on a column the setting no longer lists when the report is read again, and keeps a sort on a built-in column', async () => {
+    const stored = await session({ sort: { column: 'extra:customfield_1', descending: false } }, withOwners());
+    const fresh = await securityReportKind.read(stored.recipe, deps({}, { listOverviewTickets: async () => ({ tickets: OWNED, truncated: false }) }));
+    expect(securityReportKind.reconcile(stored, fresh).working.sort).toBeNull();
+    const builtIn = await session({ sort: { column: 'assignee', descending: true } }, withOwners());
+    expect(securityReportKind.reconcile(builtIn, fresh).working.sort).toEqual({ column: 'assignee', descending: true });
+  });
+});
+
 describe('a restored report checked against Jira', () => {
   it('keeps filters and sort, and clears only a release filter whose release is gone', async () => {
     const stored = await session({ release: '1.0', tool: 'veracode', sort: { column: 'due', descending: false } });

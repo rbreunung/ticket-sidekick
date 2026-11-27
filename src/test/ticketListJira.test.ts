@@ -166,7 +166,7 @@ describe('extra columns', () => {
     } as never, true, { cleanupFields: ['fixVersions', 'customfield_1'] });
     const { rows } = await d.search('project = PROJ', 300, ['fixVersions', 'customfield_1']);
     expect(requested[0]).toEqual(['updated', 'parent', 'fixVersions', 'customfield_1']);
-    expect(rows[0].extra).toEqual({ fixVersions: '3.2, 3.3', customfield_1: 'Not set' });
+    expect(rows[0].extra).toEqual({ fixVersions: '3.2, 3.3', customfield_1: '' });
   });
 });
 

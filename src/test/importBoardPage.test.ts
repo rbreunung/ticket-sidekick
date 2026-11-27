@@ -93,7 +93,7 @@ function newRow(n: number, extra: Partial<NewRowView> = {}): NewRowView {
 function ticketedRow(n: number, extra: Partial<TicketedRowView> = {}): TicketedRowView {
   return {
     id: `A${n}`, ref: `Flaw ${200 + n}`, summary: `Finding ${n}`, ticket: `PROJ-${n}`, status: 'Open', resolved: false,
-    url: `https://jira.example.com/browse/PROJ-${n}`, change: n === 1 ? 'New: 301' : null, action: 'leave',
+    url: `https://jira.example.com/browse/PROJ-${n}`, assignee: 'Dana', values: [], change: n === 1 ? 'New: 301' : null, action: 'leave',
     allowedActions: ['rewrite', 'leave', 'follow-up'], needsDecision: n === 1, written: false, ...extra,
   };
 }
@@ -308,7 +308,7 @@ describe('the import board page', () => {
       steps: [{ kind: 'survivor-rewrite', label: 'rewrite the kept ticket', key: 'PROJ-1', status: 'done' }, failed],
     };
     installCanned({
-      state: boardState(baseView({ tab: 'ticketed', new: undefined, ticketed: { show: 'all', rows: [ticketedRow(1), ticketedRow(2)] }, ext: { ...baseView().ext, merge } })),
+      state: boardState(baseView({ tab: 'ticketed', new: undefined, ticketed: { columns: [], show: 'all', rows: [ticketedRow(1), ticketedRow(2)] }, ext: { ...baseView().ext, merge } })),
       answer: async op => {
         if (op === 'preview') return { planId: 'p2', title: 'Retry', lines: [], risky: false };
         throw { status: 404, message: 'Unknown request.' };
@@ -326,7 +326,7 @@ describe('the import board page', () => {
 
     await push({
       view: baseView({
-        tab: 'ticketed', new: undefined, ticketed: { show: 'all', rows: [] },
+        tab: 'ticketed', new: undefined, ticketed: { columns: [], show: 'all', rows: [] },
         ext: {
           ...baseView().ext,
           merge: {
@@ -343,7 +343,7 @@ describe('the import board page', () => {
     expect(actionsPosted().at(-1)).toEqual({ type: 'merge-close-target', issueType: 'Bug', option: 'status:Done' });
     expect(must('preview-merge-close').disabled).toBe(true);
 
-    await push({ view: baseView({ tab: 'ticketed', new: undefined, ticketed: { show: 'all', rows: [] }, ext: { ...baseView().ext, merge: { ...merge, state: 'finished', actions: ['acknowledge'], failed: undefined, report: { missing: [], closedWithout: [], workflowHint: false } } } }) });
+    await push({ view: baseView({ tab: 'ticketed', new: undefined, ticketed: { columns: [], show: 'all', rows: [] }, ext: { ...baseView().ext, merge: { ...merge, state: 'finished', actions: ['acknowledge'], failed: undefined, report: { missing: [], closedWithout: [], workflowHint: false } } } }) });
     await click(must('merge-acknowledge'));
     expect(actionsPosted().at(-1)).toEqual({ type: 'merge-acknowledge' });
   });
@@ -352,7 +352,7 @@ describe('the import board page', () => {
     installCanned({
       state: boardState(baseView({
         tab: 'ticketed', new: undefined,
-        ticketed: { show: 'decision', rows: [ticketedRow(1), ticketedRow(2), ticketedRow(3)] },
+        ticketed: { columns: [], show: 'decision', rows: [ticketedRow(1), ticketedRow(2), ticketedRow(3)] },
         ext: { ...baseView().ext, ticketed: { filter: 'changed', shown: ['A1'], noDueDate: ['A1'], notice: null, counts: { changed: 1, unchanged: 2, all: 3 }, actionLabels: { update: 'update', 'follow-up': 'new ticket', rewrite: 'rewrite', 're-create': 're-create', leave: 'leave' } } },
       })),
     });
@@ -376,11 +376,42 @@ describe('the import board page', () => {
     expect(action.elements().find(o => o.value === 'follow-up')?.textContent).toBe('new ticket');
   });
 
+  it('shows the assignee and the extra columns of Already ticketed as text and sorts them from the column titles', async () => {
+    const labels = { update: 'update', 'follow-up': 'new ticket', rewrite: 'rewrite', 're-create': 're-create', leave: 'leave' };
+    const sorted = { filter: 'all', shown: ['A2', 'A1'], noDueDate: [], notice: null, counts: { changed: 1, unchanged: 1, all: 2 }, actionLabels: labels, sort: { column: 'assignee', descending: false } };
+    installCanned({
+      state: boardState(baseView({
+        tab: 'ticketed', new: undefined,
+        ticketed: { columns: [{ id: 'customfield_1', name: 'Squad' }], show: 'all', rows: [
+          ticketedRow(1, { assignee: 'Team 10', values: ['<img src=x onerror=alert(1)>'] }), ticketedRow(2, { assignee: 'Team 2', values: ['Alpha'] }),
+        ] },
+        ext: { ...baseView().ext, ticketed: sorted },
+      })),
+    });
+    await loadPage();
+    // The rows come in the order the extension gives, and the values are text, not markup.
+    expect(page.document.body.elements().filter(el => el.id?.toString().startsWith('row-')).map(el => el.id)).toEqual(['row-A2', 'row-A1']);
+    expect(rowEl('A1').textContent).toContain('<img src=x onerror=alert(1)>');
+    expect(rowEl('A1').textContent).toContain('Team 10');
+    // Every data column sorts; Pick and Result do not.
+    const headers = page.document.body.elements().filter(el => el.tagName === 'th' && el.scope === 'col');
+    expect(headers.map(h => h.textContent.trim().replace(/ [▲▼]$/, ''))).toEqual(['Pick', 'Ticket', 'Finding', 'Change', 'Assignee', 'Squad', 'Action', 'Result']);
+    expect(headers.filter(h => h.elements().some(el => el.tagName === 'button')).map(h => h.textContent.trim().replace(/ [▲▼]$/, ''))).toEqual(['Ticket', 'Finding', 'Change', 'Assignee', 'Squad', 'Action']);
+    expect(must('sort-ticketed-assignee').parent?.getAttribute('aria-sort')).toBe('ascending');
+    expect(must('sort-ticketed-ticket').parent?.getAttribute('aria-sort')).toBe('none');
+    await click(must('sort-ticketed-extra:customfield_1'));
+    expect(actionsPosted().at(-1)).toEqual({ type: 'ticketed-sort', column: 'extra:customfield_1' });
+    // The clicked title is drawn again with the same id, so keyboard focus can return to it.
+    must('sort-ticketed-assignee').focus();
+    await push({ view: baseView({ tab: 'ticketed', new: undefined, ticketed: { columns: [], show: 'all', rows: [ticketedRow(1)] }, ext: { ...baseView().ext, ticketed: { ...sorted, shown: ['A1'] } } }) });
+    expect(page.document.activeElement?.id).toBe('sort-ticketed-assignee');
+  });
+
   it('names the other open tickets on an Already ticketed row, and the dates side by side', async () => {
     installCanned({
       state: boardState(baseView({
         tab: 'ticketed', new: undefined,
-        ticketed: { show: 'all', rows: [
+        ticketed: { columns: [], show: 'all', rows: [
           ticketedRow(1, { alsoOpen: [{ key: 'PROJ-9', url: 'https://jira.example.com/browse/PROJ-9' }], change: 'Policy date 2026-11-01 → 2026-12-01' }),
           ticketedRow(2),
         ] },

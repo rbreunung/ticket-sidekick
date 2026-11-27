@@ -79,7 +79,7 @@ describe('renderOverviewCsv', () => {
     expect(lines.join('\n')).toContain('"a,b.java"');
   });
 
-  it('writes the release date right after the Fix Version and Members as the last column', () => {
+  it('writes the release date right after the Fix Version and Assignee as the last column, after Members', () => {
     const a = makeComponent('a:1');
     const cells = csvOf([waltzTicket('SEC-2', [a], { fixVersions: ['2026.11'], dueDate: '2026-11-01' })]);
     const header = cells[0].split(',');
@@ -87,8 +87,8 @@ describe('renderOverviewCsv', () => {
 
     expect(header.indexOf('Release Date')).toBe(header.indexOf('Fix Version') + 1);
     expect(header.indexOf('Due Date')).toBe(header.indexOf('Release Date') + 1);
-    expect(header.at(-1)).toBe('Members');
-    expect(row.at(-1)).toBe('a:1');
+    expect(header.at(-1)).toBe('Assignee');
+    expect(row[header.indexOf('Members')]).toBe('a:1');
     expect(row[header.indexOf('Release Date')]).toBe('2026-11-15');
   });
 
@@ -137,5 +137,19 @@ describe('resolveCsvDelimiter', () => {
     expect(resolveCsvDelimiter('tab')).toBe('\t');
     expect(resolveCsvDelimiter('pipe')).toBe(',');
     expect(resolveCsvDelimiter(undefined)).toBe(',');
+  });
+});
+
+describe('Assignee and extra columns in the CSV', () => {
+  it('guards a formula in a name or a field value that Jira sent, like every other cell', () => {
+    const overview = buildOverview({
+      tickets: [veracodeTicket('SEC-1', [makeFlaw('1')], { assignee: '=cmd|x', extra: { customfield_1: '+1+1' } }).ticket],
+      descriptions: {}, versions: VERSIONS, today: '2026-10-22', extraColumns: [{ id: 'customfield_1', name: 'Squad' }],
+    });
+    const lines = renderOverviewCsv(overview, ',').slice(CSV_BOM.length).trimEnd().split('\r\n');
+    const header = lines[0].split(',');
+    const row = lines[1].split(',');
+    expect(row[header.indexOf('Assignee')]).toBe("'=cmd|x");
+    expect(row[header.indexOf('Squad')]).toBe("'+1+1");
   });
 });

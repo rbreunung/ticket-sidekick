@@ -6,7 +6,8 @@ import { TemplateService } from '../../templates/TemplateService';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
 import type { JiraFieldMeta } from '../../jira/IJiraClient';
-import { renderFieldValue } from '../../services/TicketService';
+import { isEmptyRendered, renderFieldValue } from '../../services/fieldText';
+import { resolveExtraColumns } from '../../services/extraColumns';
 import type { ExtraColumn, TicketListDeps, TicketRow } from './kind';
 
 // What the ticket list board needs from Jira, built on the services the Jira tools use: the same
@@ -24,10 +25,15 @@ export interface TicketListJiraOptions {
   onDiag?: DiagLogger;
 }
 
-/** A field value as the board shows it: plain text, without the markdown emphasis the chat tables use. */
+/**
+ * A field value as the board keeps it: plain text, without the markdown emphasis the chat tables use. A field with no
+ * value (or no field description) is the raw empty string, never a word, so a sort can tell it from a value; the page
+ * shows "Not set" for it.
+ */
 function plainFieldText(value: unknown, meta: JiraFieldMeta | undefined): string {
-  if (!meta) return 'Not set';
-  return renderFieldValue(value, meta).replace(/^_(.*)_$/, '$1');
+  if (!meta) return '';
+  const rendered = renderFieldValue(value, meta);
+  return isEmptyRendered(rendered) ? '' : rendered.replace(/^_(.*)_$/, '$1');
 }
 
 function textOf(value: unknown): string {
@@ -66,13 +72,10 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
       const search = access.configured ? access.config.searchFields : [];
       const cleanup = access.configured ? access.config.cleanupFields : [];
       if (search.length + cleanup.length === 0) return { search: [], cleanup: [] };
-      const meta = await guarded(metaById);
-      const column = (setting: string) => (id: string): ExtraColumn => {
-        const known = meta.get(id);
-        if (!known) options.onDiag?.('warn', `Unrecognized field in ${setting}: ${id}`, { fieldId: id });
-        return { id, name: known?.name ?? id };
-      };
-      return { search: search.map(column('searchFields')), cleanup: cleanup.map(column('cleanupFields')) };
+      const loadMeta = async () => [...(await guarded(metaById)).values()];
+      const columns = async (ids: string[], setting: string): Promise<ExtraColumn[]> =>
+        (await resolveExtraColumns(ids, loadMeta, { setting, keepUnknown: true, onDiag: options.onDiag })).map(({ id, name }) => ({ id, name }));
+      return { search: await columns(search, 'searchFields'), cleanup: await columns(cleanup, 'cleanupFields') };
     },
 
     jiraConfigured: async () => (await options.getJira()).configured,

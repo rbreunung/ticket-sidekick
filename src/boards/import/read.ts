@@ -3,6 +3,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { DerivedPart } from '../../sessions/sessionTypes';
 import type { OverviewTicket, ProjectVersionInfo, TicketService } from '../../services/TicketService';
+import type { ResolvedColumn } from '../../services/extraColumns';
+import type { ExtraColumnInfo } from '../../utils/securityOverview';
 import type { IJiraClient } from '../../jira/IJiraClient';
 import type { ReportImportDescriptor } from '../../imports/descriptor';
 import type { ImportReviewInput, ReviewBuildEvent } from '../../imports/review';
@@ -61,8 +63,10 @@ export interface ImportDeps {
   buildReview<TItem, TRow extends ReviewRowBase>(
     input: ImportReviewInput<TItem>, descriptor: ReportImportDescriptor<TItem, TRow>, onEvent: (event: ReviewBuildEvent) => void,
   ): Promise<{ session: ReviewSession<TRow>; dedupFailed: boolean }>;
-  /** The named tickets with the fields the overview needs; throws with a worded reason. */
-  overviewTickets(keys: string[], source: OverviewTicket['source']): Promise<OverviewTicket[]>;
+  /** The named tickets with the fields the overview needs, and the values of the configured extra columns; throws with a worded reason. */
+  overviewTickets(keys: string[], source: OverviewTicket['source'], columns?: ResolvedColumn[]): Promise<OverviewTicket[]>;
+  /** The extra columns `ticketSidekick.jira.securityReportFields` asks for, read once per reading; absent means none. */
+  extraColumns?(): Promise<ResolvedColumn[]>;
   /** Jira's `updated` time of each named ticket; throws with a worded reason. */
   updatedTimes(keys: string[]): Promise<Record<string, string>>;
   projectVersions(projectKey: string): Promise<ProjectVersionInfo[]>;
@@ -90,6 +94,8 @@ export interface ImportDeps {
 /** What the export reads from Jira with the review. */
 export interface ImportExportData {
   tickets: OverviewTicket[];
+  /** The extra columns the tickets were read with; absent in a reading from before they existed. */
+  columns?: ExtraColumnInfo[];
   /** Why the tickets could not be read; the export then refuses. */
   ticketsProblem?: string;
   versions: ProjectVersionInfo[];
@@ -101,6 +107,8 @@ export interface ImportExportData {
 
 export interface ImportData {
   reportFileName: string;
+  /** The extra columns of the Already ticketed tab at this reading; absent in a reading from before they existed. */
+  columns?: ExtraColumnInfo[];
   /** The engine's review: every row, the stale tickets, the matched tickets' summaries. */
   review: ReviewSession<ImportRow>;
   /** Each row's dedup keys, by row id. */
@@ -253,14 +261,16 @@ async function readWith<TItem, TRow extends ReviewRowBase & ImportRow>(
   }
 
   const notices: string[] = [];
-  const template = await deps.templateFields(recipe, descriptor);
+  const [template, columns] = await Promise.all([deps.templateFields(recipe, descriptor), deps.extraColumns?.() ?? []]);
   if (template.problem) notices.push(template.problem);
+  const columnInfos = columns.map(({ id, name }) => ({ id, name }));
 
   let staleFailed = false;
   let descriptionsUnread = 0;
   const { session, dedupFailed } = await deps.buildReview({
     projectKey: recipe.projectKey, items: parsed.items, rawItems: parsed.rawItems, reportFilePath: recipe.reportPath,
     issueType: recipe.issueType, templateName: recipe.templateName, additionalFields: template.additionalFields,
+    extraColumns: columns,
   }, descriptor, event => {
     if (event.kind === 'stale-failed') staleFailed = true;
     else if (event.kind === 'descriptions-unread') descriptionsUnread = event.failed;
@@ -281,8 +291,8 @@ async function readWith<TItem, TRow extends ReviewRowBase & ImportRow>(
 
   // What the export lists: the open targets of the matched rows and the stale tickets.
   const data: ImportData = {
-    reportFileName: path.basename(recipe.reportPath), review, rowKeys, updated: {}, accepted, staleFailed, descriptionsUnread, notices,
-    export: { tickets: [], versions: [], versionsFailed: false, descriptions: {} },
+    reportFileName: path.basename(recipe.reportPath), columns: columnInfos, review, rowKeys, updated: {}, accepted, staleFailed, descriptionsUnread, notices,
+    export: { tickets: [], columns: columnInfos, versions: [], versionsFailed: false, descriptions: {} },
   };
   const tracked = [...new Set(ticketedRows(data).flatMap(r => (r.target && !r.target.resolved ? [r.target.key] : [])))];
   const stale = staleTickets(data).map(t => t.key);
@@ -295,7 +305,7 @@ async function readWith<TItem, TRow extends ReviewRowBase & ImportRow>(
     (async () => {
       if (exportKeys.length === 0) return;
       try {
-        data.export.tickets = await deps.overviewTickets(exportKeys, source);
+        data.export.tickets = await deps.overviewTickets(exportKeys, source, columns);
       } catch (err) {
         data.export.ticketsProblem = messageOf(err);
       }

@@ -3,6 +3,8 @@
 // goes through the injected `onDiag`, progress through `onEvent`.
 import * as fs from 'fs';
 import type { TicketService } from '../services/TicketService';
+import { renderedExtras } from '../services/fieldText';
+import type { ResolvedColumn } from '../services/extraColumns';
 import type { IJiraClient } from '../jira/IJiraClient';
 import { TemplateService } from '../templates/TemplateService';
 import { FieldResolver } from '../templates/FieldResolver';
@@ -144,6 +146,12 @@ export async function resolveTemplateFields<TItem, TRow extends ReviewRowBase>(
   }
 }
 
+/** The issue with its extra columns' values rendered as plain text, for the importers' dedup records. */
+function withRenderedExtras(issue: JqlIssueLike, columns: readonly ResolvedColumn[]): JqlIssueLike {
+  if (columns.length === 0) return issue;
+  return { ...issue, fields: { ...issue.fields, renderedExtra: renderedExtras(issue.fields as Record<string, unknown>, columns) } };
+}
+
 /** What a review is built from: the filtered report items, the choices made at import time, and where the report came from. */
 export interface ImportReviewInput<TItem> {
   projectKey: string;
@@ -155,6 +163,8 @@ export interface ImportReviewInput<TItem> {
   additionalFields: Record<string, unknown>;
   /** Target-ticket descriptions already read for this review, reused by a rebuild. */
   descriptionCache?: Record<string, string | null>;
+  /** The extra columns whose values the dedup search reads beside each matched ticket's own fields. */
+  extraColumns?: ResolvedColumn[];
 }
 
 /**
@@ -177,6 +187,7 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
   let dedupFailed = false;
   const plural = descriptor.itemNoun.replace('(s)', 's'); // 'flaw(s)' -> 'flaws', 'component(s)' -> 'components'
   const templateLabels = templateLabelsOf(input.additionalFields);
+  const extraColumns = input.extraColumns ?? [];
 
   // Dedup is optional — an importer that omits searchLabelOf/dedupKeyOf/labelToDedupKey (email)
   // has no per-item dedup key, so the "already ticketed" search is skipped entirely rather than run
@@ -201,8 +212,8 @@ export async function buildImportReview<TItem, TRow extends ReviewRowBase>(
         // Resolution + created let buildReviewRows pick each item's newest open ticket; duedate lets Veracode see which have none.
         // Every page is read: the union of an item's tickets decides its target and known findings.
         chunk => fetchAllPages(
-          (startAt, pageToken) => ticketService.searchTicketsRaw(buildDedupJql(input.projectKey, chunk), DEDUP_PAGE_SIZE, ['resolution', 'created', 'duedate'], startAt, pageToken)
-            .then(r => ({ ...r, issues: r.issues as JqlIssueLike[] })),
+          (startAt, pageToken) => ticketService.searchTicketsRaw(buildDedupJql(input.projectKey, chunk), DEDUP_PAGE_SIZE, ['resolution', 'created', 'duedate', ...extraColumns.map(c => c.id)], startAt, pageToken)
+            .then(r => ({ ...r, issues: (r.issues as JqlIssueLike[]).map(issue => withRenderedExtras(issue, extraColumns)) })),
           DEDUP_PAGE_SIZE,
           undefined,
           issue => issue.key,

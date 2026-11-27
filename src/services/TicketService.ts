@@ -9,6 +9,10 @@ import { formatFileSize } from '../utils/attachmentEligibility';
 import { mergedBanner, mergedSummary } from '../utils/ticketMerge';
 import { renderReviewTable, neutralizeMarkdownLinks, type ReviewTableColumn } from '../utils/chatPrimitives';
 import { fetchAllPages } from '../utils/reportImport';
+import type { ResolvedColumn } from './extraColumns';
+import { parseSprintItem, pickActiveOrFirst, renderFieldValue, renderedExtras } from './fieldText';
+
+export { renderFieldValue };
 
 export type FieldResolutionResult =
   | { kind: 'match'; field: JiraFieldMeta }
@@ -35,6 +39,10 @@ export interface OverviewTicket {
   dueDate: string | null;
   fixVersions: string[];
   source: 'veracode' | 'waltz';
+  /** The assignee's display name; '' when the ticket is unassigned, absent when it was never read (an older stored reading). */
+  assignee?: string;
+  /** The configured extra columns' values as plain text by field id; '' when a field has no value. */
+  extra?: Record<string, string>;
 }
 
 export interface OverviewTicketList {
@@ -60,9 +68,10 @@ const CALENDAR_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}/;
 const ISSUE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 const OVERVIEW_KEY_CHUNK = 50;
 
-function toOverviewTicket(issue: JiraIssue, fallbackSource: OverviewTicket['source']): OverviewTicket {
+function toOverviewTicket(issue: JiraIssue, fallbackSource: OverviewTicket['source'], columns: readonly ResolvedColumn[] = []): OverviewTicket {
   const labels = issue.fields.labels ?? [];
   const due = issue.fields.duedate;
+  const assignee = issue.fields.assignee;
   return {
     key: issue.key,
     summary: issue.fields.summary ?? '',
@@ -71,6 +80,8 @@ function toOverviewTicket(issue: JiraIssue, fallbackSource: OverviewTicket['sour
     dueDate: typeof due === 'string' && CALENDAR_DATE_PATTERN.test(due) ? due.slice(0, 10) : null,
     fixVersions: (issue.fields.fixVersions ?? []).map(v => v.name),
     source: labels.includes(OVERVIEW_MARKER_LABELS.veracode) ? 'veracode' : labels.includes(OVERVIEW_MARKER_LABELS.waltz) ? 'waltz' : fallbackSource,
+    assignee: typeof assignee?.displayName === 'string' ? assignee.displayName : '',
+    extra: renderedExtras(issue.fields as unknown as Record<string, unknown>, columns),
   };
 }
 
@@ -123,27 +134,6 @@ export function resolveFieldIdFuzzy(input: string, fields: JiraFieldMeta[]): Fie
 
 const EXCLUDED_FROM_TABLE = new Set(['summary', 'comment', 'subtasks', 'issuelinks']);
 
-// Jira DC (older) returns sprint values as serialized Java strings rather than JSON objects.
-// Both shapes are normalised to { name, state } here.
-function parseSprintItem(item: unknown): { name: string; state: string } | null {
-  if (typeof item === 'string') {
-    const name = item.match(/\bname=([^,\]]+)/)?.[1]?.trim();
-    const state = item.match(/\bstate=([^,\]]+)/)?.[1]?.toLowerCase();
-    return name ? { name, state: state ?? '' } : null;
-  }
-  if (typeof item === 'object' && item !== null && 'name' in item) {
-    return item as { name: string; state: string };
-  }
-  return null;
-}
-
-// A ticket can have multiple sprints (past + current); the active one is the one worth showing
-// or snapshotting, falling back to the first when none is active. Shared by every sprint-value
-// call site in this file (display and template-candidate extraction alike).
-function pickActiveOrFirst<T extends { state: string }>(items: T[]): T | undefined {
-  return items.find(s => s.state === 'active') ?? items[0];
-}
-
 // Sibling to parseSprintItem: extracts a sprint item's numeric id (for a writable { id }
 // literal) instead of its display name. Same dual-shape handling — Jira DC's serialized-Java
 // string vs Cloud's plain object — but a different field of interest, so kept separate rather
@@ -190,62 +180,6 @@ export function isTemplateShapedField(meta: JiraFieldMeta): boolean {
   if (custom.includes('gh-sprint')) return true;
   if (custom.includes('rm-teams')) return true;
   return false;
-}
-
-export function renderFieldValue(value: unknown, meta: JiraFieldMeta): string {
-  if (value === null || value === undefined) return '_Not set_';
-
-  // Sprint (gh-sprint in custom)
-  if (meta.schema.custom?.includes('gh-sprint') && Array.isArray(value)) {
-    const sprints = value.map(parseSprintItem).filter(Boolean) as Array<{ name: string; state: string }>;
-    const active = pickActiveOrFirst(sprints);
-    return active ? active.name : '_None_';
-  }
-
-  // User
-  if (meta.schema.type === 'user') {
-    const u = value as { displayName?: string } | null;
-    return u?.displayName ?? '_Unassigned_';
-  }
-
-  // Datetime
-  if (meta.schema.type === 'datetime' && typeof value === 'string') {
-    const d = new Date(value);
-    if (!isNaN(d.getTime())) {
-      const pad = (n: number) => String(n).padStart(2, '0');
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    }
-    return value;
-  }
-
-  // Date
-  if (meta.schema.type === 'date' && typeof value === 'string') return value.slice(0, 10);
-
-  // Named objects (status, priority, issuetype, version, …)
-  if (typeof value === 'object' && value !== null && !Array.isArray(value) && 'name' in value) {
-    return (value as { name: string }).name;
-  }
-
-  // Arrays
-  if (Array.isArray(value)) {
-    if (value.length === 0) return '_None_';
-    const items = value.map(item => {
-      if (typeof item === 'string') return item;
-      if (typeof item === 'object' && item !== null) {
-        if ('name' in item) return (item as { name: string }).name;
-        if ('value' in item) return (item as { value: string }).value;
-        if ('displayName' in item) return (item as { displayName: string }).displayName;
-      }
-      return String(item);
-    });
-    return items.length > 3
-      ? `${items.slice(0, 3).join(', ')} … (+${items.length - 3} more)`
-      : items.join(', ');
-  }
-
-  if (typeof value === 'number') return String(value);
-  if (typeof value === 'string') return value;
-  return String(value);
 }
 
 /**
@@ -852,16 +786,16 @@ export class TicketService {
    * security overview groups by. Reads every page up to {@link MAX_OVERVIEW_TICKETS}; a failed page rejects.
    * The project key is validated before it is put into JQL.
    */
-  async listOverviewTickets(projectKey: string): Promise<OverviewTicketList> {
+  async listOverviewTickets(projectKey: string, columns: readonly ResolvedColumn[] = []): Promise<OverviewTicketList> {
     if (!PROJECT_KEY_PATTERN.test(projectKey)) throw new Error(`"${projectKey}" is not a valid Jira project key.`);
     const jql = `project = ${projectKey} AND resolution is EMPTY AND (labels = "${OVERVIEW_MARKER_LABELS.veracode}" OR labels = "${OVERVIEW_MARKER_LABELS.waltz}") ORDER BY key ASC`;
     const issues = await fetchAllPages<JiraIssue>(
-      (startAt, pageToken) => this.searchTicketsRaw(jql, OVERVIEW_PAGE_SIZE, ['duedate', 'resolution'], startAt, pageToken),
+      (startAt, pageToken) => this.searchTicketsRaw(jql, OVERVIEW_PAGE_SIZE, ['duedate', 'resolution', ...columns.map(c => c.id)], startAt, pageToken),
       OVERVIEW_PAGE_SIZE,
       MAX_OVERVIEW_TICKETS,
       issue => issue.key,
     );
-    const tickets = issues.map(issue => toOverviewTicket(issue, 'waltz'));
+    const tickets = issues.map(issue => toOverviewTicket(issue, 'waltz', columns));
     return { tickets, truncated: issues.length >= MAX_OVERVIEW_TICKETS };
   }
 
@@ -870,18 +804,18 @@ export class TicketService {
    * validated before they reach JQL and read 50 at a time; `fallbackSource` names the importer when a ticket has
    * lost its marker label.
    */
-  async getOverviewTicketsByKeys(keys: string[], fallbackSource: OverviewTicket['source']): Promise<OverviewTicket[]> {
+  async getOverviewTicketsByKeys(keys: string[], fallbackSource: OverviewTicket['source'], columns: readonly ResolvedColumn[] = []): Promise<OverviewTicket[]> {
     const valid = [...new Set(keys)].filter(k => ISSUE_KEY_PATTERN.test(k));
     const tickets: OverviewTicket[] = [];
     for (let i = 0; i < valid.length; i += OVERVIEW_KEY_CHUNK) {
       const chunk = valid.slice(i, i + OVERVIEW_KEY_CHUNK);
       const issues = await fetchAllPages<JiraIssue>(
-        (startAt, pageToken) => this.searchTicketsRaw(`key in (${chunk.join(', ')}) ORDER BY key ASC`, OVERVIEW_KEY_CHUNK, ['duedate', 'resolution'], startAt, pageToken),
+        (startAt, pageToken) => this.searchTicketsRaw(`key in (${chunk.join(', ')}) ORDER BY key ASC`, OVERVIEW_KEY_CHUNK, ['duedate', 'resolution', ...columns.map(c => c.id)], startAt, pageToken),
         OVERVIEW_KEY_CHUNK,
         OVERVIEW_KEY_CHUNK,
         issue => issue.key,
       );
-      tickets.push(...issues.map(issue => toOverviewTicket(issue, fallbackSource)));
+      tickets.push(...issues.map(issue => toOverviewTicket(issue, fallbackSource, columns)));
     }
     return tickets;
   }

@@ -2,6 +2,7 @@
 // finding, one per Waltz ticket). The CSV and Excel renderers both read this, so their column order cannot drift.
 // Pure and vscode-free.
 import type { Overview, OverviewFlag, OverviewRow, OverviewTable } from './securityOverview';
+import { EXTRA_COLUMN_PREFIX } from './naturalCompare';
 import { severityLabel } from './veracodeReport';
 
 export type ColumnKind = 'text' | 'number' | 'date';
@@ -9,6 +10,8 @@ export type ColumnKind = 'text' | 'number' | 'date';
 export type Cell = string | number | null;
 
 export interface OverviewColumn {
+  /** Keys the cells of a record: the title for a built-in column, `extra:<field id>` for a configured one, so two columns with one title never share a cell. */
+  id: string;
   title: string;
   kind: ColumnKind;
 }
@@ -24,9 +27,9 @@ export interface OverviewSheet {
   records: OverviewRecord[];
 }
 
-const text = (title: string): OverviewColumn => ({ title, kind: 'text' });
-const date = (title: string): OverviewColumn => ({ title, kind: 'date' });
-const number = (title: string): OverviewColumn => ({ title, kind: 'number' });
+const text = (title: string): OverviewColumn => ({ id: title, title, kind: 'text' });
+const date = (title: string): OverviewColumn => ({ id: title, title, kind: 'date' });
+const number = (title: string): OverviewColumn => ({ id: title, title, kind: 'number' });
 
 const LEAD_COLUMNS = [
   text('Source'), text('Ticket'), text('Status'), text('Summary'), text('Rating'),
@@ -40,6 +43,8 @@ const VERACODE_COLUMNS = [
   number('Line'), text('Function'),
 ];
 const WALTZ_COLUMNS = [text('Remediation action'), text('Plan status'), text('Members')];
+// Appended after the older columns so no existing column moves for someone with a saved Excel macro or pivot.
+const ASSIGNEE_COLUMN = text('Assignee');
 
 const FLAG_TEXT = { overdue: 'overdue', 'due-before-release': 'due before release' } as const;
 const MATCH_TEXT = { tracked: 'tracked', stale: 'stale', 'in-report-no-ticket': 'in report, no ticket' } as const;
@@ -54,7 +59,12 @@ function earliest(values: Array<string | null>): string {
   return valid.length === 0 ? '' : valid.reduce((a, b) => (b < a ? b : a));
 }
 
-function leadCells(row: OverviewRow, table: OverviewTable, hasReport: boolean): Record<string, Cell> {
+function assigneeCell(row: OverviewRow): Cell {
+  if (row.ticketKey === null || row.assignee === undefined) return null;
+  return row.assignee === '' ? 'Unassigned' : row.assignee;
+}
+
+function leadCells(row: OverviewRow, table: OverviewTable, hasReport: boolean, extraColumns: Overview['extraColumns']): Record<string, Cell> {
   const cells: Record<string, Cell> = {
     Source: SOURCE_TEXT[row.source],
     Ticket: row.ticketKey,
@@ -67,28 +77,31 @@ function leadCells(row: OverviewRow, table: OverviewTable, hasReport: boolean): 
     'Other Fix Versions': row.otherFixVersions.join('; '),
     Flag: row.flag ? FLAG_TEXT[row.flag] : '',
     'Detail source': row.detailSource,
+    Assignee: assigneeCell(row),
   };
+  for (const column of extraColumns) cells[EXTRA_COLUMN_PREFIX + column.id] = row.ticketKey === null ? null : row.extra?.[column.id] ?? null;
   if (hasReport) cells['Report match'] = row.reportMatch ? MATCH_TEXT[row.reportMatch] : '';
   return cells;
 }
 
 /**
  * The whole overview as one table: the columns and the records of every table in order. `Report match` is a column only
- * for an import export. A Veracode ticket gives a record per finding (one without findings gives a single record with
+ * for an import export; Assignee and the configured extra columns come last. A Veracode ticket gives a record per finding (one without findings gives a single record with
  * empty finding columns); a Waltz ticket gives one record with its components joined and the earliest of their dates.
  */
 export function buildOverviewSheet(overview: Overview): OverviewSheet {
   const columns = [
     ...LEAD_COLUMNS, ...(overview.hasReport ? REPORT_COLUMNS : []), ...DETAIL_COLUMNS, ...VERACODE_COLUMNS, ...WALTZ_COLUMNS,
+    ASSIGNEE_COLUMN, ...overview.extraColumns.map((c): OverviewColumn => ({ id: EXTRA_COLUMN_PREFIX + c.id, title: c.name, kind: 'text' })),
   ];
   const records: OverviewRecord[] = [];
   const push = (flag: OverviewFlag, cells: Record<string, Cell>): void => {
-    records.push({ flag, cells: columns.map(c => cells[c.title] ?? null) });
+    records.push({ flag, cells: columns.map(c => cells[c.id] ?? null) });
   };
 
   for (const table of overview.tables) {
     for (const row of table.rows) {
-      const lead = leadCells(row, table, overview.hasReport);
+      const lead = leadCells(row, table, overview.hasReport, overview.extraColumns);
       if (row.source === 'veracode') {
         if (row.findings.length === 0) push(row.flag, lead);
         for (const f of row.findings) {

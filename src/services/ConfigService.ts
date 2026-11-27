@@ -14,6 +14,8 @@ export interface JiraConfig {
   hiddenDisplayFields: string[];
   searchFields: string[];
   cleanupFields: string[];
+  /** Extra columns of the security report, the import board's Already ticketed tab and the overview exports. */
+  securityReportFields: string[];
   token: string | undefined;
   sprintBoardId?: number;
   myTeamJql?: string;
@@ -35,6 +37,7 @@ export class ConfigService {
       hiddenDisplayFields: config.get<string[]>('jira.hiddenDisplayFields') ?? [],
       searchFields: config.get<string[]>('jira.searchFields') ?? [],
       cleanupFields: config.get<string[]>('jira.cleanupFields') ?? [],
+      securityReportFields: config.get<string[]>('jira.securityReportFields') ?? [],
       token: await this.context.secrets.get(ConfigService.TOKEN_KEY),
       sprintBoardId: config.get<number>('jira.sprintBoardId') || undefined,
       myTeamJql: config.get<string>('jira.myTeamJql') || undefined,

@@ -74,6 +74,7 @@ Preparation: a test project; a `.jira-templates.json` with two templates (one wi
 
 **Already ticketed**
 
+- [ ] With `ticketSidekick.jira.securityReportFields` set to a custom field, the tab shows the ticket's assignee and that field after Change; clicking a title sorts the rows (natural order, empty last, third click back to the report's order) without moving the picks or the chosen actions. Restart VS Code with a stored board and open it: it opens, and Refresh fills in the assignees.
 - [ ] The tab opens on **Changed**, with the changed rows and the ticket without a Due Date ("No Due Date"); **Unchanged** and **All** show the others, each with its count.
 - [ ] A row's action changes on its own; **Set all shown to** `leave` on **Changed** changes only those rows, and the rows under **Unchanged** keep theirs.
 - [ ] Two rows of one ticket, one on `rewrite` and one on `leave`: the preview refuses and names them.

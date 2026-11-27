@@ -27,7 +27,7 @@ describe('renderOverviewXlsx', () => {
 
     const header = (sheet.getRow(1).values as unknown[]).slice(1);
     expect(header.slice(0, 8)).toEqual(['Source', 'Ticket', 'Status', 'Summary', 'Rating', 'Fix Version', 'Release Date', 'Due Date']);
-    expect(header.at(-1)).toBe('Members');
+    expect(header.at(-1)).toBe('Assignee');
     expect(sheet.rowCount).toBe(3);
     expect(sheet.getRow(2).getCell(columnOf(sheet, 'Ticket')).value).toBe('SEC-1');
   });

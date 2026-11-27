@@ -98,6 +98,10 @@ export interface JqlIssueLike {
     summary?: string;
     /** The ticket's Due Date (`YYYY-MM-DD`); null = empty, absent = the search did not return the field. */
     duedate?: string | null;
+    /** The assignee; null = unassigned, absent = the search did not return the field. */
+    assignee?: { displayName?: string } | null;
+    /** The configured extra columns' values as plain text by field id, rendered by the caller that knows the field names. */
+    renderedExtra?: Record<string, string>;
   };
 }
 
@@ -120,17 +124,31 @@ export interface DedupTicket {
   dueDate?: string | null;
   /** The ticket's summary, when the search returned it (the review's ticket search matches against it). */
   summary?: string;
+  /** The assignee's display name, '' when unassigned; absent when the search did not return it. */
+  assignee?: string;
+  /** The configured extra columns' values by field id. */
+  extra?: Record<string, string>;
 }
 
-/** What the review keeps about a matched ticket for its `search` reply: summary and the status at build time. */
-export type TicketInfo = Record<string, { summary: string; status: string | null }>;
+/**
+ * What the review keeps about a matched ticket: summary and status at build time for its `search` reply, and the
+ * assignee and extra column values the Already ticketed tab shows. The last two are absent in a review saved before
+ * those columns existed, which the tab shows as not read.
+ */
+export type TicketInfo = Record<string, { summary: string; status: string | null; assignee?: string; extra?: Record<string, string> }>;
 
 /** One summary and status per ticket in the dedup map; a ticket the search returned no summary for is left out. */
 export function buildTicketInfo(map: DedupMap): TicketInfo {
   const info: TicketInfo = {};
   for (const tickets of map.values()) {
     for (const ticket of tickets) {
-      if (ticket.summary !== undefined) info[ticket.key] = { summary: ticket.summary, status: ticket.status };
+      if (ticket.summary !== undefined) {
+        info[ticket.key] = {
+          summary: ticket.summary, status: ticket.status,
+          ...(ticket.assignee !== undefined ? { assignee: ticket.assignee } : {}),
+          ...(ticket.extra ? { extra: ticket.extra } : {}),
+        };
+      }
     }
   }
   return info;
@@ -149,6 +167,8 @@ function toDedupTicket(issue: JqlIssueLike): DedupTicket {
     status: stringOrNull(fields.status?.name),
     ...(fields.duedate === undefined ? {} : { dueDate: stringOrNull(fields.duedate) }),
     ...(typeof fields.summary === 'string' ? { summary: fields.summary } : {}),
+    ...(fields.assignee === undefined ? {} : { assignee: fields.assignee?.displayName ?? '' }),
+    ...(fields.renderedExtra ? { extra: fields.renderedExtra } : {}),
   };
 }
 

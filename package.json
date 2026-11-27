@@ -1022,6 +1022,14 @@
             "default": [],
             "description": "Field IDs to add as extra columns on a cleanup board and on a ticket list opened with a proposed move, in place of searchFields (e.g. [\"fixVersions\", \"priority\"]). Type /ts-jira fields PROJ-123 to discover field IDs."
           },
+          "ticketSidekick.jira.securityReportFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "description": "Field IDs to add as extra columns, after the Assignee column that is always shown, on the security report, on the Already ticketed tab of the import board, and in the CSV and Excel overview exports (e.g. [\"customfield_10020\", \"labels\"]). A change shows after Refresh. An id Jira does not know is skipped and logged. Type /ts-jira fields PROJ-123 to discover field IDs."
+          },
           "ticketSidekick.jira.hiddenDisplayFields": {
             "type": "array",
             "items": {

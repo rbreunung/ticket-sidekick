@@ -1,3 +1,4 @@
+import { assigneeLabel } from '../../utils/securityOverview';
 import * as path from 'path';
 import type { BoardKind, CheckMode, Validated } from '../../sessions/boardKind';
 import { forgetChangedEmails } from './cleanupStage';
@@ -132,6 +133,10 @@ export interface TicketedRowView {
   url: string | null;
   /** The finding's other open tickets, when it has more than one; absent otherwise. */
   alsoOpen?: Array<{ key: string; url: string | null }>;
+  /** The ticket's assignee as shown: the name, "Unassigned", or a dash when this saved reading never read it. */
+  assignee: string;
+  /** The extra columns' values in the order of `ImportView.ticketed.columns`. */
+  values: string[];
   change: string | null;
   action: TicketedAction;
   allowedActions: TicketedAction[];
@@ -176,7 +181,7 @@ export interface ImportView {
   /** The filter of the tab in view. */
   filter: string;
   new?: { rows: NewRowView[] };
-  ticketed?: { show: 'decision' | 'all'; rows: TicketedRowView[] };
+  ticketed?: { show: 'decision' | 'all'; /** The extra columns after Change. */ columns: Array<{ id: string; name: string }>; rows: TicketedRowView[] };
   stale?: { rows: StaleRowView[] };
   accepted?: { rows: AcceptedRowView[]; warning: string | null };
   dropped: string[];
@@ -298,7 +303,7 @@ function describeAcceptedHidden(hidden: AcceptedHidden | undefined): string | un
   return parts.length > 0 ? parts.join(' · ') : undefined;
 }
 
-function describeChange(row: ImportRow): string | null {
+export function describeChange(row: ImportRow): string | null {
   const change = row.change;
   if (!change) return null;
   if (change.kind === 'baseline') return 'Not recorded on the ticket yet';
@@ -477,6 +482,7 @@ function compose(stored: DerivedPart<ImportData>, fresh: DerivedPart<ImportData>
       ...(sd.review.staleCandidates ? { staleCandidates: sd.review.staleCandidates } : {}),
     },
     rowKeys, updated,
+    columns: td.columns,
     accepted: ad.accepted,
     staleFailed: sd.staleFailed,
     descriptionsUnread: td.descriptionsUnread,
@@ -756,17 +762,22 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
       };
     } else if (current === 'ticketed') {
       const show = working.ticketedShow ?? (decisions > 0 ? 'decision' : 'all');
+      const columns = data.columns ?? [];
       view.ticketed = {
         show,
+        columns: columns.map(({ id, name }) => ({ id, name })),
         rows: ticketedRows(data)
           .filter(r => (show === 'all' || needsDecision(data, r, writes)) && matches(filter, rowRef(r), r.summary, r.target?.key ?? r.existingTicketKey))
           .map(r => {
             const ticket = r.target?.key ?? r.existingTicketKey!;
             const key = rowKeyOf(data, r);
             const alsoOpen = (r.openTicketKeys ?? []).map(k => ({ key: k, url: browseUrl(data.baseUrl, k) }));
+            const info = data.review.ticketInfo?.[ticket];
             return {
               id: r.id, ref: rowRef(r), summary: r.summary, ticket, status: r.target?.status ?? null, resolved: r.target?.resolved ?? false,
-              url: browseUrl(data.baseUrl, ticket), ...(alsoOpen.length > 0 ? { alsoOpen } : {}), change: describeChange(r),
+              url: browseUrl(data.baseUrl, ticket), ...(alsoOpen.length > 0 ? { alsoOpen } : {}),
+              assignee: assigneeLabel(info?.assignee),
+              values: columns.map(c => info?.extra?.[c.id] ?? ''), change: describeChange(r),
               action: choices.actions[key] ?? r.action ?? 'leave', allowedActions: [...(r.allowedActions ?? ['leave'])],
               needsDecision: needsDecision(data, r, writes), written: rowWritten(data, writes, r),
             };
