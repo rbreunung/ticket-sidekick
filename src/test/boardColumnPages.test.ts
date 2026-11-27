@@ -14,7 +14,7 @@ afterEach(() => {
 
 async function load(kind: string, script: string, view: unknown): Promise<void> {
   stopped = false;
-  const state = { id: `${kind}-0123456789abcdef`, kind, title: 'Board', status: 'ready', tick: 1, revision: 1, asOf: 1_000, restored: false, stored: true, conflicts: [], writesBlocked: false, view };
+  const state = { id: `${kind}-0123456789abcdef`, kind, title: 'Board', status: 'ready', tick: 1, revision: 1, asOf: 1_000, restored: false, stored: true, writesBlocked: false, view };
   page = installFakePage({ kind, session: state.id, title: 'Board' }, async (op, body) => {
     if (stopped) return new Promise(() => undefined);
     // Like the extension, answer a state request that already holds this tick only when something changes: never.

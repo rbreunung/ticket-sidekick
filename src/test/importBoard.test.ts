@@ -157,7 +157,7 @@ async function open(r: ImportRecipe): Promise<ImportSession> {
   if (!validated.ok) throw new Error(validated.reason);
   return {
     id: importSessionId(r), kind: 'import', formatVersion: importKind.formatVersion, revision: 1, createdAt: 0, lastUsedAt: 0,
-    recipe: validated.recipe, derived: await importKind.read(validated.recipe, deps), working: importKind.initialWorking(validated.recipe), conflicts: [],
+    recipe: validated.recipe, derived: await importKind.read(validated.recipe, deps), working: importKind.initialWorking(validated.recipe),
   };
 }
 

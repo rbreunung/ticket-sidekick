@@ -4,7 +4,7 @@ import { capitalised } from '../utils/textCase';
 import type { ApplyProgressReport, CheckMode, ExportedFile, RegisteredKind, RunFinished, RunProgressReport, WorkingUpdate } from './boardKind';
 import { sessionIdFor } from './sessionId';
 import type { SessionStore } from './sessionStore';
-import { SessionError, type ApplyLineResult, type Conflict, type DerivedPart, type PlanLine, type RunningState, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
+import { SessionError, type ApplyLineResult, type DerivedPart, type PlanLine, type RunningState, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
 
 // Owns every session of this window: opens or restores it, runs its actions one after another,
 // checks it against the sources, and guards its writes. A write needs a plan id that only a
@@ -32,7 +32,6 @@ export interface BoardState {
   restored: boolean;
   /** False when the session is too large to store and will not survive a restart. */
   stored: boolean;
-  conflicts: Conflict[];
   notice?: string;
   error?: string;
   /** What kind of failure `error` is, when the board kind names it (e.g. `report-not-found`), so the page can offer the way out. */
@@ -71,7 +70,6 @@ export interface SessionManagerDeps {
 }
 
 const DEFAULT_PLAN_TTL_MS = 10 * 60 * 1000;
-const DROP_CONFLICT = 'conflict/drop';
 const REBUILT_NOTICE = 'This board was rebuilt after an update: the stored session came from another version of Ticket Sidekick, and its earlier choices were not kept.';
 
 interface Entry {
@@ -236,7 +234,7 @@ export class SessionManager {
       entry.session = {
         id: entry.id, kind: kind.kind, formatVersion: kind.formatVersion, revision: 1,
         createdAt: now, lastUsedAt: now, recipe: entry.recipe, derived,
-        working: kind.initialWorking(entry.recipe), conflicts: [],
+        working: kind.initialWorking(entry.recipe),
       };
       // Stored before the board shows as ready, so "ready" always means "survives a restart".
       await this.persist(entry);
@@ -263,15 +261,12 @@ export class SessionManager {
       const { kind } = entry.reg;
       const fresh = await kind.read(session.recipe, await entry.reg.deps());
       const merged = kind.reconcile(session, fresh, mode);
-      if (merged.conflicts.length === 0 && unchanged(session, merged)) {
+      if (unchanged(session, merged)) {
         // Nothing changed: only the read time moves, and the revision stays, so an open preview stays valid.
         entry.session = { ...session, derived: { ...session.derived, readAt: merged.derived.readAt }, lastUsedAt: this.deps.now() };
       } else {
-        // A conflict stays until the developer resolves or drops it; a later check must not erase it.
-        const fresher = new Set(merged.conflicts.map(c => c.id));
         entry.session = {
           ...session, derived: merged.derived, working: merged.working,
-          conflicts: [...session.conflicts.filter(c => !fresher.has(c.id)), ...merged.conflicts],
           revision: session.revision + 1, lastUsedAt: this.deps.now(),
         };
       }
@@ -331,7 +326,7 @@ export class SessionManager {
     return {
       id: entry.id, kind: kind.kind, title: kind.title(entry.recipe), status: entry.status, tick: entry.tick,
       revision: session?.revision ?? 0, asOf: session?.derived.readAt, restored: entry.restored, stored: entry.stored,
-      conflicts: session?.conflicts ?? [], notice: entry.notice, error: entry.error,
+      notice: entry.notice, error: entry.error,
       ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
       writesBlocked: this.writesBlocked(entry),
       ...(entry.applying ? { applying: { ...entry.applying } } : {}),
@@ -416,15 +411,9 @@ export class SessionManager {
     const entry = await this.entry(kindName, id);
     return this.enqueue(entry, async () => {
       const session = this.requireCurrent(entry, revision);
-      const drop = action as { type?: unknown; id?: unknown } | null;
-      let next: Session;
-      if (drop && drop.type === DROP_CONFLICT && typeof drop.id === 'string') {
-        next = { ...session, conflicts: session.conflicts.filter(c => c.id !== drop.id) };
-      } else {
-        const reduced = entry.reg.kind.reduce(session, action);
-        if (!reduced.ok) throw new SessionError(400, reduced.reason);
-        next = { ...session, working: reduced.working };
-      }
+      const reduced = entry.reg.kind.reduce(session, action);
+      if (!reduced.ok) throw new SessionError(400, reduced.reason);
+      const next: Session = { ...session, working: reduced.working };
       entry.session = { ...next, revision: session.revision + 1, lastUsedAt: this.deps.now() };
       await this.persist(entry);
       this.changed(entry);
@@ -522,7 +511,6 @@ export class SessionManager {
       }
       entry.session = {
         ...session, derived: applied.derived, working: applied.working,
-        conflicts: [...session.conflicts, ...(applied.conflicts ?? [])],
         revision: session.revision + 1, lastUsedAt: this.deps.now(),
       };
       // A session discarded while the Apply ran stays discarded: the results still go back to the page.

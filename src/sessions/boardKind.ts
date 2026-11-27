@@ -1,4 +1,4 @@
-import type { ApplyLineResult, Conflict, DerivedPart, RunningState, Session, WritePlan } from './sessionTypes';
+import type { ApplyLineResult, DerivedPart, RunningState, Session, WritePlan } from './sessionTypes';
 
 // A board kind is the one place that knows a board's rules. `reduce`, `plan` and `reconcile` are
 // pure, so a board's behaviour is tested as scenarios without a browser or a server. The session
@@ -18,15 +18,12 @@ export type CheckMode = 'background' | 'refresh';
 export interface Reconciled<D, W> {
   derived: DerivedPart<D>;
   working: W;
-  conflicts: Conflict[];
 }
 
 export interface Applied<D, W> {
   results: ApplyLineResult[];
   derived: DerivedPart<D>;
   working: W;
-  /** Targets that changed since the board read them become conflicts. */
-  conflicts?: Conflict[];
 }
 
 /** What `apply` reports after each finished target: the working state that records what is done so far. */
@@ -126,7 +123,7 @@ export interface BoardKind<R, D, W, A, V, X> {
    * keep showing what the developer saw after a background check and take the fresh reading only on Refresh.
    */
   reconcile(session: Session<R, D, W>, fresh: DerivedPart<D>, mode: CheckMode): Reconciled<D, W>;
-  /** A non-writing action: select, filter, pick, resolve or drop a conflict. */
+  /** A non-writing action: select, filter, pick or resolve. */
   reduce(session: Session<R, D, W>, action: A): Reduced<W>;
   /**
    * What a writing action needs to read before its plan can be shown, such as the target ticket of

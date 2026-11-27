@@ -2,7 +2,7 @@ import { isSystemFilterId } from '../../utils/jiraSystemFilters';
 import { splitOrderBy } from '../../utils/jqlOrderBy';
 import { extraColumnId, isNaturalColumn, nextSort, sortNatural, type NaturalColumn } from '../../utils/naturalCompare';
 import type { BoardKind, CheckMode } from '../../sessions/boardKind';
-import type { Conflict, Session } from '../../sessions/sessionTypes';
+import type { Session } from '../../sessions/sessionTypes';
 import type { WorkflowGraph } from '../../services/WorkflowService';
 import type { CleanupRule } from '../../templates/TemplateService';
 import { SUBTASK_KEYS_PER_QUERY, buildCleanupQuery, buildSubtaskQueries, cleanupTargets, describeFixVersion, lookupCleanupRule, pathProblem } from './cleanupSource';
@@ -568,8 +568,8 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     const found = differs && queryChanged ? { ...differs, queryChanged: true } : differs;
     if (mode === 'background') {
       return found
-        ? { derived: session.derived, working: { ...session.working, outOfDate: found }, conflicts: [] }
-        : { derived: fresh, working: { ...session.working, outOfDate: null }, conflicts: [] };
+        ? { derived: session.derived, working: { ...session.working, outOfDate: found } }
+        : { derived: fresh, working: { ...session.working, outOfDate: null } };
     }
     const now = new Set(fresh.data.rows.map(row => row.key));
     const listed = new Set(allTickets(fresh.data.rows).map(row => row.key));
@@ -580,7 +580,6 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     return {
       derived: fresh,
       working: { ...session.working, selection, outOfDate: null, results, page: clampPage(session.working.page, fresh.data.rows.length) },
-      conflicts: [],
     };
   },
 
@@ -653,7 +652,8 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
   apply: async (session, plan, deps, progress) => {
     const { change, targets } = plan.payload as { change: ListChange | null; targets: PlannedTarget[] };
     const results: Record<string, RowResult> = {};
-    const conflicts: Conflict[] = [];
+    /** The tickets refused because they changed in Jira since the board read them. */
+    const changed: string[] = [];
     const total = targets.reduce((n, t) => n + 1 + (t.subtasks?.length ?? 0), 0);
     let finished = 0;
     /**
@@ -691,7 +691,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
             key: target.key, stored: target.updated, current: current.updated,
           });
           results[target.key] = { outcome: 'refused', reason: 'changed in Jira since the board read it' };
-          conflicts.push({ id: target.key, target: target.key, message: 'changed in Jira and was not written to.', stored: target.status, fresh: current.status });
+          changed.push(target.key);
           return false;
         }
         await write();
@@ -724,11 +724,16 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     }
     // Show what Jira holds now; when that read fails the rows stay as they were, with the results.
     let derived = session.derived;
+    let reread = true;
     try {
       derived = await ticketListKind.read(session.recipe, deps);
     } catch {
       // The results below still say what was written.
+      reread = false;
     }
+    // A ticket refused because it changed is already shown as it is now when the list was read again;
+    // when it could not be, the rows on show are the old ones, so the board says it is out of date.
+    const outOfDate = !reread && changed.length > 0 ? { changed, gone: [], added: 0 } : session.working.outOfDate;
     return {
       results: targets.flatMap(t => [...(t.subtasks ?? []), t]).map(t => {
         const { outcome, reason } = results[t.key];
@@ -740,9 +745,8 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
       working: {
         ...session.working,
         selection: session.recipe.source.type === 'rule' ? session.working.selection : { mode: 'only', keys: [] },
-        proposed: false, results,
+        proposed: false, results, outOfDate,
       },
-      conflicts,
     };
   },
 

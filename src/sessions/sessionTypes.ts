@@ -13,17 +13,6 @@ export interface DerivedPart<D> {
   data: D;
 }
 
-/** Working state whose target changed or disappeared in a fresh reading. */
-export interface Conflict {
-  id: string;
-  /** What the conflict is about, e.g. a ticket key. Shown to the developer. */
-  target: string;
-  message: string;
-  /** The value the stored session held and the one read now, when showing both helps. */
-  stored?: string;
-  fresh?: string;
-}
-
 export interface Session<R = unknown, D = unknown, W = unknown> {
   id: string;
   kind: string;
@@ -36,7 +25,6 @@ export interface Session<R = unknown, D = unknown, W = unknown> {
   recipe: R;
   derived: DerivedPart<D>;
   working: W;
-  conflicts: Conflict[];
 }
 
 /** One line of a write plan: the target and exactly what is written to it. */

@@ -16,7 +16,7 @@ let closed = false;
 function base(): BoardState {
   return {
     id: SESSION, kind: 'runs', title: 'Review', status: 'ready', tick: 1, revision: 1, asOf: 1_000,
-    restored: false, stored: true, conflicts: [], writesBlocked: false, view: {},
+    restored: false, stored: true, writesBlocked: false, view: {},
   };
 }
 

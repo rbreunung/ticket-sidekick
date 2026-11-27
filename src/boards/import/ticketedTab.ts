@@ -1,4 +1,4 @@
-import type { ApplyLineResult, Conflict, WritePlan } from '../../sessions/sessionTypes';
+import type { ApplyLineResult, WritePlan } from '../../sessions/sessionTypes';
 import { applyTicketedActionChange, buildReviewPage } from '../../imports/rows';
 import { runTicketedActions, type TicketedEvent } from '../../imports/ticketedActions';
 import {
@@ -313,7 +313,8 @@ export const ticketedTabHandler: ImportHandler = {
 
     let working: ImportWorking = { ...session.working, writes: { ...session.working.writes, tickets: { ...session.working.writes.tickets } } };
     const results: ApplyLineResult[] = [];
-    const conflicts: Conflict[] = [];
+    /** Whether a ticket was refused because it changed in Jira since the board read it. */
+    let sawChange = false;
     /** `updated` after this Apply's own writes, so a second write to the same ticket is not taken for someone else's change. */
     const own: Record<string, string> = {};
     /** Tickets this Apply wrote whose new `updated` could not be read: a second write cannot tell its own change apart. */
@@ -356,7 +357,7 @@ export const ticketedTabHandler: ImportHandler = {
         deps.onDiag?.('warn', `Import board: ${unit.ticket} changed in Jira since the board read it, so it was not written to`, {
           key: unit.ticket, stored: expected, current: current ?? 'gone',
         });
-        conflicts.push({ id: unit.ticket, target: unit.ticket, message: 'changed in Jira and was not written to.', stored: expected, fresh: current ?? 'gone' });
+        sawChange = true;
         await finish({ target: unit.ticket, outcome: 'refused', reason: 'changed in Jira since the board read it' });
         continue;
       }
@@ -428,7 +429,9 @@ export const ticketedTabHandler: ImportHandler = {
       await finish(outcome);
     }
 
-    return { results, derived: session.derived, working, conflicts };
+    // This apply does not read the tab again, so a ticket that changed means the rows on show are old.
+    if (sawChange && !working.outOfDate.includes('ticketed')) working = { ...working, outOfDate: [...working.outOfDate, 'ticketed'] };
+    return { results, derived: session.derived, working };
   },
 
   view: (session, tab) => {

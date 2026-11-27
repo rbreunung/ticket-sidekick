@@ -117,7 +117,7 @@ function picker(extra: Partial<PassPickerView> = {}): PassPickerView {
 function boardState(v: ReviewView, extra: Partial<BoardState> = {}): BoardState {
   return {
     id: SESSION, kind: 'review', title: 'Review: PROJ/app#482', status: 'ready', tick: 1, revision: 1, asOf: 1_000,
-    restored: false, stored: true, conflicts: [], writesBlocked: false, view: v, ...extra,
+    restored: false, stored: true, writesBlocked: false, view: v, ...extra,
   };
 }
 

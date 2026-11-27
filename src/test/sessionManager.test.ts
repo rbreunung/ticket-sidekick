@@ -82,14 +82,11 @@ function makeKind(formatVersion = 1, options: KindOptions = {}): BoardKind<Recip
     },
     reconcile: (session, fresh, mode) => {
       source.modes?.push(mode ?? 'none');
+      // A selected ticket that changed since the board read it leaves the selection.
       const gone = session.working.selected.filter(key => fresh.data.tickets[key] !== session.derived.data.tickets[key]);
       return {
         derived: fresh,
         working: { selected: session.working.selected.filter(key => !gone.includes(key)) },
-        conflicts: gone.map(key => ({
-          id: key, target: key, message: 'Changed in Jira since it was selected.',
-          stored: session.derived.data.tickets[key], fresh: fresh.data.tickets[key] ?? 'gone',
-        })),
       };
     },
     reduce: (session, action) => {
@@ -255,7 +252,7 @@ describe('restart', () => {
     expect(source.reads.count).toBeGreaterThan(readsBefore);
   });
 
-  it('marks working state that no longer fits the fresh reading as a conflict', async () => {
+  it('drops working state that no longer fits the fresh reading, and says nothing of conflicts', async () => {
     const first = manager();
     const state = await openReady(first);
     await first.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
@@ -263,11 +260,23 @@ describe('restart', () => {
 
     const restarted = manager();
     const checked = await restarted.refresh('demo', state.id);
-    expect(checked.conflicts).toEqual([{ id: 'PROJ-1', target: 'PROJ-1', message: 'Changed in Jira since it was selected.', stored: 'Open', fresh: 'Closed' }]);
     expect(checked.view).toMatchObject({ selected: [] });
+    expect(checked).not.toHaveProperty('conflicts');
+  });
 
-    const dropped = await restarted.action('demo', state.id, checked.revision, { type: 'conflict/drop', id: 'PROJ-1' });
-    expect(dropped.conflicts).toEqual([]);
+  it('opens a stored session written before conflicts were removed, whether or not it still has the list', async () => {
+    const first = manager();
+    const state = await openReady(first);
+    const file = path.join(dir, `${state.id}.json`);
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const conflicts of [[{ id: 'PROJ-1', target: 'PROJ-1', message: 'Changed in Jira.' }], undefined]) {
+      const written = { ...stored, session: { ...stored.session, ...(conflicts ? { conflicts } : {}) } };
+      if (!conflicts) delete written.session.conflicts;
+      fs.writeFileSync(file, JSON.stringify(written));
+      const reopened = await manager().state('demo', state.id);
+      expect(reopened.restored).toBe(true);
+      expect(reopened.view).toMatchObject({ selected: [] });
+    }
   });
 
   it('tells the board whether a check ran by itself or on Refresh', async () => {
@@ -728,7 +737,7 @@ const runKind: BoardKind<Recipe, Derived, RunWorking, Action, RunWorking, RunDep
     await deps.readGate;
     return { readAt: deps.reads.count, fingerprints: {}, data: { tickets: { ...deps.tickets } } };
   },
-  reconcile: (session, fresh) => ({ derived: fresh, working: { ...session.working, checks: session.working.checks + 1 }, conflicts: [] }),
+  reconcile: (session, fresh) => ({ derived: fresh, working: { ...session.working, checks: session.working.checks + 1 } }),
   reduce: (session, action) => {
     if (action.type !== 'select') return { ok: false, reason: 'Unknown action.' };
     return { ok: true, working: { ...session.working, selected: [...session.working.selected, action.key] } };

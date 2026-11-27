@@ -329,14 +329,6 @@ export function startBoard({ root, render, loading }) {
     if (state.notice) items.push(h('p', { class: 'banner' }, state.notice));
     if (state.error) items.push(h('p', { class: 'banner error', role: 'alert' }, state.status === 'failed' ? `Could not load: ${state.error}` : `The check failed: ${state.error} The data shown is from ${formatTime(state.asOf)}.${state.writesBlocked ? ' Nothing can be applied until a check passes: use Refresh.' : ''}`));
     if (!state.stored && state.status === 'ready') items.push(h('p', { class: 'banner' }, 'This session is too large to store and will not survive a restart.'));
-    if (state.conflicts.length > 0) {
-      items.push(h('section', { class: 'banner conflicts', 'aria-label': 'Conflicts' },
-        h('p', {}, `${state.conflicts.length} choice(s) no longer match what was just read:`),
-        h('ul', {}, state.conflicts.map(c => h('li', {},
-          h('strong', {}, c.target), ` ${c.message}`,
-          c.stored !== undefined || c.fresh !== undefined ? h('span', { class: 'muted' }, ` Stored: ${c.stored ?? 'none'}. Now: ${c.fresh ?? 'none'}.`) : null,
-          ' ', h('vscode-button', { secondary: true, disabled: locked(), onClick: () => board.act({ type: 'conflict/drop', id: c.id }) }, 'Drop'))))));
-    }
     return items;
   }
 

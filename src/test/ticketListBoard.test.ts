@@ -67,7 +67,7 @@ async function open(deps: Fake, input: unknown = { jql: 'project = PROJ' }): Pro
   if (!validated.ok) throw new Error(validated.reason);
   return {
     id: 'a'.repeat(24), kind: 'ticket-list', formatVersion: 1, revision: 1, createdAt: 0, lastUsedAt: 0, recipe: validated.recipe,
-    derived: await ticketListKind.read(validated.recipe, deps), working: ticketListKind.initialWorking(validated.recipe), conflicts: [],
+    derived: await ticketListKind.read(validated.recipe, deps), working: ticketListKind.initialWorking(validated.recipe),
   };
 }
 
@@ -209,7 +209,33 @@ describe('applying a change', () => {
     const { applied } = await apply(s, deps);
     expect(deps.fields).toEqual(['PROJ-1.labels=cleanup', 'PROJ-3.labels=cleanup']);
     expect(applied.results[1]).toEqual({ target: 'PROJ-2', outcome: 'refused', reason: 'changed in Jira since the board read it' });
-    expect(applied.conflicts).toEqual([{ id: 'PROJ-2', target: 'PROJ-2', message: 'changed in Jira and was not written to.', stored: 'Open', fresh: 'In Progress' }]);
+    // The list was read again after the writes, so the view is current and the refused ticket can be selected once more.
+    expect(applied.working.outOfDate).toBeNull();
+    const again = { ...s, derived: applied.derived, working: applied.working } as ListSession;
+    expect(ticketListKind.view(again).rows.find(r => r.key === 'PROJ-2')).toMatchObject({ status: 'In Progress', updated: 't9' });
+    expect(ticketListKind.reduce(again, { type: 'select', key: 'PROJ-2', on: true })).toMatchObject({ ok: true });
+  });
+
+  it('marks the list out of date when a ticket changed and the list could not be read again afterwards', async () => {
+    const deps = fake();
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup' } });
+    Object.assign(deps.jira.get('PROJ-2')!, { status: 'In Progress', updated: 't9' });
+    deps.search = async () => { throw new Error('Jira answered 503'); };
+    const { applied } = await apply(s, deps);
+    expect(applied.working.outOfDate).toEqual({ changed: ['PROJ-2'], gone: [], added: 0 });
+    const stale = { ...s, derived: applied.derived, working: applied.working } as ListSession;
+    expect(ticketListKind.plan!(stale, { type: 'apply' })).toMatchObject({ ok: false, reason: expect.stringContaining('Refresh') });
+  });
+
+  it('does not mark the list out of date for a ticket Jira refused for another reason', async () => {
+    const deps = fake();
+    let s = await open(deps);
+    s = act(act(s, { type: 'select', key: 'PROJ-2', on: true }), { type: 'change', change: { type: 'transition', status: 'Blocked' } });
+    deps.search = async () => { throw new Error('Jira answered 503'); };
+    const { applied } = await apply(s, deps);
+    expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-2', outcome: 'failed' })]);
+    expect(applied.working.outOfDate).toBeNull();
   });
 
   it('writes a ticket whose update time Jira now spells another way but is the same moment', async () => {
@@ -280,7 +306,6 @@ describe('a list checked against Jira', () => {
     Object.assign(deps.jira.get('PROJ-1')!, { status: 'Done', updated: 't9' });
     deps.jira.delete('PROJ-3');
     const merged = ticketListKind.reconcile(s, await ticketListKind.read(s.recipe, deps), 'background');
-    expect(merged.conflicts).toEqual([]);
     const checked = { ...s, derived: merged.derived, working: merged.working };
     const view = ticketListKind.view(checked);
     expect(view.outOfDate).toEqual({ changed: ['PROJ-1'], gone: ['PROJ-3'], added: 0 });

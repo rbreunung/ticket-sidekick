@@ -69,7 +69,7 @@ async function open(deps: Fake, input: unknown = { cleanupRule: 'Close released 
   if (!validated.ok) throw new Error(validated.reason);
   return {
     id: 'c'.repeat(24), kind: 'ticket-list', formatVersion: 2, revision: 1, createdAt: 0, lastUsedAt: 0, recipe: validated.recipe,
-    derived: await ticketListKind.read(validated.recipe, deps), working: ticketListKind.initialWorking(validated.recipe), conflicts: [],
+    derived: await ticketListKind.read(validated.recipe, deps), working: ticketListKind.initialWorking(validated.recipe),
   };
 }
 
@@ -312,7 +312,8 @@ describe('applying a cleanup', () => {
       { target: 'PROJ-10', outcome: 'refused', reason: 'not moved, because subtask PROJ-11 was not moved' },
       { target: 'PROJ-20', outcome: 'done' },
     ]);
-    expect(applied.conflicts?.map(c => `${c.target} ${c.stored} → ${c.fresh}`)).toEqual(['PROJ-11 Open → In Progress']);
+    // The page was read again after the writes, so the subtask shows as it is now and the board is not out of date.
+    expect(applied.working.outOfDate).toBeNull();
   });
 
   it('refuses a parent that changed in Jira since the board read it, and moves the others', async () => {

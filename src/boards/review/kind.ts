@@ -821,7 +821,7 @@ export const reviewKind: BoardKind<ReviewRecipe, ReviewDerived, ReviewWorking, R
 
   // The fresh reading is shown at once; the review is never touched. Whether it is out of date is
   // worked out from the reviewed commit and the head commit read now.
-  reconcile: (session, fresh) => ({ derived: fresh, working: session.working, conflicts: [] }),
+  reconcile: (session, fresh) => ({ derived: fresh, working: session.working }),
 
   reduce(session, action): Reduced<ReviewWorking> {
     const { working } = session;

@@ -607,16 +607,16 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
         const take = new Set(tabs.filter(tab => tab !== 'ticketed'));
         const derived = compose(session.derived, fresh, take, tabs);
         const kept = keepChoices(session, derived.data);
-        return { derived, working: { ...session.working, ...kept, outOfDate: ['ticketed'] }, conflicts: [] };
+        return { derived, working: { ...session.working, ...kept, outOfDate: ['ticketed'] } };
       }
       const kept = keepChoices(session, fresh.data);
-      return { derived: fresh, working: { ...session.working, ...kept, outOfDate: [] }, conflicts: [] };
+      return { derived: fresh, working: { ...session.working, ...kept, outOfDate: [] } };
     }
     const changed = changedTabs(session.derived, fresh, session.working.writes, tabs);
     const marked = tabs.filter(tab => changed.has(tab)
       && (hasUnfinishedChoices(session.derived.data, session.working, tab) || IMPORT_HANDLERS.some(h => h.unfinished?.(session, tab) ?? false)));
     const take = new Set(tabs.filter(tab => !marked.includes(tab)));
-    return { derived: compose(session.derived, fresh, take, tabs), working: { ...session.working, outOfDate: marked }, conflicts: [] };
+    return { derived: compose(session.derived, fresh, take, tabs), working: { ...session.working, outOfDate: marked } };
   },
 
   reduce: (session, generic) => {

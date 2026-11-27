@@ -217,7 +217,7 @@ async function open(r: ImportRecipe): Promise<ImportSession> {
   if (!validated.ok) throw new Error(validated.reason);
   return {
     id: importSessionId(r), kind: 'import', formatVersion: importKind.formatVersion, revision: 1, createdAt: 0, lastUsedAt: 0,
-    recipe: validated.recipe, derived: await importKind.read(validated.recipe, deps), working: importKind.initialWorking(validated.recipe), conflicts: [],
+    recipe: validated.recipe, derived: await importKind.read(validated.recipe, deps), working: importKind.initialWorking(validated.recipe),
   };
 }
 
@@ -562,7 +562,6 @@ describe('applying the Already ticketed actions', () => {
 
     expect(applied.results.map(r => r.outcome)).toEqual(['done', 'refused']);
     expect(applied.results[1].reason).toMatch(/written earlier in this Apply/);
-    expect(applied.conflicts).toEqual([]);
     expect(jira.createIssueCalls).toHaveLength(1);
   });
 
@@ -574,7 +573,6 @@ describe('applying the Already ticketed actions', () => {
 
     const applied = await apply(session, plan(session));
     expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'done' })]);
-    expect(applied.conflicts).toEqual([]);
   });
 
   it('writes to a ticket whose update time Jira now spells another way but is the same moment', async () => {
@@ -599,6 +597,20 @@ describe('applying the Already ticketed actions', () => {
     const applied = await apply(session, plan(session));
     expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'refused', reason: 'changed in Jira since the board read it' })]);
     expect(logs.filter(l => l.level === 'warn').map(l => l.details)).toContainEqual({ key: 'PROJ-1', stored: 't1', current: 'x9' });
+  });
+
+  it('marks the Already ticketed tab out of date when a ticket changed, since it is not read again after an Apply', async () => {
+    const session = await twoRowsOneTicket();
+    jira.tickets['PROJ-1'].updated = 'x9';
+    const applied = await apply(session, plan(session));
+    expect(applied.working.outOfDate).toEqual(['ticketed']);
+    expect(importKind.plan!(applied.session, { type: 'ticketed-apply' } as never)).toEqual({ ok: false, reason: 'The Already ticketed tab is out of date. Refresh it first.' });
+  });
+
+  it('leaves the tab as it was when every ticket was written', async () => {
+    const session = await twoRowsOneTicket();
+    const applied = await apply(session, plan(session));
+    expect(applied.working.outOfDate).toEqual([]);
   });
 
   it('refuses to write when the tickets\' update times could not be read, and says so', async () => {

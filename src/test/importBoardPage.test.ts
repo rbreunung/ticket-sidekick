@@ -118,7 +118,7 @@ function baseView(extra: Partial<ImportView> = {}): ImportView {
 function boardState(view: ImportView | undefined, extra: Partial<BoardState> = {}): BoardState {
   return {
     id: SESSION, kind: 'import', title: view?.title ?? 'Veracode import: report.xml', status: 'ready', tick: 1, revision: 1, asOf: 1_000,
-    restored: false, stored: true, conflicts: [], writesBlocked: false, ...(view ? { view } : {}), ...extra,
+    restored: false, stored: true, writesBlocked: false, ...(view ? { view } : {}), ...extra,
   };
 }
 

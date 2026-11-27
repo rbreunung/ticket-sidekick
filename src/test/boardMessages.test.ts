@@ -232,7 +232,7 @@ describe('a model run asked for by a board page', () => {
     sourceLabel: r => r.name,
     initialWorking: () => ({ pass: 'idle' }),
     read: async () => ({ readAt: 1, fingerprints: {}, data: null }),
-    reconcile: (session, fresh) => ({ derived: fresh, working: session.working, conflicts: [] }),
+    reconcile: (session, fresh) => ({ derived: fresh, working: session.working }),
     reduce: () => ({ ok: false, reason: 'Unknown action.' }),
     beginRun: (session, request) => (request === 'pass'
       ? { ok: true, size: 'pass', what: 'pass', label: 'the pass', total: 2, working: { pass: 'running' } }
@@ -374,7 +374,7 @@ describe('Discuss in chat on the review board', () => {
     const id = reviewSessionId({ url: PR_URL });
     const store = new SessionStore(path.join(dir, 'review-sessions'));
     await store.save({
-      id, kind: REVIEW_KIND, formatVersion: reviewKind.formatVersion, revision: 3, createdAt: 1, lastUsedAt: 1, conflicts: [],
+      id, kind: REVIEW_KIND, formatVersion: reviewKind.formatVersion, revision: 3, createdAt: 1, lastUsedAt: 1,
       recipe: { url: PR_URL, host: 'bitbucket.example.com', project: 'PROJ', repo: 'app', prId: 482 },
       derived: { readAt: 1, fingerprints: { head: REVIEWED }, data: { pr: { title: 'Add transfers', author: 'Jane', headCommit: REVIEWED }, jiraConfigured: false, models: { options: [] } } },
       working: {
@@ -500,7 +500,7 @@ describe('picking the report file of an import again', () => {
     sourceLabel: r => r.reportPath,
     initialWorking: () => ({ tab: 'new' }),
     read: async r => ({ readAt: 1, fingerprints: {}, data: { path: r.reportPath } }),
-    reconcile: (session, fresh) => ({ derived: fresh, working: session.working, conflicts: [] }),
+    reconcile: (session, fresh) => ({ derived: fresh, working: session.working }),
     reduce: (_session, action) => ({ ok: true, working: { tab: action.tab } }),
     view: session => ({ path: session.derived.data.path, tab: session.working.tab }),
   };
