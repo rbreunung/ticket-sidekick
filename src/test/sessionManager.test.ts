@@ -4,7 +4,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { registerKind, type BoardKind } from '../sessions/boardKind';
 import { sessionIdFor } from '../sessions/sessionId';
-import { SessionManager } from '../sessions/sessionManager';
+import { SessionManager, type SessionManagerDeps } from '../sessions/sessionManager';
 import { SessionStore } from '../sessions/sessionStore';
 import type { Session } from '../sessions/sessionTypes';
 
@@ -34,6 +34,8 @@ interface Deps {
   prepares?: number;
   /** What the board keeps outside its sessions, as its deps store it. */
   prefs?: Record<string, boolean>;
+  /** The board's stored settings cannot be read or written. */
+  prefsFail?: 'read' | 'write';
 }
 
 interface KindOptions { revalidate?: boolean; prepare?: boolean; preferences?: boolean; freshOnOpen?: boolean }
@@ -43,10 +45,11 @@ function makeKind(formatVersion = 1, options: KindOptions = {}): BoardKind<Recip
     ...(options.freshOnOpen ? { freshOnOpen: true } : {}),
     ...(options.preferences ? {
       preferences: {
-        read: async (deps: Deps) => ({ ...(deps.prefs ?? {}) }),
+        read: async (deps: Deps) => { if (deps.prefsFail === 'read') throw new Error('storage unavailable'); return { ...(deps.prefs ?? {}) }; },
         write: async (name: string, value: unknown, deps: Deps) => {
           if (name !== 'loud') return 'There is no setting by that name.';
           if (typeof value !== 'boolean') return 'The setting is on or off.';
+          if (deps.prefsFail === 'write') throw new Error('storage unavailable');
           deps.prefs = { ...(deps.prefs ?? {}), loud: value };
           return undefined;
         },
@@ -140,8 +143,9 @@ let confirmations: string[];
 let confirmAnswer: boolean;
 let clock: number;
 
-function manager(formatVersion = 1, options: KindOptions = {}): SessionManager {
+function manager(formatVersion = 1, options: KindOptions = {}, onDiag?: SessionManagerDeps['onDiag']): SessionManager {
   return new SessionManager({
+    ...(onDiag ? { onDiag } : {}),
     store: new SessionStore(dir),
     kinds: [registerKind(makeKind(formatVersion, options), () => source)],
     now: () => clock,
@@ -1052,6 +1056,31 @@ describe('a preference kept on the board', () => {
     expect(state.preferences).toEqual({ loud: true });
     source.prefs = { loud: false };
     expect((await m.state('demo', state.id)).preferences).toEqual({ loud: false });
+  });
+
+  it('shows the board with no settings, and says so in the log, while its settings cannot be read, and shows them once they can', async () => {
+    source.prefs = { loud: true };
+    source.prefsFail = 'read';
+    const logs: string[] = [];
+    const m = manager(1, { preferences: true }, (level, message) => { logs.push(`${level}: ${message}`); });
+    const state = await openReady(m);
+    expect(state.preferences).toBeUndefined();
+    expect(state.status).toBe('ready');
+    await m.state('demo', state.id);
+    await m.state('demo', state.id);
+    expect(logs.filter(l => l === 'warn: Could not read what the board keeps outside its sessions')).toHaveLength(1);
+    source.prefsFail = undefined;
+    expect((await m.state('demo', state.id)).preferences).toEqual({ loud: true });
+  });
+
+  it('refuses a change it cannot store, and keeps showing what it had', async () => {
+    source.prefs = { loud: true };
+    const m = manager(1, { preferences: true });
+    const state = await openReady(m);
+    source.prefsFail = 'write';
+    await expect(m.preference('demo', state.id, 'loud', false)).rejects.toThrow('storage unavailable');
+    source.prefsFail = undefined;
+    expect((await m.state('demo', state.id)).preferences).toEqual({ loud: true });
   });
 
   it('is still there when the session is gone and the board is opened again', async () => {

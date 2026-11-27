@@ -90,8 +90,10 @@ interface Entry {
   error?: string;
   errorCode?: string;
   applying?: { done: number; total: number };
-  /** The kind's preferences as last read; loaded with the first state and after each change. */
+  /** The kind's preferences as last read; read on every state request and after each change. */
   preferences?: Record<string, boolean>;
+  /** The last read of the board's own settings failed; the warning is logged once until a read works. */
+  preferencesFailed?: boolean;
   /** The runs going on, by name. */
   runs: Map<string, ActiveRun>;
   queue: Promise<unknown>;
@@ -368,8 +370,11 @@ export class SessionManager {
     if (!kind.preferences) return;
     try {
       entry.preferences = await kind.preferences.read(await entry.reg.deps());
+      entry.preferencesFailed = false;
     } catch (err) {
-      this.log('warn', 'Could not read what the board keeps outside its sessions', { kind: kind.kind, error: messageOf(err) });
+      // Said once until a read works again, since the board asks on every poll.
+      if (!entry.preferencesFailed) this.log('warn', 'Could not read what the board keeps outside its sessions', { kind: kind.kind, error: messageOf(err) });
+      entry.preferencesFailed = true;
     }
   }
 

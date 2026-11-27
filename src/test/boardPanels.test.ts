@@ -379,6 +379,20 @@ describe('a ticket list opened again', () => {
     expect(await selected(m, id)).toBe(2);
   });
 
+  it('does not start over from the sessions board\'s Reopen while its tab is open', async () => {
+    const { m, p } = listBoards();
+    await p.open('ticket-list', request);
+    const id = idOfList();
+    await selected(m, id);
+    const state = await m.state('ticket-list', id);
+    await m.action('ticket-list', id, state.revision, { type: 'select-all' });
+
+    expect(await p.openStored('ticket-list', id)).toEqual({ ok: true });
+    expect(created).toHaveLength(1);
+    expect(created[0].revealed).toBeGreaterThan(0);
+    expect(await selected(m, id)).toBe(2);
+  });
+
   it('starts clean from the sessions board\'s Reopen too, but keeps what a restored tab shows', async () => {
     const { m, p } = listBoards();
     await p.open('ticket-list', request);

@@ -597,6 +597,17 @@ describe('applying the Already ticketed actions', () => {
     expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'done' })]);
   });
 
+  it('refuses a ticket that is gone from Jira, logs that, and marks the tab out of date', async () => {
+    const session = await twoRowsOneTicket();
+    const logs: Array<{ level: string; details?: unknown }> = [];
+    deps = { ...deps, onDiag: (level, _message, details) => { logs.push({ level, details }); }, updatedTimes: async () => ({}) };
+
+    const applied = await apply(session, plan(session));
+    expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'refused', reason: 'changed in Jira since the board read it' })]);
+    expect(logs.filter(l => l.level === 'warn').map(l => l.details)).toContainEqual({ key: 'PROJ-1', stored: 't1', current: 'gone' });
+    expect(applied.working.outOfDate).toEqual(['ticketed']);
+  });
+
   it('logs the ticket and both update times when it refuses a ticket that changed', async () => {
     const session = await twoRowsOneTicket();
     const logs: Array<{ level: string; details?: unknown }> = [];
