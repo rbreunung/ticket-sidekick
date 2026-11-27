@@ -12,7 +12,7 @@ Download the email from OWA using **More actions → Download message** to save 
 2. Choose one or more `.eml` files (at most 50, and at most `ticketSidekick.email.maxBatchSizeMB` in total). A file that is not an email is named and left out
 3. Check the project and the template. The template comes from `ticketSidekick.email.template`; when it is empty the start screen asks for one once and saves it. One template and issue type apply to all emails of the import
 4. **Open**. If boilerplate was found, or an email can be checked by the model, the [cleanup step](#removing-confidentiality-headers-footers-and-signatures) comes first
-5. Each email is a row on the **New** tab. Create tickets for the selected emails, or add emails to an existing ticket as comments, each after a preview and **Apply**. Creating more than one ticket asks you to confirm in a VS Code dialog
+5. Each email is a row on the **New** tab. Create tickets for the selected emails, or add emails to an existing ticket as comments, creating tickets writes on one click, and adding to a ticket shows one preview first
 
 Each ticket gets the email's subject as its summary and its body as the description. Tables in the email body (including those written in desktop Outlook or Word) arrive as Jira tables with a header row, and empty cells stay empty. A table that only lays out a signature or logo is flattened into plain lines. Inline images are uploaded as Jira attachments and embedded as thumbnails at their position; file attachments are uploaded to the ticket. A failed upload is named on that email's result line and does not fail the ticket; the `.eml` file is then kept, even with `ticketSidekick.email.deleteEmlAfterImport` on, so the attachment is not lost. Individual attachments larger than 25 MB are rejected with a clear message.
 
@@ -26,7 +26,7 @@ Before anything is created, the board searches the project for tickets whose sum
 
 ### Adding an email as a comment
 
-Select one or more emails, type the ticket key next to **Add selected to ticket** and preview. Each email becomes one comment with the sender and received date as a header, followed by the body in Jira markup, and its attachments are uploaded to that ticket. After the cleanup's strip, only the attachments that remain are uploaded. The `.eml` file is kept, whatever `ticketSidekick.email.deleteEmlAfterImport` says.
+Select one or more emails, type the ticket key next to **Add selected to ticket** and preview it. Each email becomes one comment with the sender and received date as a header, followed by the body in Jira markup, and its attachments are uploaded to that ticket. After the cleanup's strip, only the attachments that remain are uploaded. The `.eml` file is kept, whatever `ticketSidekick.email.deleteEmlAfterImport` says.
 
 ## Removing confidentiality headers, footers and signatures
 
@@ -52,7 +52,7 @@ A check that fails is marked *Check failed*, keeps what your patterns found, and
 | **Strip and continue** | Removes the blocks from the ticked emails and opens the New tab |
 | **Keep everything and continue** | Imports every email unchanged |
 | the tick box of an email | Leaves that email out of stripping and out of a later model check; it imports unchanged |
-| **Save as pattern…** | For a block the model found: saves it to your patterns in your user settings after a preview of the start and end phrases, so the next import finds it without the model |
+| **Save as pattern** | For a block the model found: saves it at once to your patterns in your user settings, so the next import finds it without the model. A pattern already in the setting is not saved again, and the board says so |
 | **Preview model check of N more email(s)…** | Sends the emails the model has not looked at yet, including ones your patterns matched. Shown only while one can still be checked |
 
 **What stripping keeps.** A stripped signature keeps the author's name line when it can be recognized (the sender's name, or a name right after a closing such as "Best regards"); a signature with no recognizable name, such as "BR" and a logo, is removed completely. An inline image that appears only inside stripped blocks is removed from the text and not uploaded; an image also used in the kept text stays.
@@ -76,7 +76,7 @@ Export a Detailed Report XML from Veracode, then:
 
 1. Run **Command Palette → Ticket Sidekick: Open Jira Import Board**, or ask Copilot in Agent mode with the file's path (or drag the file into the chat), or type `/ts-jira create from veracode <path>`
 2. On the start screen, pick **Veracode** and the `.xml` file. The template comes from `ticketSidekick.veracode.template`; when that setting is empty, the start screen asks for one once and saves it (see [Boards → Jira Import Board](boards.md#jira-import-board))
-3. Review the results on the board's tabs (see [Reviewing an import](#reviewing-an-import) below): new flaws, flaws that already have a ticket, and stale tickets each have their own tab, with their own Preview and Apply
+3. Review the results on the board's tabs (see [Reviewing an import](#reviewing-an-import) below): new flaws, flaws that already have a ticket, and stale tickets each have their own tab, with their own actions
 4. Tickets are created one per group of related flaws (flaws in the same file with the same CWE, or on the same line, fold into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with severity, CWE (linked to the public CWE definition), file/line location, each flaw's own description, and the category's remediation recommendation
 
 Each ticket is labeled `veracode`, `veracode-issue-<id>`, and `cwe-<id>` (plus any labels from your chosen template), so re-running the import after a partial run — or after remediating some flaws and re-scanning — will not create duplicate tickets for flaws that already have one.
@@ -91,7 +91,7 @@ Each ticket is labeled `veracode`, `veracode-issue-<id>`, and `cwe-<id>` (plus a
 | `ticketSidekick.veracode.maxReportSizeMB` | `50` | Largest report file (1–200 MB) accepted; a larger file is rejected before it is read |
 | `ticketSidekick.veracode.slaDays` | Very High 14, High 28, the rest 0 | Calendar days from first found to the Jira Due Date, per severity; 0 means no Due Date (see [Due dates from your SLA table](#due-dates-from-your-sla-table)) |
 
-Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of scope). One Apply creates at most 50 tickets; the preview says how many remain, and the next Apply creates the rest.
+Only `<staticflaws>` are imported (dynamic/manual analysis findings are out of scope). One click creates at most 50 tickets; the **Create** button says how many remain, and the next click creates the rest.
 
 ### Due dates from your SLA table
 
@@ -108,7 +108,7 @@ The Jira Import Board shows each group as a tab with its count. Its controls are
 
 - **New** — findings without a ticket yet. Include or leave out rows, fold rows together or add them to an existing ticket (see [Folding findings into one ticket](#folding-findings-into-one-ticket)), accept CVEs or components (OSS reports only — see [Accepting CVEs](#accepting-cves-you-have-decided-to-live-with)), and create the included rows.
 - **Already ticketed** — findings that already have a ticket. Each row shows its ticket, the ticket's status, what changed since the ticket was made (for example a new CVE, a higher rating or a new flaw), the ticket's assignee, the columns of `ticketSidekick.jira.securityReportFields`, and a proposed action. The tab opens on the rows that changed or have no Due Date; the others are under **Unchanged** and **All**. Veracode and OSS reports offer the same three actions:
-  - **rewrite** — rebuilds the existing ticket's title, description and labels from the report and posts a comment naming what was added and what dropped out (see [Folding findings into one ticket](#folding-findings-into-one-ticket)). It replaces text you added to the description by hand. It rebuilds the whole ticket, so set it on all the rows that point to the same ticket or on none of them; the preview refuses a mix and writes nothing.
+  - **rewrite** — rebuilds the existing ticket's title, description and labels from the report and posts a comment naming what was added and what dropped out (see [Folding findings into one ticket](#folding-findings-into-one-ticket)). It replaces text you added to the description by hand. It rebuilds the whole ticket, so set it on all the rows that point to the same ticket or on none of them; Write refuses a mix and writes nothing.
   - **new ticket** — creates a complete new ticket for the finding with its current content, titled `… (follow-up to PROJ-123)` and linked to the resolved ticket. Offered only when every ticket for the finding is resolved. See also [Keeping OSS tickets up to date](#keeping-oss-tickets-up-to-date).
   - **leave** — does nothing.
 
@@ -148,7 +148,7 @@ To find the ticket to add to, **Search matched tickets** lists the open tickets 
 
 Two or more tickets for the same piece of work can be combined. A finding with more than one open ticket names the others in its Ticket cell under "also open:". On the **Already ticketed** tab, pick the rows of the tickets, choose the ticket to keep (one of the picked ones, or type its key), and click **Preview merge tickets…**. You choose the direction: keeping PROJ-1301 closes PROJ-1190, and keeping PROJ-1190 closes PROJ-1301.
 
-The preview reads the tickets and shows them, the steps and any warnings, and writes nothing. Apply asks VS Code's dialog, then a **Ticket merge** tab runs the steps (see [Boards → Ticket merge](boards.md#ticket-merge)). Merging works differently for the two kinds of report.
+The preview reads the tickets and shows them, the steps and any warnings, and writes nothing. Apply in that preview opens a **Ticket merge** tab that runs the steps (see [Boards → Ticket merge](boards.md#ticket-merge)). Merging works differently for the two kinds of report.
 
 **OSS reports.** Then:
 
@@ -169,7 +169,7 @@ What to expect:
 
 - **Warnings before you apply.** A resolved kept ticket, a ticket that no import created (a rewrite replaces its text, and the findings it would drop are listed), and an already-resolved cancelled ticket (OSS reports: it is rewritten and linked but not closed; Veracode: it is linked and commented on but not closed).
 - **Missing Jira pieces.** Without a Duplicate link type the tickets are linked as Relates. Without a Duplicate resolution you pick the resolution from your project's list. The preview says so up front.
-- **If a step fails,** the merge stops and the merge tab shows every step with its status and the error. **Retry…** runs that step again, **Ignore…** skips it and carries on with the rest (the end of the merge lists what is missing), and **Stop…** ends the merge. Steps already done stay done.
+- **If a step fails,** the merge stops and the merge tab shows every step with its status and the error. **Retry** runs that step again, **Ignore** skips it and carries on with the rest (the end of the merge lists what is missing), and **Stop** ends the merge. Steps already done stay done.
 - **The closes.** Before the tickets are closed, you choose the target status, and the resolution where one is asked, for every issue type of the tickets to close. One Apply then closes them all.
 - **A ticket Jira closes without the Duplicate resolution** (some workflows reject the field) is named when the merge ends.
 - **Later imports.** The kept ticket stays open, so it is the one later imports propose changes for; the closed ticket is resolved and is left alone, and its labels still count as known, so its items do not come back as new.
@@ -178,7 +178,7 @@ After a merge the tabs show the new reading from Jira, except a tab where you ha
 
 ### Reloading the report
 
-**Reload report…** reads the same report file again, checks Jira again and rebuilds every tab. It also picks up edits to `.jira-oss-accepted.json`. Its preview lists the choices you have made, each kept if its rows are still in the report and dropped otherwise; after Apply the board names the ones it dropped. If the report file has moved, the board offers **Pick the file again…** instead.
+**Reload report** reads the same report file again, checks Jira again and rebuilds every tab, on one click. It also picks up edits to `.jira-oss-accepted.json`. Each choice you made is kept if its rows are still in the report and dropped otherwise, and the board names the ones it dropped. If the report file has moved, the board offers **Pick the file again…** instead.
 
 ## Create Jira tickets from an OSS report (.xlsx)
 
@@ -234,13 +234,13 @@ Things to know:
 | `ticketSidekick.waltz.includeRemediationActions` | `["", "Remediate"]` | Remediation Action values included by default (empty string means the column was blank) |
 | `ticketSidekick.waltz.maxReportSizeMB` | `50` | Largest report file (1–200 MB) accepted; a larger file is rejected before it is read |
 
-One Apply creates at most 50 tickets; the preview says how many remain, and the next Apply creates the rest. If you re-run the import later, already-created tickets are automatically skipped via the dedup check.
+One click creates at most 50 tickets; the button says how many remain, and the next click creates the rest. If you re-run the import later, already-created tickets are automatically skipped via the dedup check.
 
 ### Accepting CVEs you have decided to live with
 
 Some CVEs are known and accepted (not reachable in your setup, no fix available yet). Record them once and the OSS import stops offering them in **New**.
 
-On the New tab, select the rows, type a reason if you want one, and click **Preview accept CVEs of selected…**, then Apply. CVEs can be accepted from New rows only.
+On the New tab, select the rows, type a reason if you want one, and click **Accept CVEs of N selected**. CVEs can be accepted from New rows only.
 
 The CVEs listed on those rows are written to `.jira-oss-accepted.json` in the workspace root, next to `.jira-templates.json`. The reason is optional. Commit the file and your team shares the same decisions; you can also edit it by hand:
 
@@ -261,13 +261,13 @@ How it applies:
 - **Merged rows.** Accepting the CVEs of a merged row accepts the CVEs of every component in it.
 - **CVE entries affect the New tab only.** The Already ticketed and Stale tabs are unchanged by them, so a later import can still propose adding an accepted CVE to an existing ticket. To take a whole component off all three tabs, accept it as a component (below).
 
-A line above the tabs says how many accepted CVEs and components the list hid from this report, and how many components fell below the rating floor. The **Accepted** tab lists the entries with their reasons. **Unaccept…** deletes an entry after a preview, and the entry is offered again right away: the tabs read the report again, or, where you have unfinished choices, are marked out of date and offer **Refresh**.
+A line above the tabs says how many accepted CVEs and components the list hid from this report, and how many components fell below the rating floor. The **Accepted** tab lists the entries with their reasons. **Unaccept** deletes an entry on one click, and the entry is offered again right away: the tabs read the report again, or, where you have unfinished choices, are marked out of date and offer **Refresh**.
 
 If `.jira-oss-accepted.json` is not valid JSON, the import hides nothing and shows a warning. If it has an entry that cannot be read (for example a mistyped key), that entry is skipped with a warning. In both cases accept and unaccept leave the file alone until you fix it, so nothing you wrote by hand is lost.
 
 ### Accepting a whole component at its version
 
-Some components cannot be fixed at all (no newer version exists, or the risk is accepted). Accept the component at that exact version and the OSS import stops asking about it everywhere: select its rows on the New tab and click **Preview accept components of selected…**, or pick its rows on the Already ticketed tab and click **Preview accept components of picked…**. The reason is optional. Each component is written to the same `.jira-oss-accepted.json` as an entry with a `version` and no `cve`:
+Some components cannot be fixed at all (no newer version exists, or the risk is accepted). Accept the component at that exact version and the OSS import stops asking about it everywhere: select its rows on the New tab and click **Accept components of N selected**, or pick its rows on the Already ticketed tab and click **Accept components of N picked**. The reason is optional. Each component is written to the same `.jira-oss-accepted.json` as an entry with a `version` and no `cve`:
 
 ```json
 {
