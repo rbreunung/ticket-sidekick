@@ -8,6 +8,14 @@ import { readWaltzComponents, type TicketComponent } from './waltzComponentsTabl
 import { severityLabel, type VeracodeFlaw } from './veracodeReport';
 import { vulnRatingRank, type WaltzComponent } from './waltzReport';
 
+/** What a board shows where an assignee was never read, because it holds a saved reading from before the column existed. */
+export const ASSIGNEE_NOT_READ = '\u2014';
+
+/** An assignee as a board shows it: the name, "Unassigned" for `''`, a dash for one never read. */
+export function assigneeLabel(assignee: string | undefined): string {
+  return assignee === undefined ? ASSIGNEE_NOT_READ : assignee === '' ? 'Unassigned' : assignee;
+}
+
 export type OverviewSource = 'veracode' | 'waltz';
 export type OverviewFlag = 'overdue' | 'due-before-release' | null;
 export type ReportMatch = 'tracked' | 'stale' | 'in-report-no-ticket';

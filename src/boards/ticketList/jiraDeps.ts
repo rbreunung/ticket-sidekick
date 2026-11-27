@@ -6,7 +6,7 @@ import { TemplateService } from '../../templates/TemplateService';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
 import type { JiraFieldMeta } from '../../jira/IJiraClient';
-import { renderFieldValue } from '../../services/TicketService';
+import { isEmptyRendered, renderFieldValue } from '../../services/TicketService';
 import { resolveExtraColumns } from '../../services/extraColumns';
 import type { ExtraColumn, TicketListDeps, TicketRow } from './kind';
 
@@ -33,7 +33,7 @@ export interface TicketListJiraOptions {
 function plainFieldText(value: unknown, meta: JiraFieldMeta | undefined): string {
   if (!meta) return '';
   const rendered = renderFieldValue(value, meta);
-  return /^_(Not set|None|Unassigned)_$/.test(rendered) ? '' : rendered.replace(/^_(.*)_$/, '$1');
+  return isEmptyRendered(rendered) ? '' : rendered.replace(/^_(.*)_$/, '$1');
 }
 
 function textOf(value: unknown): string {

@@ -246,7 +246,6 @@ const MAX_ALSO_OPEN_SHOWN = 3;
 function ticketedTab(view, board, ctx) {
   const ext = view.ext.ticketed ?? { filter: view.ticketed?.show === 'decision' ? 'changed' : 'all', notice: null, noDueDate: [], counts: {}, actionLabels: {} };
   const all = view.ticketed?.rows ?? [];
-  // The extension names the rows shown, in the order of the sort chosen.
   const byId = new Map(all.map(r => [r.id, r]));
   const rows = ext.shown ? ext.shown.map(id => byId.get(id)).filter(Boolean) : all;
   const columns = view.ticketed?.columns ?? [];

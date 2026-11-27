@@ -261,11 +261,8 @@ async function readWith<TItem, TRow extends ReviewRowBase & ImportRow>(
   }
 
   const notices: string[] = [];
-  const template = await deps.templateFields(recipe, descriptor);
+  const [template, columns] = await Promise.all([deps.templateFields(recipe, descriptor), deps.extraColumns?.() ?? []]);
   if (template.problem) notices.push(template.problem);
-
-  // The extra columns are resolved once, so the tab and the export of one reading show the same columns.
-  const columns = (await deps.extraColumns?.()) ?? [];
   const columnInfos = columns.map(({ id, name }) => ({ id, name }));
 
   let staleFailed = false;

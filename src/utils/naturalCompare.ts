@@ -21,6 +21,20 @@ export function compareNatural(a: string | null | undefined, b: string | null | 
   return descending ? -order : order;
 }
 
+/** The prefix of a sort column id that names a configured extra column: `extra:<field id>`. */
+export const EXTRA_COLUMN_PREFIX = 'extra:';
+
+/** The field id a sort column id names, or null when it is not an extra column. */
+export function extraColumnId(column: string): string | null {
+  return column.startsWith(EXTRA_COLUMN_PREFIX) ? column.slice(EXTRA_COLUMN_PREFIX.length) : null;
+}
+
+/** The sort after a click on a column title: a new column sorts ascending, a second click turns the order around, a third takes the sort off. */
+export function nextSort<C extends string>(current: { column: C; descending: boolean } | null | undefined, column: C): { column: C; descending: boolean } | null {
+  if (!current || current.column !== column) return { column, descending: false };
+  return current.descending ? null : { column, descending: true };
+}
+
 /** A sorted copy; values that compare equal keep their original order. */
 export function sortNatural<T>(items: readonly T[], valueOf: (item: T) => string | null | undefined, descending: boolean): T[] {
   return [...items].sort((x, y) => compareNatural(valueOf(x), valueOf(y), descending));

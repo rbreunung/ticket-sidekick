@@ -1,6 +1,6 @@
 import { isSystemFilterId } from '../../utils/jiraSystemFilters';
 import { splitOrderBy } from '../../utils/jqlOrderBy';
-import { sortNatural } from '../../utils/naturalCompare';
+import { extraColumnId, nextSort, sortNatural } from '../../utils/naturalCompare';
 import type { BoardKind, CheckMode } from '../../sessions/boardKind';
 import type { Conflict, Session } from '../../sessions/sessionTypes';
 import type { WorkflowGraph } from '../../services/WorkflowService';
@@ -210,7 +210,6 @@ export const MAX_SUBTASK_ROWS = MAX_LIST_ROWS * 5;
 const FIELD_OPERATIONS: readonly FieldOperation[] = ['set', 'add', 'remove'];
 const OUT_OF_DATE = 'The list is out of date: press Refresh to see the tickets as they are now.';
 const SORT_COLUMNS: readonly SortColumn[] = ['key', 'summary', 'status', 'issueType', 'assignee', 'priority'];
-const EXTRA_PREFIX = 'extra:';
 
 type ListSession = Session<TicketListRecipe, TicketListData, TicketListWorking>;
 
@@ -263,7 +262,8 @@ function shownColumns(session: ListSession): ExtraColumn[] {
 function isSortColumn(session: ListSession, column: unknown): column is SortColumn {
   if (typeof column !== 'string') return false;
   if ((SORT_COLUMNS as readonly string[]).includes(column)) return true;
-  return column.startsWith(EXTRA_PREFIX) && shownColumns(session).some(c => c.id === column.slice(EXTRA_PREFIX.length));
+  const fieldId = extraColumnId(column);
+  return fieldId !== null && shownColumns(session).some(c => c.id === fieldId);
 }
 
 /** The sort in force: one on an extra column the board no longer shows (its column set changed) counts as none. */
@@ -277,15 +277,18 @@ function orderedRows(session: ListSession): TicketRow[] {
   const sort = activeSort(session);
   const rows = session.derived.data.rows;
   if (!sort) return rows;
-  // Assignee and the extra columns sort in natural order with empty values last; the others as before.
-  if (sort.column === 'assignee' || sort.column.startsWith(EXTRA_PREFIX)) {
-    return sortNatural(rows, row => naturalText(row, sort.column), sort.descending);
-  }
-  return [...rows].sort((a, b) => sortValue(a, sort.column).localeCompare(sortValue(b, sort.column)) * (sort.descending ? -1 : 1));
+  const { column } = sort;
+  if (isNaturalColumn(column)) return sortNatural(rows, row => naturalText(row, column), sort.descending);
+  return [...rows].sort((a, b) => sortValue(a, column).localeCompare(sortValue(b, column)) * (sort.descending ? -1 : 1));
 }
 
-function naturalText(row: TicketRow, column: SortColumn): string {
-  return column === 'assignee' ? row.assignee : row.extra?.[column.slice(EXTRA_PREFIX.length)] ?? '';
+/** Assignee and the extra columns sort in natural order with empty values last; the others by `sortValue`. */
+function isNaturalColumn(column: SortColumn): column is 'assignee' | `extra:${string}` {
+  return column === 'assignee' || extraColumnId(column) !== null;
+}
+
+function naturalText(row: TicketRow, column: 'assignee' | `extra:${string}`): string {
+  return column === 'assignee' ? row.assignee : row.extra?.[extraColumnId(column)!] ?? '';
 }
 
 function pageRows(session: ListSession): TicketRow[] {
@@ -341,12 +344,12 @@ function differences(shownRows: TicketRow[], freshRows: TicketRow[], results: Re
   return changed.length + gone.length + added > 0 ? { changed, gone, added } : null;
 }
 
-function sortValue(row: TicketRow, column: SortColumn): string {
+function sortValue(row: TicketRow, column: Exclude<SortColumn, 'assignee' | `extra:${string}`>): string {
   if (column === 'key') {
     const [project, number] = row.key.split('-');
     return `${project}-${(number ?? '').padStart(9, '0')}`;
   }
-  return (column === 'assignee' || column.startsWith(EXTRA_PREFIX) ? naturalText(row, column) : row[column as 'summary' | 'status' | 'issueType' | 'priority']).toLowerCase();
+  return row[column].toLowerCase();
 }
 
 function columnSetFor(change: ListChange | undefined): ColumnSet {
@@ -618,11 +621,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
       }
       case 'sort': {
         if (!isSortColumn(session, action.column)) return { ok: false, reason: 'Unknown column.' };
-        const active = activeSort(session);
-        const current = active?.column === action.column ? active : null;
-        const sort = !current ? { column: action.column, descending: false } : current.descending ? null : { column: action.column, descending: true };
-        // A new order starts again on the first page.
-        return { ok: true, working: { ...working, sort, page: 0 } };
+        return { ok: true, working: { ...working, sort: nextSort(activeSort(session), action.column), page: 0 } };
       }
       default: return { ok: false, reason: 'Unknown action.' };
     }

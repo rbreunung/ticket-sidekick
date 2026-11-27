@@ -263,6 +263,11 @@ export function renderFieldValue(value: unknown, meta: JiraFieldMeta): string {
 export const MAX_EXTRA_VALUE_CHARS = 500;
 const EMPTY_VALUE_WORDS = new Set(['_Not set_', '_None_', '_Unassigned_']);
 
+/** Whether `renderFieldValue` returned its word for no value rather than a value. */
+export function isEmptyRendered(rendered: string): boolean {
+  return EMPTY_VALUE_WORDS.has(rendered);
+}
+
 /**
  * A field value as one line of plain text for a cell: the same per-type reading as the ticket list, except that a
  * list shows all its items joined with "; ". No value is the raw empty string, never a word like "Not set", so a
@@ -274,7 +279,7 @@ export function renderExtraValue(value: unknown, meta: JiraFieldMeta): string {
     text = value.map(arrayItemText).join('; ');
   } else {
     const rendered = renderFieldValue(value, meta);
-    text = EMPTY_VALUE_WORDS.has(rendered) ? '' : rendered;
+    text = isEmptyRendered(rendered) ? '' : rendered;
   }
   text = text.replace(/\s+/g, ' ').trim();
   return text.length > MAX_EXTRA_VALUE_CHARS ? text.slice(0, MAX_EXTRA_VALUE_CHARS) : text;

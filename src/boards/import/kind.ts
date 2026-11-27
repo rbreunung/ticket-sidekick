@@ -1,3 +1,4 @@
+import { assigneeLabel } from '../../utils/securityOverview';
 import * as path from 'path';
 import type { BoardKind, CheckMode, Validated } from '../../sessions/boardKind';
 import { forgetChangedEmails } from './cleanupStage';
@@ -192,9 +193,6 @@ export interface ImportView {
 }
 
 type ImportSession = Session<ImportRecipe, ImportData, ImportWorking>;
-
-/** What a saved reading shows where it never read a value. */
-const NOT_READ = '\u2014';
 
 const TAB_LABELS: Record<ImportTab, string> = { new: 'New', ticketed: 'Already ticketed', stale: 'Stale', accepted: 'Accepted' };
 const EMPTY: Record<ImportTab, string> = {
@@ -484,7 +482,6 @@ function compose(stored: DerivedPart<ImportData>, fresh: DerivedPart<ImportData>
       ...(sd.review.staleCandidates ? { staleCandidates: sd.review.staleCandidates } : {}),
     },
     rowKeys, updated,
-    // The Already ticketed tab keeps the columns of the reading its rows come from.
     columns: td.columns,
     accepted: ad.accepted,
     staleFailed: sd.staleFailed,
@@ -779,7 +776,7 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
             return {
               id: r.id, ref: rowRef(r), summary: r.summary, ticket, status: r.target?.status ?? null, resolved: r.target?.resolved ?? false,
               url: browseUrl(data.baseUrl, ticket), ...(alsoOpen.length > 0 ? { alsoOpen } : {}),
-              assignee: info?.assignee === undefined ? NOT_READ : info.assignee === '' ? 'Unassigned' : info.assignee,
+              assignee: assigneeLabel(info?.assignee),
               values: columns.map(c => info?.extra?.[c.id] ?? ''), change: describeChange(r),
               action: choices.actions[key] ?? r.action ?? 'leave', allowedActions: [...(r.allowedActions ?? ['leave'])],
               needsDecision: needsDecision(data, r, writes), written: rowWritten(data, writes, r),

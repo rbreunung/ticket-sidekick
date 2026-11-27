@@ -5,8 +5,8 @@ import type { ResolvedColumn } from '../../services/extraColumns';
 import { normalizeProjectKey } from '../../services/configValidation';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
-import { compareNatural } from '../../utils/naturalCompare';
-import { buildOverview, type Overview, type OverviewFlag, type OverviewInput, type OverviewRow, type OverviewSource } from '../../utils/securityOverview';
+import { extraColumnId, nextSort, sortNatural } from '../../utils/naturalCompare';
+import { assigneeLabel, buildOverview, type Overview, type OverviewFlag, type OverviewInput, type OverviewRow, type OverviewSource } from '../../utils/securityOverview';
 import { renderOverviewCsv } from '../../utils/securityOverviewCsv';
 import { renderOverviewXlsx } from '../../utils/securityOverviewXlsx';
 
@@ -102,8 +102,6 @@ export interface SecurityReportView {
 }
 
 const SORT_COLUMNS: readonly SortColumn[] = ['source', 'summary', 'rating', 'ticket', 'assignee', 'due', 'flag'];
-const NOT_READ = '\u2014';
-const EXTRA_PREFIX = 'extra:';
 const FLAG_FILTERS: readonly FlagFilter[] = ['overdue', 'due-before-release', 'none'];
 const NO_FILTERS: SecurityReportWorking = { release: null, flag: null, tool: null, sort: null };
 
@@ -111,34 +109,35 @@ function overviewOf(data: SecurityReportData): Overview {
   return buildOverview(data.input);
 }
 
-/** A column that sorts as natural text with empty values last: Assignee and the extra columns. */
-function naturalText(row: OverviewRow, column: SortColumn): string | null {
+/** Assignee and the extra columns sort as natural text with empty values last; the others by `sortValue`. */
+function isNaturalColumn(column: SortColumn): column is 'assignee' | `extra:${string}` {
+  return column === 'assignee' || extraColumnId(column) !== null;
+}
+
+function naturalText(row: OverviewRow, column: 'assignee' | `extra:${string}`): string {
   if (column === 'assignee') return row.ticketKey === null ? '' : row.assignee ?? '';
-  if (column.startsWith(EXTRA_PREFIX)) return row.extra?.[column.slice(EXTRA_PREFIX.length)] ?? '';
-  return null;
+  return row.extra?.[extraColumnId(column)!] ?? '';
 }
 
 function isKnownColumn(column: unknown, data: SecurityReportData): column is SortColumn {
   if (typeof column !== 'string') return false;
   if ((SORT_COLUMNS as readonly string[]).includes(column)) return true;
-  return column.startsWith(EXTRA_PREFIX) && (data.input.extraColumns ?? []).some(c => c.id === column.slice(EXTRA_PREFIX.length));
+  const fieldId = extraColumnId(column);
+  return fieldId !== null && (data.input.extraColumns ?? []).some(c => c.id === fieldId);
 }
 
 function assigneeText(row: OverviewRow): string {
-  if (row.ticketKey === null) return '';
-  return row.assignee === undefined ? NOT_READ : row.assignee === '' ? 'Unassigned' : row.assignee;
+  return row.ticketKey === null ? '' : assigneeLabel(row.assignee);
 }
 
-function sortValue(row: OverviewRow, column: SortColumn): string {
+function sortValue(row: OverviewRow, column: Exclude<SortColumn, 'assignee' | `extra:${string}`>): string {
   switch (column) {
     case 'source': return row.source;
     case 'summary': return row.summary.toLowerCase();
     case 'rating': return row.rating.toLowerCase();
     case 'ticket': return row.ticketKey ?? '';
-    case 'assignee': return naturalText(row, column) ?? '';
     case 'due': return row.dueDate ?? '9999-99-99';
     case 'flag': return row.flag === 'overdue' ? '0' : row.flag === 'due-before-release' ? '1' : '2';
-    default: return naturalText(row, column) ?? '';
   }
 }
 
@@ -166,10 +165,9 @@ export function buildReportView(session: Session<SecurityReportRecipe, SecurityR
     let rows = table.rows.filter(row => keepsRow(row, working));
     if (working.sort) {
       const { column, descending } = working.sort;
-      rows = [...rows].sort((a, b) => {
-        if (naturalText(a, column) === null) return sortValue(a, column).localeCompare(sortValue(b, column)) * (descending ? -1 : 1);
-        return compareNatural(naturalText(a, column), naturalText(b, column), descending);
-      });
+      rows = isNaturalColumn(column)
+        ? sortNatural(rows, row => naturalText(row, column), descending)
+        : [...rows].sort((a, b) => sortValue(a, column).localeCompare(sortValue(b, column)) * (descending ? -1 : 1));
     }
     shown += new Set(rows.map(r => r.ticketKey).filter(Boolean)).size;
     tables.push({
@@ -270,7 +268,6 @@ export const securityReportKind: BoardKind<
   reconcile: (session, fresh) => {
     const releases = new Set(overviewOf(fresh.data).tables.map(t => t.fixVersion ?? ''));
     const release = session.working.release !== null && releases.has(session.working.release) ? session.working.release : null;
-    // A sort on a column the setting no longer lists is dropped; a sort on a built-in column stays.
     const sort = session.working.sort && isKnownColumn(session.working.sort.column, fresh.data) ? session.working.sort : null;
     return { derived: fresh, working: { ...session.working, release, sort }, conflicts: [] };
   },
@@ -280,10 +277,7 @@ export const securityReportKind: BoardKind<
     if (action?.type === 'clear') return { ok: true, working: { ...NO_FILTERS } };
     if (action?.type === 'sort') {
       if (!isKnownColumn(action.column, session.derived.data)) return { ok: false, reason: 'Unknown column.' };
-      // A second click on the same column turns the order around; a third takes the sort off.
-      const current = working.sort?.column === action.column ? working.sort : null;
-      const sort = !current ? { column: action.column, descending: false } : current.descending ? null : { column: action.column, descending: true };
-      return { ok: true, working: { ...working, sort } };
+      return { ok: true, working: { ...working, sort: nextSort(working.sort, action.column) } };
     }
     if (action?.type === 'filter') {
       const next = { ...working };

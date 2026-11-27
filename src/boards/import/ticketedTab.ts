@@ -5,7 +5,7 @@ import {
   findPartialRewrites, isTicketedRowFinished, ticketedRowActions, ticketedTargetKey,
   type ReviewSession, type TicketedAction,
 } from '../../imports/types';
-import { compareNatural } from '../../utils/naturalCompare';
+import { compareNatural, extraColumnId, nextSort } from '../../utils/naturalCompare';
 import { BATCH_LIMIT } from '../../utils/reportImport';
 import { descriptorOf, type HandlerPayload, type ImportHandler, type ImportSession } from './handlers';
 import { rowKeyOf, ticketedRows, type ImportData, type ImportRow } from './read';
@@ -33,7 +33,6 @@ interface TicketedState {
   sort?: { column: string; descending: boolean };
 }
 
-const EXTRA_PREFIX = 'extra:';
 const SORT_COLUMNS = ['ticket', 'finding', 'change', 'action', 'assignee'] as const;
 
 /** One write of an Apply: a ticket rewritten from all its rows, or one row's own action. */
@@ -134,7 +133,8 @@ function shownRows(session: ImportSession): ImportRow[] {
 function isSortColumn(column: unknown, data: ImportData): column is string {
   if (typeof column !== 'string') return false;
   if ((SORT_COLUMNS as readonly string[]).includes(column)) return true;
-  return column.startsWith(EXTRA_PREFIX) && (data.columns ?? []).some(c => c.id === column.slice(EXTRA_PREFIX.length));
+  const fieldId = extraColumnId(column);
+  return fieldId !== null && (data.columns ?? []).some(c => c.id === fieldId);
 }
 
 /** The text a row sorts by in a column; empty where the reading holds no value. */
@@ -148,7 +148,7 @@ function sortText(session: ImportSession, row: ImportRow, column: string): strin
     case 'change': return describeChange(row) ?? '';
     case 'action': return LABELS[working.choices.actions[rowKeyOf(data, row)] ?? row.action ?? 'leave'];
     case 'assignee': return info?.assignee ?? '';
-    default: return info?.extra?.[column.slice(EXTRA_PREFIX.length)] ?? '';
+    default: return info?.extra?.[extraColumnId(column) ?? ''] ?? '';
   }
 }
 
@@ -216,11 +216,8 @@ export const ticketedTabHandler: ImportHandler = {
       }
       case 'ticketed-sort': {
         if (!isSortColumn(action.column, data)) return { ok: false, reason: 'That column cannot be sorted.' };
-        const state = stateOf(working);
-        // A second click on the same column turns the order around; a third takes the sort off.
-        const current = state.sort?.column === action.column ? state.sort : undefined;
-        const { sort: _sort, ...rest } = state;
-        const next = !current ? { column: action.column as string, descending: false } : current.descending ? undefined : { column: action.column as string, descending: true };
+        const { sort, ...rest } = stateOf(working);
+        const next = nextSort(sort, action.column);
         return { ok: true, working: withState(working, next ? { ...rest, sort: next } : rest) };
       }
       case 'ticketed-action': {
