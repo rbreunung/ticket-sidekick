@@ -208,6 +208,10 @@ export interface TicketListView {
   change: ListChange | null;
   proposed: boolean;
   sort: TicketListWorking['sort'];
+  /** The page draws Apply and Refresh on its own action line, so the shared header leaves both out. */
+  ownActionLine: true;
+  /** The Apply button: what it writes, named. The page also turns it off while the board is busy or out of date. */
+  applyButton: { label: string; enabled: boolean };
 }
 
 export const MAX_LIST_ROWS = 300;
@@ -637,13 +641,12 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     if (!change) return { ok: false, reason: 'Choose a change first: a status to move to, or a field and a value.' };
     const rows = selectedRows(session);
     if (rows.length === 0) return { ok: false, reason: isCleanup(session) ? 'Select at least one ticket on this page.' : 'Select at least one ticket.' };
-    const closes = change.type === 'transition' && isFinalStatus(change.status);
     return {
       ok: true,
       plan: {
         title: change.type === 'transition' ? `Move ${rows.length} ticket(s) to ${change.status}` : `${fieldVerb(change.operation)} ${change.field} on ${rows.length} ticket(s)`,
         lines: rows.map(row => ({ target: row.key, change: describeChange(change, row) })),
-        risky: rows.length > 1 || closes,
+        risky: false,
         payload: { change, targets: rows.map((row): PlannedTarget => ({ key: row.key, updated: row.updated, status: row.status })) },
       },
     };
@@ -790,9 +793,26 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
       totalRows: rows.length, page, pageCount: pageCount(rows.length), outOfDate: working.outOfDate,
       selectedCount: data.rows.filter(r => selectable(r) && isSelected(working.selection, r.key)).length,
       change: working.change, proposed: working.proposed, sort: activeSort(session),
+      ownActionLine: true, applyButton: applyButton(session),
     };
   },
 };
+
+/** What the Apply button says: the move or field change and the number of tickets it writes, or plain "Apply" while it cannot write. */
+function applyButton(session: ListSession): TicketListView['applyButton'] {
+  const idle = { label: 'Apply', enabled: false };
+  const count = selectedRows(session).length;
+  if (count === 0) return idle;
+  const tickets = `${count} ticket${count === 1 ? '' : 's'}`;
+  if (session.recipe.source.type === 'rule') {
+    const info = session.derived.data.cleanup;
+    if (!info || (info.needsResolution && session.working.resolution === null)) return idle;
+    return { label: `Move ${tickets} to ${info.targetState}`, enabled: true };
+  }
+  const { change } = session.working;
+  if (!change) return idle;
+  return { label: change.type === 'transition' ? `Move ${tickets} to ${change.status}` : `${fieldVerb(change.operation)} ${change.field} on ${tickets}`, enabled: true };
+}
 
 /** The query the rows on show were read with. */
 function listedJql(session: ListSession): string {
@@ -855,7 +875,7 @@ function planCleanup(session: ListSession): ReturnType<NonNullable<typeof ticket
     plan: {
       title: `Move ${rows.length} ticket(s) to ${info.targetState}${subtaskCount ? `, with ${subtaskCount} subtask(s) first` : ''}`,
       lines: targets.flatMap(t => [...(t.subtasks ?? []).map(sub => describe(sub, `Subtask of ${t.key}: `)), describe(t.move!)]),
-      risky: rows.length + subtaskCount > 1 || info.targetFinal,
+      risky: false,
       payload: { change: null, targets },
     },
   };

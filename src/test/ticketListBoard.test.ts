@@ -161,6 +161,40 @@ describe('selecting and choosing a change', () => {
   });
 });
 
+describe('the Apply button of a ticket list', () => {
+  const button = (s: ListSession) => ticketListKind.view(s).applyButton;
+  const move = { type: 'change', change: { type: 'transition', status: 'Done' } } as const;
+
+  it('draws its own action line, so the header offers neither Refresh nor Close', async () => {
+    expect(ticketListKind.view(await open(fake())).ownActionLine).toBe(true);
+  });
+
+  it('reads Apply and is off while no change is chosen or no ticket is selected', async () => {
+    const s = await open(fake());
+    expect(button(s)).toEqual({ label: 'Apply', enabled: false });
+    expect(button(act(s, { type: 'select-all' }))).toEqual({ label: 'Apply', enabled: false });
+    expect(button(act(s, move))).toEqual({ label: 'Apply', enabled: false });
+  });
+
+  it('names the move and the number of selected tickets, with the singular for one', async () => {
+    let s = act(await open(fake()), move);
+    s = act(s, { type: 'select', key: 'PROJ-1', on: true });
+    expect(button(s)).toEqual({ label: 'Move 1 ticket to Done', enabled: true });
+    s = act(s, { type: 'select', key: 'PROJ-2', on: true });
+    expect(button(s)).toEqual({ label: 'Move 2 tickets to Done', enabled: true });
+  });
+
+  it('names a field change by what it does to the field', async () => {
+    let s = act(await open(fake()), { type: 'select-all' });
+    s = act(s, { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup' } });
+    expect(button(s).label).toBe('Set labels on 3 tickets');
+    s = act(s, { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup', operation: 'add' } });
+    expect(button(s).label).toBe('Add to labels on 3 tickets');
+    s = act(s, { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup', operation: 'remove' } });
+    expect(button(s).label).toBe('Remove from labels on 3 tickets');
+  });
+});
+
 describe('previewing a change', () => {
   it('lists exactly what is written to each selected ticket', async () => {
     let s = await open(fake());
@@ -169,15 +203,15 @@ describe('previewing a change', () => {
     expect(planned).toMatchObject({ ok: true, plan: { title: 'Move 1 ticket(s) to In Review', lines: [{ target: 'PROJ-1', change: 'Status: Open → In Review' }], risky: false } });
   });
 
-  it('needs the VS Code confirmation for more than one ticket, and for closing even one', async () => {
+  it('asks for no VS Code confirmation, not for several tickets and not for closing one: the board is the preview', async () => {
     let s = await open(fake());
     s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup' } });
-    expect(ticketListKind.plan!(s, { type: 'apply' })).toMatchObject({ ok: true, plan: { risky: true } });
+    expect(ticketListKind.plan!(s, { type: 'apply' })).toMatchObject({ ok: true, plan: { risky: false } });
 
     let one = await open(fake());
     one = act(act(one, { type: 'select', key: 'PROJ-1', on: true }), { type: 'change', change: { type: 'transition', status: 'Closed', resolution: 'Fixed' } });
     const planned = ticketListKind.plan!(one, { type: 'apply' });
-    expect(planned).toMatchObject({ ok: true, plan: { risky: true, lines: [{ target: 'PROJ-1', change: 'Status: Open → Closed, resolution Fixed' }] } });
+    expect(planned).toMatchObject({ ok: true, plan: { risky: false, lines: [{ target: 'PROJ-1', change: 'Status: Open → Closed, resolution Fixed' }] } });
   });
 
   it('refuses without a change or without a selection', async () => {
@@ -446,7 +480,7 @@ describe('paging', () => {
     s = act(act(s, { type: 'page', page: 2 }), { type: 'change', change: { type: 'transition', status: 'Done' } });
     expect(ticketListKind.view(s).selectedCount).toBe(119);
     const planned = ticketListKind.plan!(s, { type: 'apply' });
-    expect(planned).toMatchObject({ ok: true, plan: { title: 'Move 119 ticket(s) to Done', risky: true } });
+    expect(planned).toMatchObject({ ok: true, plan: { title: 'Move 119 ticket(s) to Done', risky: false } });
     expect((planned as { plan: { lines: unknown[] } }).plan.lines).toHaveLength(119);
   });
 });

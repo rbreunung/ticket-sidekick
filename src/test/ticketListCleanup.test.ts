@@ -247,6 +247,19 @@ describe('choosing tickets on a cleanup', () => {
     expect(deps.moved).toEqual(['PROJ-1→Done (Fixed)', 'PROJ-2→Done (Fixed)']);
   });
 
+  it('names the move and the tickets of the page in view on its Apply button, once the resolution is chosen', async () => {
+    const deps = fake();
+    let s = await open(deps);
+    const button = () => ticketListKind.view(s).applyButton;
+    expect(button()).toEqual({ label: 'Apply', enabled: false });
+    s = act(s, { type: 'resolution', resolution: 'Fixed' });
+    expect(button()).toEqual({ label: 'Move 2 tickets to Done', enabled: true });
+    s = act(s, { type: 'select', key: 'PROJ-2', on: false });
+    expect(button()).toEqual({ label: 'Move 1 ticket to Done', enabled: true });
+    s = act(s, { type: 'select-none' });
+    expect(button()).toEqual({ label: 'Apply', enabled: false });
+  });
+
   it('sends the chosen resolution only with moves to a final status', async () => {
     const rule: CleanupRule = { ...RULE, closeSubtasks: true, subtaskTargetState: 'Verification' };
     const graph: WorkflowGraph = { ...GRAPH, Open: [...GRAPH.Open, { id: '7', name: 'Verify', to: 'Verification' }] };
@@ -277,7 +290,7 @@ describe('applying a cleanup', () => {
   it('moves the subtasks before their parent, with the native confirmation', async () => {
     const deps = fake({ rules: [{ ...RULE, closeSubtasks: true, resolution: 'Fixed' }], tickets: [ticket('PROJ-10'), ticket('PROJ-11', 'Open', { parent: 'PROJ-10' })] });
     const { plan, applied } = await apply(await open(deps), deps);
-    expect(plan).toMatchObject({ title: 'Move 1 ticket(s) to Done, with 1 subtask(s) first', risky: true });
+    expect(plan).toMatchObject({ title: 'Move 1 ticket(s) to Done, with 1 subtask(s) first', risky: false });
     expect(plan.lines.map(l => l.target)).toEqual(['PROJ-11', 'PROJ-10']);
     expect(deps.moved).toEqual(['PROJ-11→Done (Fixed)', 'PROJ-10→Done (Fixed)']);
     expect(applied.results.map(r => `${r.target} ${r.outcome}`)).toEqual(['PROJ-11 done', 'PROJ-10 done']);

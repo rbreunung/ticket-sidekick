@@ -1,8 +1,10 @@
 import { h, startBoard } from '../shared/board.js';
 
 // The ticket list board: the tickets of a query, a selection, and one change applied to the
-// selected tickets after a preview. Selection, change and sort belong to the session; the two
-// text boxes of the change are only sent when "Set change" is pressed.
+// selected tickets with one click on Apply, which names what it writes. The board on show is the
+// preview. Apply, Refresh, the check box and the selected count share one action line, since the
+// header of this board draws none of them. Selection, change and sort belong to the session; the
+// two text boxes of the change are only sent when "Set change" is pressed.
 
 const COLUMNS = [
   ['key', 'Ticket'], ['summary', 'Summary'], ['status', 'Status'], ['issueType', 'Type'], ['assignee', 'Assignee'], ['priority', 'Priority'],
@@ -26,7 +28,26 @@ function input(id, label, value, onInput, size = 18) {
   return h('label', {}, label, h('input', { id, type: 'text', value, size, onInput: e => onInput(e.target.value) }));
 }
 
-function changeForm(view, board, busy) {
+/**
+ * The action line: Apply (named by the board), Refresh, whether each ticket is read before it is
+ * written, and how many are selected. Refresh stays on while the list is out of date, the only
+ * thing it offers then; a request or an Apply in progress turns every control off.
+ */
+function actionLine(view, board, locked, busy, state) {
+  const apply = view.applyButton ?? { label: 'Apply', enabled: false };
+  const reading = state?.status !== 'ready' && state?.status !== 'failed';
+  const check = state?.preferences?.checkBeforeWrite !== false;
+  return [
+    h('vscode-button', { id: 'apply-changes', disabled: locked || !apply.enabled, onClick: () => board.apply({ type: 'apply' }) }, apply.label),
+    h('vscode-button', { id: 'refresh', secondary: true, disabled: busy || reading, onClick: () => board.refresh() }, 'Refresh'),
+    h('label', { title: 'When this is off, Apply writes without reading each ticket first, so a change someone else made is overwritten without notice.' },
+      h('input', { type: 'checkbox', id: 'check-before-write', checked: check, disabled: busy, onChange: e => board.setPreference('checkBeforeWrite', e.target.checked) }),
+      ' Check each ticket before writing'),
+    h('span', { id: 'selected-count', class: 'muted', role: 'status' }, `${view.selectedCount} selected`),
+  ];
+}
+
+function changeForm(view, board, locked, busy, state) {
   draft ??= view.change
     ? { type: view.change.type, status: view.change.status ?? '', resolution: view.change.resolution ?? '', field: view.change.field ?? '', value: view.change.value ?? '', operation: view.change.operation ?? 'set' }
     : { type: 'transition', status: '', resolution: '', field: '', value: '', operation: 'set' };
@@ -53,12 +74,12 @@ function changeForm(view, board, busy) {
     h('p', { id: 'change-now', role: 'status' }, describe(view.change), view.proposed ? h('strong', {}, ' Proposed by Copilot; check it before you apply.') : null),
     h('div', { class: 'bar' },
       h('label', {}, 'Change', kind), fields,
-      h('vscode-button', { id: 'set-change', secondary: true, disabled: busy, onClick: send }, 'Set change'),
-      h('vscode-button', { id: 'clear-change', secondary: true, disabled: busy || !view.change, onClick: () => { draft = undefined; return board.act({ type: 'change', change: null }); } }, 'Remove change'),
-      h('vscode-button', { id: 'preview', disabled: busy || !view.change || view.selectedCount === 0, onClick: () => board.preview({ type: 'apply' }) }, view.pageOnly ? 'Preview for the selected tickets on this page…' : `Preview for ${view.selectedCount} ticket(s)…`)));
+      h('vscode-button', { id: 'set-change', secondary: true, disabled: locked, onClick: send }, 'Set change'),
+      h('vscode-button', { id: 'clear-change', secondary: true, disabled: locked || !view.change, onClick: () => { draft = undefined; return board.act({ type: 'change', change: null }); } }, 'Remove change'),
+      actionLine(view, board, locked, busy, state)));
 }
 
-function cleanupPanel(view, board, locked) {
+function cleanupPanel(view, board, locked, busy, state) {
   const info = view.cleanup;
   const subtasks = info.subtaskTargetState ? ` Open subtasks move to "${info.subtaskTargetState}" first; a parent whose subtask was not moved stays as it is.` : '';
   const select = info.needsResolution
@@ -74,11 +95,7 @@ function cleanupPanel(view, board, locked) {
     h('h2', {}, `Cleanup rule "${info.rule}"`),
     h('p', {}, `Selected tickets move to "${info.targetState}"${info.scope ? `, in ${info.scope}` : ''}.${subtasks}`),
     info.warnings.map(w => h('p', { class: 'banner' }, w)),
-    h('div', { class: 'bar' }, select,
-      h('vscode-button', {
-        id: 'preview', disabled: locked || view.selectedCount === 0 || (info.needsResolution && info.resolution === null),
-        onClick: () => board.preview({ type: 'apply' }),
-      }, 'Preview for the selected tickets on this page…')));
+    h('div', { class: 'bar' }, select, actionLine(view, board, locked, busy, state)));
 }
 
 function resultText(result) {
@@ -149,7 +166,7 @@ function render(view, board, busy, state) {
       view.jiraUrl ? h('a', { id: 'view-in-jira', class: 'button-link', href: view.jiraUrl, target: '_blank', rel: 'noreferrer' }, 'View in Jira') : null),
     outOfDateBanner(view),
     view.truncated ? h('p', { class: 'banner' }, `More tickets match than are listed; showing the first ${view.totalRows}. Narrow the query to see the rest.`) : null,
-    view.cleanup ? cleanupPanel(view, board, locked) : changeForm(view, board, locked),
+    view.cleanup ? cleanupPanel(view, board, locked, busy, state) : changeForm(view, board, locked, busy, state),
     view.pageOnly && !view.cleanup ? h('p', { class: 'muted' }, 'This board moves tickets a page at a time: Apply writes the selected tickets of the page in view.') : null,
     h('h2', {}, `${view.totalRows} ticket(s), ${view.selectedCount} selected`),
     h('div', { class: 'bar' },
