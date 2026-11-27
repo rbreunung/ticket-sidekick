@@ -61,7 +61,7 @@ function render(view, board, busy) {
         h('td', {}, row.assignee),
         h('td', {}, row.dueDate ?? ''),
         h('td', { class: row.flag ? `flag-${row.flag}` : undefined }, FLAG_TEXT[row.flag] ?? ''),
-        row.values.map(value => h('td', {}, value))))))));
+        row.values.map(value => h('td', {}, value)))))))));
 
   return h('div', {},
     h('p', {}, `${view.totalTickets} open ticket(s): ${view.bySource.veracode} Veracode, ${view.bySource.waltz} Waltz.`),
