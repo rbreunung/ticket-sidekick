@@ -153,7 +153,8 @@ function paint() {
       h('h1', {}, 'Jira Import Board'),
       h('p', { class: 'muted' }, 'Choose the report. The template, issue type and project come from the settings; check them before you open the import.')),
     message ? h('p', { class: 'banner error', role: 'alert' }, message) : '',
-    ...content);
+    // `replaceChildren` renders a `null` as the text "null", unlike `h`, so absent children are dropped here.
+    ...content.filter(Boolean));
   if (focusId) document.getElementById(focusId)?.focus();
 }
 
