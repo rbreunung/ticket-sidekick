@@ -13,14 +13,14 @@ function sheetOf(tickets: ReturnType<typeof veracodeTicket>[], report?: Paramete
 const titles = (s: ReturnType<typeof sheetOf>) => s.columns.map(c => c.title);
 
 describe('buildOverviewSheet column order', () => {
-  it('puts the release date after the Fix Version, the dates around the Due Date and Members last', () => {
+  it('puts the release date after the Fix Version, the dates around the Due Date and Assignee after Members', () => {
     const sheet = sheetOf([veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'] })]);
 
     expect(titles(sheet)).toEqual([
       'Source', 'Ticket', 'Status', 'Summary', 'Rating', 'Fix Version', 'Release Date', 'Due Date', 'Policy date', 'Planned date', 'Attestation date',
       'Other Fix Versions', 'Flag', 'Detail source',
       'Issue ID', 'Severity', 'CWE ID', 'CWE name', 'Module', 'Path', 'File', 'Line', 'Function',
-      'Remediation action', 'Plan status', 'Members',
+      'Remediation action', 'Plan status', 'Members', 'Assignee',
     ]);
   });
 
@@ -29,7 +29,7 @@ describe('buildOverviewSheet column order', () => {
 
     const names = titles(sheet);
     expect(names.slice(names.indexOf('Flag'), names.indexOf('Issue ID'))).toEqual(['Flag', 'Report match', 'Detail source']);
-    expect(names.at(-1)).toBe('Members');
+    expect(names.at(-1)).toBe('Assignee');
   });
 
   it('marks the date columns as dates and Line as a number', () => {
@@ -85,5 +85,61 @@ describe('buildOverviewSheet records', () => {
     const sheet = sheetOf([veracodeTicket('SEC-1', [makeFlaw('1')], { fixVersions: ['2026.11'], dueDate: '2027-01-01' })]);
     expect(sheet.records[0].flag).toBeNull();
     expect(cell(sheet, 0, 'Flag')).toBe('');
+  });
+});
+
+describe('buildOverviewSheet assignee and extra columns', () => {
+  const COLUMNS = [{ id: 'customfield_1', name: 'Squad' }, { id: 'labels', name: 'Labels' }];
+  const sheetWith = (tickets: ReturnType<typeof veracodeTicket>[], extraColumns = COLUMNS, report?: Parameters<typeof buildOverview>[0]['report']) =>
+    buildOverviewSheet(buildOverview({ tickets: tickets.map(t => t.ticket), descriptions: descriptionsOf(tickets), versions: VERSIONS, today: TODAY, extraColumns, report }));
+  const valueOf = (s: ReturnType<typeof sheetOf>, record: number, title: string) => s.records[record].cells[titles(s).indexOf(title)];
+
+  it('appends Assignee and then the configured columns after the existing ones', () => {
+    const sheet = sheetWith([veracodeTicket('SEC-1', [makeFlaw('1')], { assignee: 'Dana', extra: { customfield_1: 'Team 2', labels: 'a; b' } })]);
+    expect(titles(sheet).slice(-4)).toEqual(['Members', 'Assignee', 'Squad', 'Labels']);
+    expect([valueOf(sheet, 0, 'Assignee'), valueOf(sheet, 0, 'Squad'), valueOf(sheet, 0, 'Labels')]).toEqual(['Dana', 'Team 2', 'a; b']);
+  });
+
+  it('writes "Unassigned" for an unassigned ticket and an empty cell where the assignee was never read', () => {
+    const sheet = sheetWith([
+      veracodeTicket('SEC-1', [makeFlaw('1')], { assignee: '' }),
+      veracodeTicket('SEC-2', [makeFlaw('2')]),
+    ]);
+    expect(valueOf(sheet, 0, 'Assignee')).toBe('Unassigned');
+    expect(valueOf(sheet, 1, 'Assignee')).toBeNull();
+  });
+
+  it('keeps a column named like an existing one, and two columns with one name, apart', () => {
+    const sheet = sheetWith(
+      [veracodeTicket('SEC-1', [makeFlaw('1')], { status: 'Open', extra: { customfield_1: 'x', customfield_2: 'y' } })],
+      [{ id: 'customfield_1', name: 'Status' }, { id: 'customfield_2', name: 'Status' }],
+    );
+    const all = titles(sheet);
+    expect(all.filter(t => t === 'Status')).toHaveLength(3);
+    const at = (i: number) => sheet.records[0].cells[i];
+    expect(at(all.indexOf('Status'))).toBe('Open');
+    expect(at(all.length - 2)).toBe('x');
+    expect(at(all.length - 1)).toBe('y');
+  });
+
+  it('repeats Assignee and the extras on every finding of a Veracode ticket and writes them once for a Waltz ticket', () => {
+    const group = [1, 2, 3].map(n => makeFlaw(String(10 + n)));
+    const sheet = sheetWith([
+      veracodeTicket('SEC-1', group, { assignee: 'Dana', extra: { customfield_1: 'Team 2' } }),
+      waltzTicket('SEC-2', [makeComponent('a:1')], { assignee: 'Lee', extra: { customfield_1: 'Team 3' } }),
+    ]);
+    expect(sheet.records).toHaveLength(4);
+    expect(sheet.records.map((_, i) => valueOf(sheet, i, 'Assignee'))).toEqual(['Dana', 'Dana', 'Dana', 'Lee']);
+    expect(sheet.records.map((_, i) => valueOf(sheet, i, 'Squad'))).toEqual(['Team 2', 'Team 2', 'Team 2', 'Team 3']);
+  });
+
+  it('leaves the cells of an item that has no ticket empty', () => {
+    const sheet = sheetWith([], COLUMNS, { matchByKey: {}, reportOnly: [{ source: 'veracode', summary: 'New', dueDate: null, findings: [findingFromFlaw(makeFlaw('9'))] }] });
+    expect([valueOf(sheet, 0, 'Assignee'), valueOf(sheet, 0, 'Squad')]).toEqual([null, null]);
+  });
+
+  it('has Assignee and no extra columns when none is configured', () => {
+    const sheet = sheetWith([veracodeTicket('SEC-1', [makeFlaw('1')], { assignee: 'Dana' })], []);
+    expect(titles(sheet).slice(-2)).toEqual(['Members', 'Assignee']);
   });
 });

@@ -24,12 +24,18 @@ interface Ticket {
   updated: string;
   due?: string;
   fixVersions?: string[];
+  /** The assignee's display name; unassigned when absent. */
+  assignee?: string;
+  /** Custom field values by field id. */
+  fields?: Record<string, unknown>;
 }
 
 class FakeJira extends MockJiraClient {
   tickets: Record<string, Ticket> = {};
   /** Every request the board made to Jira, in order. */
   requests: string[] = [];
+  /** The extra field ids each search asked for. */
+  extraRequested: string[][] = [];
 
   private issue(key: string): JiraIssue {
     const t = this.tickets[key];
@@ -39,12 +45,18 @@ class FakeJira extends MockJiraClient {
         labels: t.labels, summary: t.summary ?? `Ticket ${key}`, status: { name: 'Open' }, resolution: null,
         created: '2026-01-01T09:00:00.000+0000', duedate: t.due ?? null, updated: t.updated, issuetype: { name: 'Bug' },
         fixVersions: (t.fixVersions ?? []).map(name => ({ name })), description: '',
+        assignee: t.assignee === undefined ? null : { displayName: t.assignee }, ...t.fields,
       },
     } as unknown as JiraIssue;
   }
 
-  override async searchJql(jql: string): Promise<JiraSearchResult> {
+  override async getFields(): Promise<never> {
+    return [{ id: 'customfield_1', name: 'Squad', schema: { type: 'string' } }] as never;
+  }
+
+  override async searchJql(jql: string, _max?: number, _startAt?: number, extra?: string[]): Promise<JiraSearchResult> {
     this.requests.push(`search ${jql}`);
+    this.extraRequested.push(extra ?? []);
     const all = Object.keys(this.tickets);
     let keys: string[] = [];
     if (jql.includes('labels in (')) {
@@ -100,12 +112,15 @@ function veracodeXml(flaws: Flaw[]): string {
 let dir: string;
 let jira: FakeJira;
 let deps: ImportDeps;
+/** What `ticketSidekick.jira.securityReportFields` holds in the test window. */
+let reportFields: string[] = [];
 // Today is 15 November 2026 (local time), before the 1.0 release on 1 December.
 const clock = new Date(2026, 10, 15, 12, 0, 0).getTime();
 
 beforeEach(async () => {
   dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ts-import-export-'));
   jira = new FakeJira();
+  reportFields = [];
   const veracode = createVeracodeDescriptor({
     filter: () => ({ minSeverity: 3, includeStatuses: ['New', 'Open', 'Reopened'], maxReportBytes: 20 * 1024 * 1024 }),
     slaDays: () => undefined,
@@ -116,7 +131,7 @@ beforeEach(async () => {
     workspaceRoot: () => dir,
   }, { reviewColumns: [] });
   deps = importJiraDeps({
-    getJira: async () => ({ configured: true, client: jira, config: { baseUrl: 'https://jira.example.com' } }) as never,
+    getJira: async () => ({ configured: true, client: jira, config: { baseUrl: 'https://jira.example.com', securityReportFields: reportFields } }) as never,
     workspaceFolder: () => dir,
     descriptors: { veracode, waltz, email: createEmailDescriptor({ deleteEmlAfterImport: () => false, maxBatchBytes: () => 1024 * 1024 }) },
     now: () => clock,
@@ -298,5 +313,50 @@ describe('a finished import', () => {
     expect(extras(v).finishedMessage).toMatch(/close/i);
     const file = await importKind.exportFile!(session, 'csv', deps);
     expect(new TextDecoder().decode(file.bytes)).toContain('PROJ-1');
+  });
+});
+
+describe('exporting the overview with an assignee and extra columns', () => {
+  const ownedTickets = (): void => {
+    jira.tickets = {
+      'PROJ-1': veracodeTicket('101', { summary: 'Hard-coded password in Login.java', assignee: 'Dana', fields: { customfield_1: 'Team 2' } }),
+      'PROJ-2': veracodeTicket('102', { summary: 'Another finding', fields: { customfield_1: 'Team 10' } }),
+    };
+  };
+  const exported = async () => {
+    const session = await openVeracode([{ id: '101', file: 'Login.java' }, { id: '102', file: 'Report.java' }, { id: '103', file: 'New.java' }]);
+    const rows = readCsv(new TextDecoder().decode((await importKind.exportFile!(session, 'csv', deps)).bytes).replace(/^﻿/, ''));
+    const col = (name: string) => rows[0].indexOf(name);
+    return { rows, col, byTicket: (key: string) => rows.find(r => r[col('Ticket')] === key)! };
+  };
+
+  it('writes Assignee and each configured column, "Unassigned" for an unassigned ticket and nothing for a finding with no ticket', async () => {
+    reportFields = ['customfield_1', 'assignee', 'customfield_404'];
+    ownedTickets();
+    const { rows, col, byTicket } = await exported();
+
+    expect(rows[0].slice(-2)).toEqual(['Assignee', 'Squad']);
+    expect(byTicket('PROJ-1')[col('Assignee')]).toBe('Dana');
+    expect(byTicket('PROJ-1')[col('Squad')]).toBe('Team 2');
+    expect(byTicket('PROJ-2')[col('Assignee')]).toBe('Unassigned');
+    expect(byTicket('PROJ-2')[col('Squad')]).toBe('Team 10');
+    const untracked = rows.find(r => r[col('Issue ID')] === '103')!;
+    expect([untracked[col('Assignee')], untracked[col('Squad')]]).toEqual(['', '']);
+  });
+
+  it('asks Jira for the configured fields with the search that reads the matched tickets', async () => {
+    reportFields = ['customfield_1'];
+    ownedTickets();
+    await exported();
+    expect(jira.extraRequested.some(extra => extra.includes('duedate') && extra.includes('customfield_1'))).toBe(true);
+  });
+
+  it('writes Assignee alone, and asks for no extra field, when the setting is empty', async () => {
+    ownedTickets();
+    const { rows, col, byTicket } = await exported();
+    expect(rows[0].at(-1)).toBe('Assignee');
+    expect(rows[0]).not.toContain('Squad');
+    expect(byTicket('PROJ-1')[col('Assignee')]).toBe('Dana');
+    expect(jira.extraRequested.flat()).not.toContain('customfield_1');
   });
 });

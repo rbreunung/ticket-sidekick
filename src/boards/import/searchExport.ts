@@ -110,6 +110,7 @@ function overviewOf(session: ImportSession, deps: ImportDeps): Overview {
 
   return buildOverview({
     tickets: data.export.tickets.filter(t => t.key in matchByKey),
+    extraColumns: data.export.columns ?? [],
     descriptions: data.export.descriptions,
     versions: data.export.versions,
     today: localDate(new Date(deps.now())),

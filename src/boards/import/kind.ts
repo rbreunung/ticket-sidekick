@@ -477,6 +477,8 @@ function compose(stored: DerivedPart<ImportData>, fresh: DerivedPart<ImportData>
       ...(sd.review.staleCandidates ? { staleCandidates: sd.review.staleCandidates } : {}),
     },
     rowKeys, updated,
+    // The Already ticketed tab keeps the columns of the reading its rows come from.
+    columns: td.columns,
     accepted: ad.accepted,
     staleFailed: sd.staleFailed,
     descriptionsUnread: td.descriptionsUnread,
