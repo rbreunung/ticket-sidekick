@@ -15,6 +15,7 @@ Full `ticketSidekick.*` settings. The Jira connection and display settings apply
 | Always-show fields | `ticketSidekick.jira.additionalDisplayFields` | `[]` |
 | Search result columns | `ticketSidekick.jira.searchFields` | `[]` |
 | Cleanup review columns | `ticketSidekick.jira.cleanupFields` | `[]` |
+| Security report columns | `ticketSidekick.jira.securityReportFields` | `[]` |
 | Team JQL | `ticketSidekick.jira.myTeamJql` | _(empty)_ |
 | Hidden fields | `ticketSidekick.jira.hiddenDisplayFields` | _(see below)_ |
 
@@ -76,6 +77,16 @@ A cleanup board, and a ticket list opened with a proposed move, shows `cleanupFi
 ```
 
 Subtasks on a cleanup board get their own values for these columns. Run `/ts-jira fields PROJ-123` to discover field IDs.
+
+**Optional: security report columns**
+
+The security report, the Already ticketed tab of the import board, and the CSV and Excel overview exports of both always show the ticket's Assignee. Add field IDs to `securityReportFields` to show more columns after it:
+
+```json
+"ticketSidekick.jira.securityReportFields": ["customfield_10020", "labels"]
+```
+
+Values render the same way as the ticket list's extra columns, except that a list shows all its items, separated by semicolons. Listing `assignee` again adds no second column, and an ID Jira does not know is skipped and logged to the **Ticket Sidekick** Output channel. A change shows after you press **Refresh** on the board. Run `/ts-jira fields PROJ-123` to discover field IDs.
 
 **Optional: team JQL**
 

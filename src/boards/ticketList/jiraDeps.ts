@@ -7,6 +7,7 @@ import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
 import type { JiraFieldMeta } from '../../jira/IJiraClient';
 import { renderFieldValue } from '../../services/TicketService';
+import { resolveExtraColumns } from '../../services/extraColumns';
 import type { ExtraColumn, TicketListDeps, TicketRow } from './kind';
 
 // What the ticket list board needs from Jira, built on the services the Jira tools use: the same
@@ -66,13 +67,10 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
       const search = access.configured ? access.config.searchFields : [];
       const cleanup = access.configured ? access.config.cleanupFields : [];
       if (search.length + cleanup.length === 0) return { search: [], cleanup: [] };
-      const meta = await guarded(metaById);
-      const column = (setting: string) => (id: string): ExtraColumn => {
-        const known = meta.get(id);
-        if (!known) options.onDiag?.('warn', `Unrecognized field in ${setting}: ${id}`, { fieldId: id });
-        return { id, name: known?.name ?? id };
-      };
-      return { search: search.map(column('searchFields')), cleanup: cleanup.map(column('cleanupFields')) };
+      const loadMeta = async () => [...(await guarded(metaById)).values()];
+      const columns = async (ids: string[], setting: string): Promise<ExtraColumn[]> =>
+        (await resolveExtraColumns(ids, loadMeta, { setting, keepUnknown: true, onDiag: options.onDiag })).map(({ id, name }) => ({ id, name }));
+      return { search: await columns(search, 'searchFields'), cleanup: await columns(cleanup, 'cleanupFields') };
     },
 
     jiraConfigured: async () => (await options.getJira()).configured,

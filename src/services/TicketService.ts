@@ -192,6 +192,17 @@ export function isTemplateShapedField(meta: JiraFieldMeta): boolean {
   return false;
 }
 
+/** One item of a list field as text: a string as it is, an object by its name, value or display name. */
+export function arrayItemText(item: unknown): string {
+  if (typeof item === 'string') return item;
+  if (typeof item === 'object' && item !== null) {
+    if ('name' in item) return (item as { name: string }).name;
+    if ('value' in item) return (item as { value: string }).value;
+    if ('displayName' in item) return (item as { displayName: string }).displayName;
+  }
+  return String(item);
+}
+
 export function renderFieldValue(value: unknown, meta: JiraFieldMeta): string {
   if (value === null || value === undefined) return '_Not set_';
 
@@ -229,15 +240,7 @@ export function renderFieldValue(value: unknown, meta: JiraFieldMeta): string {
   // Arrays
   if (Array.isArray(value)) {
     if (value.length === 0) return '_None_';
-    const items = value.map(item => {
-      if (typeof item === 'string') return item;
-      if (typeof item === 'object' && item !== null) {
-        if ('name' in item) return (item as { name: string }).name;
-        if ('value' in item) return (item as { value: string }).value;
-        if ('displayName' in item) return (item as { displayName: string }).displayName;
-      }
-      return String(item);
-    });
+    const items = value.map(arrayItemText);
     return items.length > 3
       ? `${items.slice(0, 3).join(', ')} … (+${items.length - 3} more)`
       : items.join(', ');
