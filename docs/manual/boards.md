@@ -53,7 +53,7 @@ The action line holds the change controls, **Apply**, **Refresh**, **Check each 
 - **Out of date.** When the board finds that tickets changed in Jira, left the query or newly match it, it says it is out of date and you can only page until you press **Refresh**. Refresh shows the tickets as they are now and keeps your selection of every ticket still listed. A saved filter's tickets are asked of Jira as `filter = <id>`, so they always follow the filter as it is in Jira, in the order its query sorts by: when the filter was edited in Jira, **Refresh** lists its new tickets, and the query under the title shows its new text. Asking for the same filter again marks the board out of date when the filter's query changed; press **Refresh**. When only the filter's query cannot be read, the tickets are still the current ones and the board says the query shown is the one it opened with. When the filter itself is gone (for example, deleted), the check fails and the board keeps the old list, with nothing writable.
 - **Jira is the truth.** Before writing, the board reads each ticket again. A ticket that changed in Jira since the board read it is not written to: its row says so and the message after Apply names it. The board has read the list again by then, so the ticket shows as it is now and you can select it and apply once more; only when that read failed does the board mark itself out of date and offer **Refresh**. Update times are compared as moments, since Jira writes the offset in two ways, and each refusal is logged to the Ticket Sidekick output channel with both times.
 - **Check each ticket before writing.** On by default. Turn it off to write without reading each ticket first, for example when Jira's update times make untouched tickets look changed. A change someone else made is then overwritten without notice. The choice is kept for you across boards and restarts; it is not in the Settings screen.
-- **Closing and reopening.** The board has no Close button: close its tab. Asking for the same list again, with its tab closed, starts clean (nothing selected, no earlier results, the tickets read again). A tab VS Code brings back after a restart keeps its selection.
+- **Closing and reopening.** The board has no Close button: close its tab. Asking for the same list again, with its tab closed, starts clean (nothing selected, no earlier results, the tickets read again). A tab VS Code brings back after a restart is read again too, so nothing old is shown.
 - **Moves** use a direct transition when there is one, else the workflow path Ticket Sidekick has cached for the project and issue type, discovering it once if needed.
 - **Fields** are set as the `jira_update_field` tool sets them: any field by its display name or id, a sprint by its name, a list field from comma-separated values.
 
@@ -130,13 +130,13 @@ On Already ticketed, pick the rows of the tickets to merge and choose the ticket
 - **Before the closes**, choose the target status and, where asked, the resolution for every issue type of the tickets to close. Then **Close N tickets**: one click closes them all.
 - **While the merge is unfinished**, Apply on every other tab is refused. You can still make your choices there.
 - **When the merge ends**, the tab lists the steps that were not done and the tickets Jira closed without their resolution. **Acknowledge and close this tab** closes it.
-- **After a restart** the merge tab comes back with its finished, failed and waiting steps and its open question.
+- **After a restart** the import board is read again like the other boards that read Jira, so an unfinished ticket merge is not carried over: start it again from the report.
 
 ### Out of date and Refresh
 
-The board checks the report file and Jira when it opens, after a restart and when you press **Refresh**.
+The board reads the report file and Jira when it opens, when VS Code brings its tab back after a restart, and when you press **Refresh**.
 
-- A tab whose rows changed, and on which you have no unfinished choices, shows the new reading at once. The board's own writes never count as a change, also after a restart.
+- A tab whose rows changed, and on which you have no unfinished choices, shows the new reading at once. The board's own writes never count as a change.
 - A tab with unfinished choices is marked **out of date** and offers only **Refresh**. Unfinished choices are New rows left out or merged, actions you changed on Already ticketed, checked Stale tickets, and a running ticket merge.
 - **Refresh** keeps every choice whose rows still exist and lists the choices it dropped, each with the reason. **Dismiss** hides that list.
 - The same happens after **Unaccept** and after a ticket merge ends.
@@ -175,11 +175,12 @@ Copilot can read a finished review with `bitbucket_read_findings` and a file at 
 Every board shows a **session**: the data it read and what you set on the board. The page itself holds nothing.
 
 - **As of.** The line under the title says when the data was read. Jira, Bitbucket and report files stay the truth; the session is a cache of them.
-- **Opening again.** Asking for the same thing again (the same project, query or filter) continues its session. The board appears at once with the stored data, then checks the source in the background and updates.
-- **After a restart.** VS Code brings a board's tab back with the window, and the board shows its stored session, marked "restored session", then checks the source.
+- **What is kept.** Only the review board keeps its session: asking for the same pull request again, or restarting VS Code, brings back its findings, discussion and drafts, and any number of reviews can be open at once. The ticket list, cleanup, security report and import boards read their source again whenever they are opened anew or brought back after a restart; they keep nothing from the earlier session.
+- **Opening again (review).** Asking for the same pull request again continues its session. The board appears at once with the stored data, then checks the source in the background and updates.
+- **After a restart (review).** VS Code brings the review's tab back with the window, and the board shows its stored session, marked "restored session", then checks the source.
 - **If the check fails.** The stored data stays on show, with a line saying the check failed and when the data is from. A board that writes applies nothing until a check passes: it offers paging and **Refresh** only.
-- **While Apply runs** the board shows its progress and disables every control except its tabs. Each finished write is saved at once, so a board brought back after VS Code closed in the middle of an Apply shows the finished tickets as done, and the next Apply covers only the rest.
-- **Close** on a board that has the button (the import, review, sessions and security report boards) deletes its session and closes its tab. Closing the tab with its × keeps the session, so the board opens again where you left it. The ticket list and cleanup board have no Close button and open fresh when asked for again with no tab open; only a tab VS Code brings back keeps its selection.
+- **While Apply runs** the board shows its progress and disables every control except its tabs. Each finished write is saved at once, so a review brought back after VS Code closed in the middle of an Apply shows what finished. The other boards read Jira again and show the tickets as they are now.
+- **Close** on a board that has the button (the import, review, sessions and security report boards) deletes its session and closes its tab. Closing the review's tab with its × keeps its session, so the review opens again where you left it. The ticket list, cleanup, security report and import boards open fresh when asked for again with no tab open, and after a restart.
 
 ## Stored sessions
 

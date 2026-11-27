@@ -204,6 +204,8 @@ export class BoardPanels implements BoardHost {
           panel.dispose();
           return;
         }
+        // A board that opens fresh is read again when VS Code brings its tab back, so it shows current data.
+        if (state.id && this.manager.opensFresh(state.kind)) await this.manager.startOver(state.kind, state.id);
         this.show(panel, state);
       },
     };

@@ -189,6 +189,8 @@ export const securityReportKind: BoardKind<
 > = {
   kind: SECURITY_REPORT_KIND,
   formatVersion: 1,
+  // The report is a reading of Jira: a report opened anew, or brought back after a restart, is read again.
+  freshOnOpen: true,
   title: recipe => `Security report: ${recipe.project}`,
 
   // A named project is used as named: one that is not a project key is refused, never swapped

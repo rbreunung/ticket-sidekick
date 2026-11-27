@@ -355,6 +355,22 @@ describe('a ticket list opened again', () => {
     expect(await selected(m, id)).toBe(0);
   });
 
+  it('reads the list again when VS Code brings its tab back after a restart, so nothing old is shown', async () => {
+    const { m, p } = listBoards();
+    await p.open('ticket-list', request);
+    const id = idOfList();
+    await selected(m, id);
+    const state = await m.state('ticket-list', id);
+    await m.action('ticket-list', id, state.revision, { type: 'select-all' });
+    expect(await selected(m, id)).toBe(2);
+    created[0].close();
+
+    const restored = fakePanel();
+    await p.serializer().deserializeWebviewPanel(restored as never, { kind: 'ticket-list', id, title: created[0].title });
+    expect(restored.disposed).toBe(false);
+    expect(await selected(m, id)).toBe(0);
+  });
+
   it('keeps its selection and opens one tab when its tab is waiting to be restored after a restart', async () => {
     const { m, p } = listBoards();
     await p.open('ticket-list', request);

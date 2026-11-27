@@ -156,7 +156,7 @@ stateDiagram-v2
 2. The board panels ask the session manager to open the board. The board kind validates the recipe; the manager derives the session ID from kind and source and creates or restores the session.
 3. The extension opens an editor tab, or brings the board's existing tab forward. The tab is a webview; the extension writes its document, which loads the board's page script, the shared client and the style from the extension folder. Its content policy lets scripts load from those files only. The agent learns only "opened" or the reason.
 4. The page posts a request for the session's state. A stored session is shown at once with its "as of" time; otherwise the board kind builds it from the sources.
-5. A kind with `freshOnOpen` (the ticket list, which also serves the cleanup board) does not bring its stored session back when it is asked for with no tab open: the manager forgets it and builds the board anew from the new request, and the sessions board's Reopen starts the stored list over (`startOver`). A tab VS Code restores after a restart asks for the state of its session and keeps it. Nothing depends on noticing why a tab closed.
+5. A kind with `freshOnOpen` (the ticket list, which also serves the cleanup board) does not bring its stored session back when it is asked for with no tab open: the manager forgets it and builds the board anew from the new request, and the sessions board's Reopen starts the stored list over (`startOver`). A tab VS Code restores after a restart is started over the same way, when the tab is first shown (`BoardPanels.serializer`). The ticket list, security report and import boards use it; the review board does not, since a review is work worth keeping (D28). Nothing depends on noticing why a tab closed.
 
 ### 4.2 Freshness (R55, R56)
 
@@ -254,7 +254,7 @@ A board kind is the only place that knows one board's rules. It is a plain objec
 | `plan?(session, action, prepared)` | **Pure.** Returns the write plan for a writing action: targets, what is written, and whether it is risky. Kinds without writes omit it |
 | `apply?(session, plan, deps, progress)` | Reads the targets again, writes the unchanged ones, reports each finished one through `progress`, and returns the result per target |
 | `exportFile?(session, format, deps)` | A file the developer saves from the board |
-| `freshOnOpen?` | The board starts clean when it is asked for with no tab open, instead of bringing its stored session back (4.1) |
+| `freshOnOpen?` | The board starts clean when it is asked for with no tab open or brought back after a restart, instead of bringing its stored session back (4.1) |
 | `preferences?` | Settings the board keeps for itself outside its sessions: `read(deps)` and `write(name, value, deps)`, which names the settings it takes and refuses the rest. The ticket list keeps "check each ticket before writing" this way |
 | `view(session)` | The data the page gets: never more than it shows |
 
@@ -419,8 +419,9 @@ Logged in full, with rejected alternatives, in `copilot-harness-migration.md` fr
 | D23 | A stored session of another format is rebuilt from its stored recipe when the kind's `revalidate` accepts it, with a notice and without the earlier choices; still never migrated (narrows D17) | Maintainer |
 | D24 | Every board saves its session after each write of an Apply, so an interrupted Apply resumes with only the rest | Maintainer |
 | D25 | The ticket list, cleanup and import boards write on one click, with no plan dialog and no native confirmation (D11 reversed for them): the board on show is the preview and the Apply button names what it writes. Merge start, add-to-ticket and the email model check keep one preview, because it shows what Jira says or asks for consent; a post to Bitbucket keeps its confirmation. A refused write raises no conflict list; the view is marked out of date where its rows are old. Requested 2026-11-27: the preview and the dialog added a click and showed what the board already shows, and the conflicts banner repeated the Apply result | Requested |
-| D26 | The ticket list and cleanup board open fresh when asked for with no tab open; only a tab VS Code restores keeps its session. A restored tab VS Code has not shown yet is not known to the extension (it hands the tab over when the tab is first shown), so `BoardPanels` counts it as open through `window.tabGroups` (viewType and title) and replaces it with the new tab. Nothing relies on noticing why a tab closed | Requested |
+| D26 | The ticket list and cleanup board open fresh when asked for with no tab open (D28 adds the restart). A restored tab VS Code has not shown yet is not known to the extension (it hands the tab over when the tab is first shown), so `BoardPanels` counts it as open through `window.tabGroups` (viewType and title) and replaces it with the new tab. Nothing relies on noticing why a tab closed | Requested |
 | D27 | A board may keep settings of its own outside its sessions, changed by the narrow `preference` request. The ticket list keeps "check each ticket before writing", on by default, per user and not in the Settings screen, so a developer can keep closing tickets while a refusal they cannot explain is open | Requested |
+| D28 | Only the review board keeps its session across a restart. The ticket list, cleanup, security report and import boards are read again when asked for with no tab open and when VS Code brings their tab back (`freshOnOpen`), because what they show must be correct and recent; an unfinished ticket merge is not carried over. Requested 2026-11-27 | Requested |
 
 ---
 

@@ -567,6 +567,9 @@ function matches(filter: string | undefined, ...fields: Array<string | null | un
 export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, ImportAction, ImportView, ImportDeps> = {
   kind: IMPORT_KIND,
   formatVersion: 1,
+  // An import is a reading of a report and Jira with some choices: opened anew, or brought back after a
+  // restart, it is read again, so what it shows is current. An unfinished ticket merge is not carried over.
+  freshOnOpen: true,
   title: recipe => importTitle(recipe),
 
   validate: async (input, deps) => {

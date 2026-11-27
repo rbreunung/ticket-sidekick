@@ -101,9 +101,10 @@ export interface BoardKind<R, D, W, A, V, X> {
   /** Raise when the stored shape changes; a session of another format is rebuilt from its recipe (see `revalidate`) or discarded. */
   formatVersion: number;
   /**
-   * Asked for again with no tab open, the board starts clean (nothing selected, no earlier results, the
-   * sources read again) instead of bringing back the stored session. A tab VS Code restores after a
-   * restart still gets its session. For boards whose state is a query and a selection, not work worth keeping.
+   * Asked for again with no tab open, or brought back by VS Code after a restart, the board starts
+   * clean (nothing selected, no earlier results, the sources read again) instead of bringing back the
+   * stored session. For boards whose state is a reading of a source and some choices, not work worth
+   * keeping; a review is the board that is kept.
    */
   freshOnOpen?: boolean;
   title(recipe: R): string;
