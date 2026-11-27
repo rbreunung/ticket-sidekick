@@ -25,10 +25,15 @@ export interface TicketListJiraOptions {
   onDiag?: DiagLogger;
 }
 
-/** A field value as the board shows it: plain text, without the markdown emphasis the chat tables use. */
+/**
+ * A field value as the board keeps it: plain text, without the markdown emphasis the chat tables use. A field with no
+ * value (or no field description) is the raw empty string, never a word, so a sort can tell it from a value; the page
+ * shows "Not set" for it.
+ */
 function plainFieldText(value: unknown, meta: JiraFieldMeta | undefined): string {
-  if (!meta) return 'Not set';
-  return renderFieldValue(value, meta).replace(/^_(.*)_$/, '$1');
+  if (!meta) return '';
+  const rendered = renderFieldValue(value, meta);
+  return /^_(Not set|None|Unassigned)_$/.test(rendered) ? '' : rendered.replace(/^_(.*)_$/, '$1');
 }
 
 function textOf(value: unknown): string {

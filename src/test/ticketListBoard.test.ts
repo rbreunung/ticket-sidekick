@@ -302,6 +302,60 @@ describe('extra columns from the settings', () => {
   });
 });
 
+describe('sorting the extra columns and Assignee', () => {
+  const owned = (n: number, assignee: string, team: string): TicketRow => ({ ...row(n), assignee, extra: { customfield_1: team } });
+  const withTeams = (rows: TicketRow[]): Fake => {
+    const deps = fake(rows);
+    deps.search = async () => ({ rows: [...deps.jira.values()].map(r => ({ ...r })), truncated: false });
+    return deps;
+  };
+  const keysAfter = async (deps: Fake, column: string, clicks: number): Promise<string[]> => {
+    let s = await open(deps);
+    for (let i = 0; i < clicks; i++) s = act(s, { type: 'sort', column: column as never });
+    return ticketListKind.view(s).rows.map(r => r.key);
+  };
+  const ROWS = [owned(1, 'Team 10', 'Team 10'), owned(2, 'Team 2', 'Team 2'), owned(3, '', '')];
+
+  it('sorts an extra column in natural order with the empty value last, either way round', async () => {
+    expect(await keysAfter(withTeams(ROWS), 'extra:customfield_1', 1)).toEqual(['PROJ-2', 'PROJ-1', 'PROJ-3']);
+    expect(await keysAfter(withTeams(ROWS), 'extra:customfield_1', 2)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+    expect(await keysAfter(withTeams(ROWS), 'extra:customfield_1', 3)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+  });
+
+  it('puts an unassigned ticket last when sorting by assignee, either way round', async () => {
+    expect(await keysAfter(withTeams(ROWS), 'assignee', 1)).toEqual(['PROJ-2', 'PROJ-1', 'PROJ-3']);
+    expect(await keysAfter(withTeams(ROWS), 'assignee', 2)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+  });
+
+  it('sorts the whole list before it is paged, and starts again on the first page', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => owned(i + 1, 'Ada', `Team ${60 - i}`));
+    let s = await open(withTeams(many));
+    s = act(s, { type: 'page', page: 1 });
+    expect(ticketListKind.view(s)).toMatchObject({ page: 1 });
+    s = act(s, { type: 'sort', column: 'extra:customfield_1' as never });
+    const view = ticketListKind.view(s);
+    expect(view.page).toBe(0);
+    expect(view.rows[0].key).toBe('PROJ-60');
+    expect(view.rows[1].key).toBe('PROJ-59');
+  });
+
+  it('refuses a column the board does not show', async () => {
+    const s = await open(withTeams(ROWS));
+    expect(ticketListKind.reduce(s, { type: 'sort', column: 'extra:nope' as never }).ok).toBe(false);
+    expect(ticketListKind.reduce(s, { type: 'sort', column: 'extra:fixVersions' as never }).ok).toBe(false);
+  });
+
+  it('drops a sort on an extra column when the board switches to the other column set', async () => {
+    const deps = withTeams(ROWS);
+    const sorted = act(await open(deps), { type: 'sort', column: 'extra:customfield_1' as never });
+    const again = await ticketListKind.validate({ jql: 'project = PROJ', change: { type: 'transition', status: 'Done' } }, deps);
+    const working = ticketListKind.reopen!(sorted, (again as { recipe: TicketListRecipe }).recipe);
+    const view = ticketListKind.view({ ...sorted, working });
+    expect(view.sort).toBeNull();
+    expect(view.rows.map(r => r.key)).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
+  });
+});
+
 describe('paging', () => {
   const many = () => fake(Array.from({ length: 120 }, (_, i) => row(i + 1)));
 

@@ -1,5 +1,6 @@
 import { isSystemFilterId } from '../../utils/jiraSystemFilters';
 import { splitOrderBy } from '../../utils/jqlOrderBy';
+import { sortNatural } from '../../utils/naturalCompare';
 import type { BoardKind, CheckMode } from '../../sessions/boardKind';
 import type { Conflict, Session } from '../../sessions/sessionTypes';
 import type { WorkflowGraph } from '../../services/WorkflowService';
@@ -104,7 +105,7 @@ export interface CleanupInfo {
 /** Which rows are selected: all but some, or only some, so "all selected" holds before the rows are known. */
 export type Selection = { mode: 'all'; except: string[] } | { mode: 'only'; keys: string[] };
 
-export type SortColumn = 'key' | 'summary' | 'status' | 'issueType' | 'assignee' | 'priority';
+export type SortColumn = 'key' | 'summary' | 'status' | 'issueType' | 'assignee' | 'priority' | `extra:${string}`;
 
 export interface RowResult {
   outcome: 'done' | 'failed' | 'refused';
@@ -209,6 +210,7 @@ export const MAX_SUBTASK_ROWS = MAX_LIST_ROWS * 5;
 const FIELD_OPERATIONS: readonly FieldOperation[] = ['set', 'add', 'remove'];
 const OUT_OF_DATE = 'The list is out of date: press Refresh to see the tickets as they are now.';
 const SORT_COLUMNS: readonly SortColumn[] = ['key', 'summary', 'status', 'issueType', 'assignee', 'priority'];
+const EXTRA_PREFIX = 'extra:';
 
 type ListSession = Session<TicketListRecipe, TicketListData, TicketListWorking>;
 
@@ -253,12 +255,37 @@ function selectable(row: TicketRow): boolean {
   return row.blocked === undefined;
 }
 
+/** The extra columns the board shows now: the search set, or the cleanup set for a board that moves or closes tickets. */
+function shownColumns(session: ListSession): ExtraColumn[] {
+  return session.derived.data.columns?.[session.working.columns] ?? [];
+}
+
+function isSortColumn(session: ListSession, column: unknown): column is SortColumn {
+  if (typeof column !== 'string') return false;
+  if ((SORT_COLUMNS as readonly string[]).includes(column)) return true;
+  return column.startsWith(EXTRA_PREFIX) && shownColumns(session).some(c => c.id === column.slice(EXTRA_PREFIX.length));
+}
+
+/** The sort in force: one on an extra column the board no longer shows (its column set changed) counts as none. */
+function activeSort(session: ListSession): TicketListWorking['sort'] {
+  const { sort } = session.working;
+  return sort && isSortColumn(session, sort.column) ? sort : null;
+}
+
 /** The rows in the order the board shows them. */
 function orderedRows(session: ListSession): TicketRow[] {
-  const { sort } = session.working;
+  const sort = activeSort(session);
   const rows = session.derived.data.rows;
   if (!sort) return rows;
+  // Assignee and the extra columns sort in natural order with empty values last; the others as before.
+  if (sort.column === 'assignee' || sort.column.startsWith(EXTRA_PREFIX)) {
+    return sortNatural(rows, row => naturalText(row, sort.column), sort.descending);
+  }
   return [...rows].sort((a, b) => sortValue(a, sort.column).localeCompare(sortValue(b, sort.column)) * (sort.descending ? -1 : 1));
+}
+
+function naturalText(row: TicketRow, column: SortColumn): string {
+  return column === 'assignee' ? row.assignee : row.extra?.[column.slice(EXTRA_PREFIX.length)] ?? '';
 }
 
 function pageRows(session: ListSession): TicketRow[] {
@@ -319,7 +346,7 @@ function sortValue(row: TicketRow, column: SortColumn): string {
     const [project, number] = row.key.split('-');
     return `${project}-${(number ?? '').padStart(9, '0')}`;
   }
-  return row[column].toLowerCase();
+  return (column === 'assignee' || column.startsWith(EXTRA_PREFIX) ? naturalText(row, column) : row[column as 'summary' | 'status' | 'issueType' | 'priority']).toLowerCase();
 }
 
 function columnSetFor(change: ListChange | undefined): ColumnSet {
@@ -590,10 +617,12 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
         return { ok: true, working: { ...working, change, proposed: false } };
       }
       case 'sort': {
-        if (!SORT_COLUMNS.includes(action.column)) return { ok: false, reason: 'Unknown column.' };
-        const current = working.sort?.column === action.column ? working.sort : null;
+        if (!isSortColumn(session, action.column)) return { ok: false, reason: 'Unknown column.' };
+        const active = activeSort(session);
+        const current = active?.column === action.column ? active : null;
         const sort = !current ? { column: action.column, descending: false } : current.descending ? null : { column: action.column, descending: true };
-        return { ok: true, working: { ...working, sort } };
+        // A new order starts again on the first page.
+        return { ok: true, working: { ...working, sort, page: 0 } };
       }
       default: return { ok: false, reason: 'Unknown action.' };
     }
@@ -739,7 +768,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
       pageOnly: isCleanup(session),
       totalRows: rows.length, page, pageCount: pageCount(rows.length), outOfDate: working.outOfDate,
       selectedCount: data.rows.filter(r => selectable(r) && isSelected(working.selection, r.key)).length,
-      change: working.change, proposed: working.proposed, sort: working.sort,
+      change: working.change, proposed: working.proposed, sort: activeSort(session),
     };
   },
 };
