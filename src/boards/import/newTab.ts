@@ -198,7 +198,7 @@ function planNew(session: ImportSession, action: { type: string } & Record<strin
     const plan: WritePlan<NewPayload> = {
       title: `Create ${batch.length} ticket(s) in ${recipe.projectKey}${remaining > 0 ? `. ${remaining} more remain for the next Apply` : ''}`,
       lines: batch.map(g => lineFor(g, recipe.issueType)),
-      risky: batch.length > 1,
+      risky: false,
       payload,
     };
     return { ok: true, plan };

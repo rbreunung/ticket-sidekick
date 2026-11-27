@@ -1,4 +1,3 @@
-import { isFinalStatus } from '../../utils/finalStatus';
 import type { Applied, ApplyProgress, Planned, Reduced } from '../../sessions/boardKind';
 import type { ApplyLineResult, WritePlan } from '../../sessions/sessionTypes';
 import { buildStaleTargetOptions, runStaleClose } from '../../imports/staleClose';
@@ -214,9 +213,7 @@ function planStale(session: ImportSession): Planned {
   if (leftOut.length > 0) title += ` Not in this Apply: ${leftOut.join('; ')}.`;
   if (remaining > 0) title += ` ${remaining} selected ticket(s) remain for the next Apply.`;
   const payload: StaleClosePayload = { handler: NAME, groups };
-  // A write to more than one ticket, or any close, also asks for VS Code's own confirmation.
-  const closes = groups.some(g => isFinalStatus(g.targetState));
-  return { ok: true, plan: { title, lines, risky: writes > 1 || closes, payload } };
+  return { ok: true, plan: { title, lines, risky: false, payload } };
 }
 
 async function applyStale(

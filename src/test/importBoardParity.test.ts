@@ -115,8 +115,8 @@ const ACCEPT: BoardEquivalent = {
 const TICKET_MERGE: BoardEquivalent = {
   actions: ['merge-start', 'merge-retry', 'merge-ignore', 'merge-stop', 'merge-close', 'merge-close-target', 'merge-close-resolution', 'merge-acknowledge'],
   tests: [
-    [MERGE, 'rewrites the kept ticket, links, marks and closes each source, after a risky opening Apply and one closing Apply'],
-    [MERGE, 'after a failed link offers Retry, Ignore and Stop; Retry previews that one step, is not risky and the run carries on'],
+    [MERGE, 'rewrites the kept ticket, links, marks and closes each source, after an opening Apply and one closing Apply'],
+    [MERGE, 'after a failed link offers Retry, Ignore and Stop; Retry previews that one step, asks for no confirmation and the run carries on'],
     [MERGE, 'Ignore skips the failed step, and Stop ends the run keeping what is done and reports what is missing'],
     [MERGE, 'cut off mid-Apply, comes back with the steps saved so far and carries on from the first pending one on Retry'],
     [MERGE, 'does not move a flaw the report no longer lists: the kept ticket stays as it is and the closed source names the flaw'],
@@ -199,7 +199,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
   'toggle-stale': {
     actions: ['toggle-stale'],
     tests: [
-      [STALE, 'closes one marked Bug to Done with resolution Fixed after the native confirmation, because the write closes a ticket'],
+      [STALE, 'closes one marked Bug to Done with resolution Fixed without a native confirmation, though the write closes a ticket'],
       [STALE, 'shows a ticket without a discovered workflow but does not let it be selected'],
     ],
   },
@@ -271,7 +271,7 @@ const BOARD_PARITY: Record<string, BoardEquivalent> = {
   stale: {
     actions: ['close-stale'],
     tests: [
-      [STALE, 'closes one marked Bug to Done with resolution Fixed after the native confirmation, because the write closes a ticket'],
+      [STALE, 'closes one marked Bug to Done with resolution Fixed without a native confirmation, though the write closes a ticket'],
       [BOARD, 'shows Stale as unavailable when its search failed, and New and Already ticketed as usual'],
     ],
   },

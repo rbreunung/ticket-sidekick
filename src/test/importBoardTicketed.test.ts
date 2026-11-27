@@ -428,6 +428,15 @@ describe('applying the Already ticketed actions', () => {
     return onTicketed(await open(recipe('veracode', file)));
   }
 
+  it('counts the tickets the next Apply writes, for the button that names them', async () => {
+    const session = await twoRowsOneTicket();
+    const toWrite = (s: ImportSession) => (ext(view(s)) as unknown as { toWrite: number }).toWrite;
+    expect(toWrite(session)).toBe(1);
+    expect(toWrite(session)).toBe(plan(session).lines.length);
+    const left = act(act(session, { type: 'ticketed-filter', filter: 'all' }), { type: 'ticketed-set-shown', action: 'leave' });
+    expect(toWrite(left)).toBe(0);
+  });
+
   it('refuses to plan while the Already ticketed tab is out of date, whatever the page shows', async () => {
     const session = await twoRowsOneTicket();
     expect(plan(session).lines).toHaveLength(1);
@@ -684,7 +693,7 @@ describe('applying the Already ticketed actions', () => {
     const session = onTicketed(await open(recipe('veracode', writeVeracode(flaws))));
     const p = plan(session);
     expect(p.lines).toHaveLength(50);
-    expect(p.risky).toBe(true);
+    expect(p.risky).toBe(false);
     expect(p.title).toMatch(/2 .*remain/);
   });
 });

@@ -590,7 +590,7 @@ describe('the import board page and the extension', () => {
     return { tab, state };
   }
 
-  it('shows the tabs, switches them, previews a create and applies it with the native confirmation for more than one ticket', async () => {
+  it('shows the tabs, switches them, previews a create and applies it without a native confirmation, even for more than one ticket', async () => {
     const { tab, state } = await openImport(['Login.java', 'Report.java']);
     expect(state.view.tabs.map((t: { id: string; count: number }) => [t.id, t.count])).toEqual([['new', 2], ['ticketed', 0], ['stale', 0]]);
 
@@ -599,11 +599,11 @@ describe('the import board page and the extension', () => {
     const back = (await ask(tab, 'action', { revision: switched.revision, action: { type: 'tab', tab: 'new' } })).body;
 
     const plan = (await ask(tab, 'preview', { revision: back.revision, action: { type: 'new-create' } })).body;
-    expect(plan).toMatchObject({ title: 'Create 2 ticket(s) in PROJ', risky: true });
+    expect(plan).toMatchObject({ title: 'Create 2 ticket(s) in PROJ', risky: false });
     expect(plan.lines.map((l: { target: string }) => l.target)).toEqual(['Flaw 101', 'Flaw 102']);
     const applied = (await ask(tab, 'apply', { planId: plan.planId })).body;
 
-    expect(confirmed).toEqual(['Create 2 ticket(s) in PROJ']);
+    expect(confirmed).toEqual([]);
     expect(applied.results.map((r: { target: string; outcome: string }) => [r.target, r.outcome])).toEqual([['Flaw 101: PROJ-100', 'done'], ['Flaw 102: PROJ-101', 'done']]);
     expect(applied.state.view.new.rows.map((r: { created?: string }) => r.created)).toEqual(['PROJ-100', 'PROJ-101']);
     // A plan is used once.

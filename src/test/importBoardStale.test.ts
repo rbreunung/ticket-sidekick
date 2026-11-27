@@ -195,7 +195,7 @@ const ext = (session: ImportSession) => staleView(session).ext.stale as StaleExt
 const group = (session: ImportSession, issueType: string) => ext(session).groups.find(g => g.issueType === issueType)!;
 
 describe('closing stale tickets', () => {
-  it('closes one marked Bug to Done with resolution Fixed after the native confirmation, because the write closes a ticket', async () => {
+  it('closes one marked Bug to Done with resolution Fixed without a native confirmation, though the write closes a ticket', async () => {
     jira.tickets = { 'PROJ-9': staleTicket('999', 'Bug') };
     const storeDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ts-import-stale-store-'));
     const asked: string[] = [];
@@ -216,11 +216,11 @@ describe('closing stale tickets', () => {
       ]) state = await manager.action('import', opened.id, state.revision, action);
 
       const preview = await manager.preview('import', opened.id, state.revision, { type: 'close-stale' });
-      expect(preview.risky).toBe(true);
+      expect(preview.risky).toBe(false);
       expect(preview.lines).toEqual([{ target: 'PROJ-9', change: 'Status: Open → Done, resolution Fixed' }]);
 
       const applied = await manager.apply('import', opened.id, preview.planId);
-      expect(asked).toHaveLength(1);
+      expect(asked).toEqual([]);
       expect(applied.results).toEqual([{ target: 'PROJ-9', outcome: 'done' }]);
       expect(jira.executeTransitionCalls).toEqual([
         { issueKey: 'PROJ-9', transitionId: '11', fields: undefined },
@@ -246,7 +246,7 @@ describe('closing stale tickets', () => {
       { target: 'PROJ-9', change: 'Status: Open → Done, resolution Fixed' },
       { target: 'PROJ-10', change: "Status: Open → Closed, resolution Won't Fix" },
     ]);
-    expect(plan.risky).toBe(true);
+    expect(plan.risky).toBe(false);
 
     const reports: Array<{ done: number; total: number; written: string[] }> = [];
     const applied = await importKind.apply!(session, plan, deps, async r => {

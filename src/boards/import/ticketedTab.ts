@@ -296,7 +296,7 @@ export const ticketedTabHandler: ImportHandler = {
         target: unit.ticket,
         change: describeUnit(unit, unit.rowKeys.map(k => byKey.get(k)!), a => LABELS[a]),
       })),
-      risky: now.length > 1,
+      risky: false,
       payload: { handler: NAME, units: now },
     };
     return { ok: true, plan };
@@ -446,6 +446,8 @@ export const ticketedTabHandler: ImportHandler = {
       noDueDate: rows.filter(r => hasNoDueDate(r) && !rowWritten(session.derived.data, session.working.writes, r)).map(r => r.id),
       notice: stateOf(session.working).notice ?? null,
       counts: { changed, unchanged, all: rows.length },
+      // The tickets the next Apply writes, for the button that names them.
+      toWrite: Math.min(unitsOf(session.derived.data, boardRows(session)).length, BATCH_LIMIT),
       actionLabels: LABELS,
     };
   },
