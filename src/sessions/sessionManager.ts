@@ -163,7 +163,8 @@ export class SessionManager {
   }
 
   private async persist(entry: Entry): Promise<void> {
-    if (!entry.session) return;
+    // An entry that was discarded or replaced while its work ran must not bring its session back to disk.
+    if (!entry.session || this.entries.get(entry.id) !== entry) return;
     try {
       entry.stored = await this.deps.store.save(entry.session);
     } catch (err) {

@@ -18,6 +18,8 @@ interface Deps {
   tickets: Record<string, string>;
   reads: { count: number };
   failRead?: boolean;
+  /** A read that waits for the test, to hold a check that is under way. */
+  baseGate?: Promise<void>;
   modes?: string[];
   /** Apply stops with an error after this many targets, as if the window closed mid-write. */
   stopAfter?: number;
@@ -78,6 +80,7 @@ function makeKind(formatVersion = 1, options: KindOptions = {}): BoardKind<Recip
     initialWorking: () => ({ selected: [] }),
     read: async (_r, deps) => {
       deps.reads.count++;
+      await deps.baseGate;
       if (deps.failRead) throw new Error('Jira answered 503');
       return { readAt: deps.reads.count, fingerprints: {}, data: { tickets: { ...deps.tickets } } };
     },
@@ -1123,6 +1126,21 @@ describe('a board that opens fresh', () => {
     const state = await restarted.state('demo', opened.id);
     expect(state.restored).toBe(true);
     expect(state.view).toMatchObject({ selected: ['PROJ-1'] });
+  });
+
+  it('does not store a session again when its check ends after the session was discarded', async () => {
+    const m = manager(1, fresh);
+    const first = await openReady(m);
+    let release!: () => void;
+    source.baseGate = new Promise(resolve => { release = resolve; });
+    const refreshing = m.refresh('demo', first.id);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    await m.discard(first.id);
+    release();
+    source.baseGate = undefined;
+    await refreshing.catch(() => undefined);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect((await new SessionStore(dir).list()).map(s => s.session.id)).not.toContain(first.id);
   });
 
   it('starts a stored session over from its own recipe, for the sessions board\'s Reopen', async () => {
