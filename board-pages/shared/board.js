@@ -211,6 +211,10 @@ export function startBoard({ root, render, loading }) {
     async refresh() {
       await run(async () => { state = await api('refresh'); });
     },
+    /** One setting the board keeps for itself, outside its session (`state.preferences`); the extension refuses a name or value the board does not take. */
+    async setPreference(name, value) {
+      await run(async () => { state = await api('preference', { name, value }); });
+    },
     /** Shows exactly what a writing action will do; nothing is written before Apply. */
     async preview(action) {
       await run(async () => {

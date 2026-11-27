@@ -47,9 +47,10 @@ async function loadPage(answer: (op: string, body: Record<string, unknown>) => P
   const { startBoard, h } = await import('../../board-pages/shared/board.js' as string);
   startBoard({
     root: page.root,
-    render: (_view: unknown, board: { running(what: string): unknown; run(r: unknown): void; act(a: unknown): void }, locked: boolean) => h('div', {},
+    render: (_view: unknown, board: { running(what: string): unknown; run(r: unknown): void; act(a: unknown): void; setPreference(name: string, value: boolean): void }, locked: boolean) => h('div', {},
       h('vscode-button', { id: 'explain-1', disabled: locked || Boolean(board.running('explain:1')), onClick: () => board.run({ type: 'explain', n: 1 }) }, 'Explain'),
       h('vscode-button', { id: 'select', disabled: locked, onClick: () => board.act({ type: 'select' }) }, 'Select'),
+      h('vscode-button', { id: 'quiet', disabled: locked, onClick: () => board.setPreference('loud', false) }, 'Quiet'),
       h('vscode-button', { id: 'pass', disabled: locked, onClick: () => board.run({ type: 'pass' }) }, 'Run the pass')),
   });
   await settle();
@@ -101,6 +102,17 @@ describe('a board page during a model run', () => {
     byId('select')!.dispatch('click');
     await settle();
     expect(page.posted.filter(m => m.op === 'action')).toHaveLength(1);
+  });
+
+  it('sends a setting the board keeps for itself on its own, without the session revision, and shows the answer', async () => {
+    state = { ...base(), preferences: { loud: true } };
+    await loadPage(async (op, body) => {
+      if (op === 'preference') { state = { ...state, tick: state.tick + 1, preferences: { loud: body.value as boolean } }; return state; }
+      throw { status: 404, message: 'Unknown request.' };
+    });
+    byId('quiet')!.dispatch('click');
+    await settle();
+    expect(page.posted.filter(m => m.op === 'preference').map(m => m.body)).toEqual([{ name: 'loud', value: false }]);
   });
 
   it('shows why a run was refused', async () => {

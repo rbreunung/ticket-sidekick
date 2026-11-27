@@ -175,6 +175,9 @@ export interface TicketListDeps {
   /** The resolution names Jira offers. */
   resolutions(): Promise<string[]>;
   now(): number;
+  /** Whether Apply reads each ticket before writing it; kept outside the sessions, on by default. */
+  checkBeforeWrite(): Promise<boolean>;
+  setCheckBeforeWrite(on: boolean): Promise<void>;
   /** Where the board logs what it refuses, for the Ticket Sidekick output channel. */
   onDiag?: DiagLogger;
 }
@@ -672,16 +675,18 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
         done: finished, total,
       });
     };
-    /** Reads the ticket again and writes it only when it is as the board read it; says whether it was written. */
+    // Whether each ticket is read before it is written; the developer's choice on the board.
+    const check = await deps.checkBeforeWrite();
+    /** Writes a ticket, after reading it again when the board checks and only when it is as the board read it; says whether it was written. */
     const writeOne = async (target: { key: string; updated: string; status: string }, write: () => Promise<unknown>): Promise<boolean> => {
       try {
         // The truth is Jira: a ticket that moved since the board read it is not written to.
-        const current = await deps.readTicket(target.key);
-        if (!current) {
+        const current = check ? await deps.readTicket(target.key) : undefined;
+        if (check && !current) {
           results[target.key] = { outcome: 'refused', reason: 'no longer exists in Jira' };
           return false;
         }
-        if (!sameUpdatedTime(current.updated, target.updated)) {
+        if (current && !sameUpdatedTime(current.updated, target.updated)) {
           deps.onDiag?.('warn', `Ticket list: ${target.key} changed in Jira since the board read it, so it was not written to`, {
             key: target.key, stored: target.updated, current: current.updated,
           });
@@ -691,7 +696,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
         }
         await write();
         // The time Jira gives the ticket after this write; when it cannot be read, a later check counts the ticket as changed.
-        const after = await deps.readTicket(target.key).catch(() => undefined);
+        const after = check ? await deps.readTicket(target.key).catch(() => undefined) : undefined;
         results[target.key] = { outcome: 'done', ...(after ? { updated: after.updated } : {}) };
         return true;
       } catch (err) {
@@ -739,6 +744,16 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
       },
       conflicts,
     };
+  },
+
+  preferences: {
+    read: async deps => ({ checkBeforeWrite: await deps.checkBeforeWrite() }),
+    write: async (name, value, deps) => {
+      if (name !== 'checkBeforeWrite') return 'This board has no such setting.';
+      if (typeof value !== 'boolean') return 'The setting is on or off.';
+      await deps.setCheckBeforeWrite(value);
+      return undefined;
+    },
   },
 
   view: session => {

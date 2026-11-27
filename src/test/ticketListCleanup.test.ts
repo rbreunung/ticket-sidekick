@@ -56,6 +56,8 @@ function fake(options: { rules?: CleanupRule[]; tickets?: TicketRow[]; graph?: W
     doneStatuses: async () => options.done,
     resolutions: async () => ['Fixed', "Won't Fix"],
     now: () => 1000,
+    checkBeforeWrite: async () => true,
+    setCheckBeforeWrite: async () => undefined,
   };
   return deps;
 }

@@ -231,3 +231,24 @@ describe('the workflow a cleanup board follows', () => {
     expect(await d.workflowGraph('PROJ', 'Bug')).toBeUndefined();
   });
 });
+
+describe('the check before writing, as the board keeps it', () => {
+  const access = { configured: true, config: { baseUrl: 'https://jira.example.com', token: 'x', searchFields: [], cleanupFields: [] }, client: {} } as unknown as JiraAccess;
+  const withStore = (store?: { get(): boolean | undefined; set(on: boolean): Promise<void> }) =>
+    ticketListJiraDeps({ getJira: async () => access, workspaceFolder: () => undefined, now: () => 1, ...(store ? { preferences: store } : {}) });
+
+  it('is on when nothing was stored, and when there is nowhere to store it', async () => {
+    expect(await withStore({ get: () => undefined, set: async () => undefined }).checkBeforeWrite()).toBe(true);
+    expect(await withStore().checkBeforeWrite()).toBe(true);
+  });
+
+  it('keeps the developer\'s choice where the extension stores it', async () => {
+    let kept: boolean | undefined;
+    const d = withStore({ get: () => kept, set: async on => { kept = on; } });
+    await d.setCheckBeforeWrite(false);
+    expect(kept).toBe(false);
+    expect(await d.checkBeforeWrite()).toBe(false);
+    await d.setCheckBeforeWrite(true);
+    expect(await d.checkBeforeWrite()).toBe(true);
+  });
+});

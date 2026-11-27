@@ -213,6 +213,14 @@ describe('a board page and the extension', () => {
   });
 });
 
+describe('a setting the board keeps for itself', () => {
+  it('is refused for a board that keeps none, and for a request that names no setting', async () => {
+    const state = await openReady();
+    expect(await ask(report(state.id), 'preference', { name: 'loud', value: true })).toMatchObject({ status: 404 });
+    expect(await ask(report(state.id), 'preference', { value: true })).toMatchObject({ status: 400, body: { error: 'Invalid setting.' } });
+  });
+});
+
 describe('a model run asked for by a board page', () => {
   /** A board whose one run is a pass of two steps that ends only when the page stops it. */
   const passKind: BoardKind<{ name: string }, null, { pass: string }, unknown, { pass: string }, null> = {

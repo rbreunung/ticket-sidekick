@@ -43,6 +43,8 @@ export interface BoardState {
   applying?: { done: number; total: number };
   /** The model runs going on this board. A pass locks every other control; a call only its own. */
   running?: RunningState[];
+  /** What the board keeps outside its sessions (its kind's `preferences`); absent for a board that keeps none. */
+  preferences?: Record<string, boolean>;
   view?: unknown;
 }
 
@@ -85,6 +87,8 @@ interface Entry {
   error?: string;
   errorCode?: string;
   applying?: { done: number; total: number };
+  /** The kind's preferences as last read; loaded with the first state and after each change. */
+  preferences?: Record<string, boolean>;
   /** The runs going on, by name. */
   runs: Map<string, ActiveRun>;
   queue: Promise<unknown>;
@@ -332,13 +336,42 @@ export class SessionManager {
       writesBlocked: this.writesBlocked(entry),
       ...(entry.applying ? { applying: { ...entry.applying } } : {}),
       ...(entry.runs.size > 0 ? { running: [...entry.runs.values()].map(r => ({ ...r.state })) } : {}),
+      ...(entry.preferences ? { preferences: { ...entry.preferences } } : {}),
       view: session ? kind.view(session) : undefined,
     };
+  }
+
+  /** Reads what the kind keeps outside its sessions the first time the board's state is asked for. */
+  private async loadPreferences(entry: Entry): Promise<void> {
+    const { kind } = entry.reg;
+    if (!kind.preferences || entry.preferences) return;
+    try {
+      entry.preferences = await kind.preferences.read(await entry.reg.deps());
+    } catch (err) {
+      this.log('warn', 'Could not read what the board keeps outside its sessions', { kind: kind.kind, error: messageOf(err) });
+    }
+  }
+
+  /**
+   * Changes one thing the board keeps outside its sessions. It is not part of the session, so the
+   * revision stays and no preview is needed; the kind refuses a name or value it does not take.
+   */
+  async preference(kindName: string, id: string, name: string, value: unknown): Promise<BoardState> {
+    const entry = await this.entry(kindName, id);
+    const { kind } = entry.reg;
+    if (!kind.preferences) throw new SessionError(404, 'This board keeps no settings of its own.');
+    const deps = await entry.reg.deps();
+    const refused = await kind.preferences.write(name, value, deps);
+    if (refused !== undefined) throw new SessionError(400, refused);
+    entry.preferences = await kind.preferences.read(deps);
+    this.changed(entry);
+    return this.toState(entry);
   }
 
   /** The session's state; with `sinceTick`, waits until it changes or `waitMs` pass. */
   async state(kindName: string, id: string, sinceTick?: number, waitMs = 0): Promise<BoardState> {
     const entry = await this.entry(kindName, id);
+    await this.loadPreferences(entry);
     if (sinceTick !== undefined && sinceTick === entry.tick && waitMs > 0) {
       await new Promise<void>(resolve => {
         const timer = setTimeout(() => { entry.waiters.delete(wake); resolve(); }, waitMs);

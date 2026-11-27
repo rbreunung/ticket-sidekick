@@ -156,6 +156,15 @@ export interface BoardKind<R, D, W, A, V, X> {
   interrupted?(working: W): W;
   /** A file the developer saves from the board, always built from the reading the board shows. */
   exportFile?(session: Session<R, D, W>, format: string, deps: X): Promise<ExportedFile>;
+  /**
+   * What the developer keeps on the board itself, stored outside any session so it outlives it. The
+   * page may change only a name `write` takes: it answers with the reason when it does not take the
+   * name or the value, and with nothing once it stored it.
+   */
+  preferences?: {
+    read(deps: X): Promise<Record<string, boolean>>;
+    write(name: string, value: unknown, deps: X): Promise<string | undefined>;
+  };
   /** What the page gets: never more than it shows. */
   view(session: Session<R, D, W>): V;
 }

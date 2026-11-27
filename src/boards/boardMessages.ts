@@ -229,6 +229,10 @@ async function sessionBoard(manager: SessionManager, target: BoardTarget, op: st
     case 'save':
       if (typeof body.format !== 'string') throw new BoardRequestError(400, 'Invalid format.');
       return { outcome: await manager.exportFile(kind, id, body.format) };
+    case 'preference':
+      // One thing the board keeps outside its session; the kind names which and refuses the rest.
+      if (typeof body.name !== 'string') throw new BoardRequestError(400, 'Invalid setting.');
+      return manager.preference(kind, id, body.name, body.value);
     case 'discard':
       // Close discards the session and closes its tab; nothing in Jira or Bitbucket changes.
       await manager.discard(id);

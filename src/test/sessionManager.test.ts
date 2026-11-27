@@ -30,10 +30,25 @@ interface Deps {
   /** What the kind's `prepare` reads before a close's preview: a ticket's owner, or an error. */
   owner?: string | Error;
   prepares?: number;
+  /** What the board keeps outside its sessions, as its deps store it. */
+  prefs?: Record<string, boolean>;
 }
 
-function makeKind(formatVersion = 1, options: { revalidate?: boolean; prepare?: boolean } = {}): BoardKind<Recipe, Derived, Working, Action, { tickets: Record<string, string>; selected: string[] }, Deps> {
+interface KindOptions { revalidate?: boolean; prepare?: boolean; preferences?: boolean }
+
+function makeKind(formatVersion = 1, options: KindOptions = {}): BoardKind<Recipe, Derived, Working, Action, { tickets: Record<string, string>; selected: string[] }, Deps> {
   return {
+    ...(options.preferences ? {
+      preferences: {
+        read: async (deps: Deps) => ({ ...(deps.prefs ?? {}) }),
+        write: async (name: string, value: unknown, deps: Deps) => {
+          if (name !== 'loud') return 'There is no setting by that name.';
+          if (typeof value !== 'boolean') return 'The setting is on or off.';
+          deps.prefs = { ...(deps.prefs ?? {}), loud: value };
+          return undefined;
+        },
+      },
+    } : {}),
     ...(options.revalidate ? {
       revalidate: async (recipe: unknown, deps: Deps) => {
         const project = (recipe as { project?: unknown })?.project;
@@ -124,7 +139,7 @@ let confirmations: string[];
 let confirmAnswer: boolean;
 let clock: number;
 
-function manager(formatVersion = 1, options: { revalidate?: boolean; prepare?: boolean } = {}): SessionManager {
+function manager(formatVersion = 1, options: KindOptions = {}): SessionManager {
   return new SessionManager({
     store: new SessionStore(dir),
     kinds: [registerKind(makeKind(formatVersion, options), () => source)],
@@ -998,5 +1013,47 @@ describe('a model run on a board', () => {
     deps.gates.open(2);
     await new Promise(resolve => setTimeout(resolve, 10));
     expect(await new SessionStore(dir).load(before.id)).toBeUndefined();
+  });
+});
+
+describe('a preference kept on the board', () => {
+  it('shows what the board keeps with its state', async () => {
+    source.prefs = { loud: true };
+    const state = await openReady(manager(1, { preferences: true }));
+    expect(state.preferences).toEqual({ loud: true });
+  });
+
+  it('stores a changed value outside the session and shows it at once, without changing the session', async () => {
+    const m = manager(1, { preferences: true });
+    const state = await openReady(m);
+    const next = await m.preference('demo', state.id, 'loud', false);
+    expect(next.preferences).toEqual({ loud: false });
+    expect(source.prefs).toEqual({ loud: false });
+    expect(next.revision).toBe(state.revision);
+  });
+
+  it('is still there when the session is gone and the board is opened again', async () => {
+    const m = manager(1, { preferences: true });
+    const state = await openReady(m);
+    await m.preference('demo', state.id, 'loud', false);
+    await m.discard(state.id);
+    const again = await openReady(manager(1, { preferences: true }));
+    expect(again.preferences).toEqual({ loud: false });
+  });
+
+  it('refuses a name or a value the board does not take, and keeps what it had', async () => {
+    source.prefs = { loud: true };
+    const m = manager(1, { preferences: true });
+    const state = await openReady(m);
+    await expect(m.preference('demo', state.id, 'quiet', true)).rejects.toMatchObject({ status: 400, message: 'There is no setting by that name.' });
+    await expect(m.preference('demo', state.id, 'loud', 'yes')).rejects.toMatchObject({ status: 400, message: 'The setting is on or off.' });
+    expect(source.prefs).toEqual({ loud: true });
+  });
+
+  it('refuses a board that keeps nothing outside its session', async () => {
+    const m = manager();
+    const state = await openReady(m);
+    expect(state.preferences).toBeUndefined();
+    await expect(m.preference('demo', state.id, 'loud', true)).rejects.toMatchObject({ status: 404 });
   });
 });
