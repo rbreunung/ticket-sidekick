@@ -33,6 +33,8 @@ a.button-link:hover { background: var(--vscode-button-secondaryHoverBackground);
 .muted { color: var(--vscode-descriptionForeground); }
 .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
 .bar label { display: inline-flex; align-items: center; gap: 6px; }
+/* The last item of a bar, kept at its right end (the ticket list's selected count). */
+.bar .bar-end { margin-left: auto; }
 select, input[type='text'] {
   font: inherit;
   color: inherit;

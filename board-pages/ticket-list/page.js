@@ -43,7 +43,7 @@ function actionLine(view, board, locked, busy, state) {
     h('label', { title: 'When this is off, Apply writes without reading each ticket first, so a change someone else made is overwritten without notice.' },
       h('input', { type: 'checkbox', id: 'check-before-write', checked: check, disabled: busy, onChange: e => board.setPreference('checkBeforeWrite', e.target.checked) }),
       ' Check each ticket before writing'),
-    h('span', { id: 'selected-count', class: 'muted', role: 'status' }, `${view.selectedCount} selected`),
+    h('span', { id: 'selected-count', class: 'muted bar-end', role: 'status' }, `${view.selectedCount} selected`),
   ];
 }
 
