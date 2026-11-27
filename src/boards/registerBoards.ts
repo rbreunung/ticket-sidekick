@@ -9,7 +9,7 @@ import { createVeracodeDescriptor } from '../imports/veracode';
 import { createWaltzDescriptor } from '../imports/waltz';
 import { checkEmailBatchCaps, createEmailDescriptor } from '../imports/email';
 import { parseEmlFile } from '../utils/emlParser';
-import { resolveBoilerplatePatterns } from '../utils/emailBoilerplate';
+import { patternIsSaved, resolveBoilerplatePatterns } from '../utils/emailBoilerplate';
 import { EMAIL_MODEL_SETTING, REVIEW_MODEL_SETTING, modelHandle, type BoardChatMessage, type BoardModels, type ModelSettings } from './boardModels';
 import { emailSettings, veracodeSettings, waltzSettings } from '../services/importSettings';
 import { registerKind } from '../sessions/boardKind';
@@ -188,8 +188,11 @@ export function registerBoards(
       savePattern: async pattern => {
         const cfg = vscode.workspace.getConfiguration('ticketSidekick');
         const current = cfg.inspect<unknown>('email.boilerplatePatterns')?.globalValue;
+        // An equal pattern in the setting as the window sees it, at any level, is not saved a second time.
+        if (patternIsSaved(cfg.get<unknown>('email.boilerplatePatterns'), pattern) || patternIsSaved(current, pattern)) return 'already-saved';
         try {
           await cfg.update('email.boilerplatePatterns', [...(Array.isArray(current) ? current : []), pattern], vscode.ConfigurationTarget.Global);
+          return 'saved';
         } catch (err) {
           // An error may echo the written value, whose phrases are email text.
           const message = err instanceof Error ? err.message : String(err);

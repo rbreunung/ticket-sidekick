@@ -300,9 +300,12 @@ async function applyCleanup(
       return { results: [{ target: 'ticketSidekick.email.boilerplatePatterns', outcome: 'refused', reason: 'That block is no longer in this cleanup.' }], derived: session.derived, working };
     }
     try {
-      await deps.savePattern(pattern);
+      const saved = await deps.savePattern(pattern);
+      // The block counts as saved either way: its pattern is in the setting.
       working = withState(working, { ...state, saved: [...new Set([...(state.saved ?? []), payload.block])] });
-      results.push({ target: 'ticketSidekick.email.boilerplatePatterns', outcome: 'done' });
+      results.push(saved === 'already-saved'
+        ? { target: 'ticketSidekick.email.boilerplatePatterns', outcome: 'refused', reason: 'This pattern is already saved, so nothing was added.' }
+        : { target: 'ticketSidekick.email.boilerplatePatterns', outcome: 'done' });
     } catch (err) {
       results.push({ target: 'ticketSidekick.email.boilerplatePatterns', outcome: 'failed', reason: err instanceof Error ? err.message : String(err) });
     }

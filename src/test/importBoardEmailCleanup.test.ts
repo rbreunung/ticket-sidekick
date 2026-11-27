@@ -19,6 +19,8 @@ let jira: EmptyProjectJira;
 let deps: ImportDeps;
 let patterns: BoilerplatePattern[];
 let savedPatterns: BoilerplatePattern[];
+/** What the window's setting answers when asked to save: the pattern is in it already. */
+let alreadySaved: boolean;
 let modelSettings: { email: string; review: string };
 let sent: Array<{ id: string; prompt: string }>;
 let reply: (prompt: string) => string | Promise<string>;
@@ -38,6 +40,7 @@ beforeEach(async () => {
   jira = new EmptyProjectJira();
   patterns = [{ kind: 'footer', start: 'CONFIDENTIAL:' }];
   savedPatterns = [];
+  alreadySaved = false;
   modelSettings = { email: '', review: '' };
   sent = [];
   logs = [];
@@ -45,7 +48,7 @@ beforeEach(async () => {
   deps = {
     ...emptyProjectImportDeps(dir, jira),
     boilerplatePatterns: () => patterns,
-    savePattern: async p => { savedPatterns.push(p); },
+    savePattern: async p => { savedPatterns.push(p); return alreadySaved ? 'already-saved' : 'saved'; },
     models,
     modelSettings: {
       emailModel: () => modelSettings.email,
@@ -241,6 +244,19 @@ describe('consent and the model check', () => {
     const fresh = await importKind.read(session.recipe, deps);
     importKind.reconcile(session, fresh, 'refresh');
     expect(sent).toEqual([]);
+  });
+
+  it('says when the pattern was already saved, adds nothing, and still shows the block as saved', async () => {
+    modelSettings.review = 'm1';
+    let session = await openEmails([emlFile(dir, 'a.eml', 'Login fails', { body: `The login page fails.\n\n${SIGNATURE}` })]);
+    reply = () => JSON.stringify({ blocks: [{ kind: 'signature', startQuote: 'Best regards', endQuote: 'Support lead' }] });
+    ({ session } = await apply(session, plan(session, { type: 'cleanup-check' })));
+    const block = cleanup(session).rows[0].blocks[0];
+    alreadySaved = true;
+    const saved = await apply(session, plan(session, { type: 'cleanup-save', block: block.id }));
+    session = saved.session;
+    expect(saved.applied.results).toEqual([{ target: 'ticketSidekick.email.boilerplatePatterns', outcome: 'refused', reason: 'This pattern is already saved, so nothing was added.' }]);
+    expect(cleanup(session).rows[0].blocks[0]).toMatchObject({ saved: true, savable: false });
   });
 
   it('saves a block the model found as a pattern', async () => {

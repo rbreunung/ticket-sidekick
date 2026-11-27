@@ -18,6 +18,7 @@ import {
   isTooLongForModelCheck,
   normalizePhrase,
   parseModelCheckReply,
+  patternIsSaved,
   resolveBoilerplatePatterns,
   splitSegments,
   verifyModelBlocks,
@@ -548,6 +549,28 @@ describe('applyBoilerplateCleanup — image selection (R9, KTD7)', () => {
 });
 
 // ── U3: pattern setting and save-as-pattern ────────────────────────────────────────────────────
+
+describe('patternIsSaved — a pattern that is already in the setting', () => {
+  const signature: BoilerplatePattern = { kind: 'signature', start: 'Best regards', end: 'Support lead' };
+
+  it('finds an equal pattern among the saved ones, however the setting spells its blanks', () => {
+    expect(patternIsSaved([{ kind: 'footer', start: 'x' }, { kind: 'signature', start: '  Best regards ', end: ' Support lead ' }], signature)).toBe(true);
+    expect(patternIsSaved([{ kind: 'header', start: 'Hello', end: '  ' }], { kind: 'header', start: 'Hello' })).toBe(true);
+  });
+
+  it('keeps patterns apart that differ in the kind, either phrase, or only in having an end', () => {
+    expect(patternIsSaved([{ ...signature, kind: 'footer' }], signature)).toBe(false);
+    expect(patternIsSaved([{ ...signature, start: 'Kind regards' }], signature)).toBe(false);
+    expect(patternIsSaved([{ ...signature, end: 'Support team' }], signature)).toBe(false);
+    expect(patternIsSaved([{ kind: 'signature', start: 'Best regards' }], signature)).toBe(false);
+  });
+
+  it('ignores a saved entry that is not a pattern, and a setting that is not a list', () => {
+    expect(patternIsSaved([null, 'x', { kind: 'banner', start: 'Best regards' }, { kind: 'signature' }], signature)).toBe(false);
+    expect(patternIsSaved(undefined, signature)).toBe(false);
+    expect(patternIsSaved('Best regards', signature)).toBe(false);
+  });
+});
 
 describe('resolveBoilerplatePatterns — validated setting read (R1)', () => {
   it('passes valid entries through, trimmed, and drops an unknown kind, a missing start and a non-object', () => {
