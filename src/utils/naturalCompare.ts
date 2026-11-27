@@ -29,6 +29,13 @@ export function extraColumnId(column: string): string | null {
   return column.startsWith(EXTRA_COLUMN_PREFIX) ? column.slice(EXTRA_COLUMN_PREFIX.length) : null;
 }
 
+/** A sort column that sorts as natural text with empty values last: Assignee and the configured extra columns. */
+export type NaturalColumn = 'assignee' | `extra:${string}`;
+
+export function isNaturalColumn(column: string): column is NaturalColumn {
+  return column === 'assignee' || extraColumnId(column) !== null;
+}
+
 /** The sort after a click on a column title: a new column sorts ascending, a second click turns the order around, a third takes the sort off. */
 export function nextSort<C extends string>(current: { column: C; descending: boolean } | null | undefined, column: C): { column: C; descending: boolean } | null {
   if (!current || current.column !== column) return { column, descending: false };

@@ -130,6 +130,12 @@ function shownRows(session: ImportSession): ImportRow[] {
   });
 }
 
+/** The sort in force: one on an extra column the reading no longer has (the setting changed) counts as none. */
+function activeSort(session: ImportSession): TicketedState['sort'] | null {
+  const sort = stateOf(session.working).sort;
+  return sort && isSortColumn(sort.column, session.derived.data) ? sort : null;
+}
+
 function isSortColumn(column: unknown, data: ImportData): column is string {
   if (typeof column !== 'string') return false;
   if ((SORT_COLUMNS as readonly string[]).includes(column)) return true;
@@ -154,8 +160,8 @@ function sortText(session: ImportSession, row: ImportRow, column: string): strin
 
 /** The rows in the order of the sort chosen, or as they are when none is. Only what is shown changes: writes keep the review's order. */
 function sortedRows(session: ImportSession, rows: ImportRow[]): ImportRow[] {
-  const sort = stateOf(session.working).sort;
-  if (!sort || !isSortColumn(sort.column, session.derived.data)) return rows;
+  const sort = activeSort(session);
+  if (!sort) return rows;
   return [...rows].sort((a, b) => compareNatural(sortText(session, a, sort.column), sortText(session, b, sort.column), sort.descending));
 }
 
@@ -429,7 +435,7 @@ export const ticketedTabHandler: ImportHandler = {
     return {
       filter: filterOf(session),
       shown: sortedRows(session, shownRows(session)).map(r => r.id),
-      sort: stateOf(session.working).sort ?? null,
+      sort: activeSort(session),
       noDueDate: rows.filter(r => hasNoDueDate(r) && !rowWritten(session.derived.data, session.working.writes, r)).map(r => r.id),
       notice: stateOf(session.working).notice ?? null,
       counts: { changed, unchanged, all: rows.length },

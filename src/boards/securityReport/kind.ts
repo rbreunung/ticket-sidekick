@@ -5,7 +5,7 @@ import type { ResolvedColumn } from '../../services/extraColumns';
 import { normalizeProjectKey } from '../../services/configValidation';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
-import { extraColumnId, nextSort, sortNatural } from '../../utils/naturalCompare';
+import { extraColumnId, isNaturalColumn, nextSort, sortNatural, type NaturalColumn } from '../../utils/naturalCompare';
 import { assigneeLabel, buildOverview, type Overview, type OverviewFlag, type OverviewInput, type OverviewRow, type OverviewSource } from '../../utils/securityOverview';
 import { renderOverviewCsv } from '../../utils/securityOverviewCsv';
 import { renderOverviewXlsx } from '../../utils/securityOverviewXlsx';
@@ -109,12 +109,7 @@ function overviewOf(data: SecurityReportData): Overview {
   return buildOverview(data.input);
 }
 
-/** Assignee and the extra columns sort as natural text with empty values last; the others by `sortValue`. */
-function isNaturalColumn(column: SortColumn): column is 'assignee' | `extra:${string}` {
-  return column === 'assignee' || extraColumnId(column) !== null;
-}
-
-function naturalText(row: OverviewRow, column: 'assignee' | `extra:${string}`): string {
+function naturalText(row: OverviewRow, column: NaturalColumn): string {
   if (column === 'assignee') return row.ticketKey === null ? '' : row.assignee ?? '';
   return row.extra?.[extraColumnId(column)!] ?? '';
 }
@@ -130,7 +125,7 @@ function assigneeText(row: OverviewRow): string {
   return row.ticketKey === null ? '' : assigneeLabel(row.assignee);
 }
 
-function sortValue(row: OverviewRow, column: Exclude<SortColumn, 'assignee' | `extra:${string}`>): string {
+function sortValue(row: OverviewRow, column: Exclude<SortColumn, NaturalColumn>): string {
   switch (column) {
     case 'source': return row.source;
     case 'summary': return row.summary.toLowerCase();

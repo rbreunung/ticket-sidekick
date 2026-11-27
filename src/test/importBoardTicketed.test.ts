@@ -738,13 +738,29 @@ describe('assignee and extra columns on Already ticketed', () => {
     const s = await openOwned();
     expect(order(sortBy(s, 'extra:customfield_1'))).toEqual(['PROJ-2', 'PROJ-1', 'PROJ-3']);
     expect(order(sortBy(s, 'ticket'))).toEqual(['PROJ-1', 'PROJ-2', 'PROJ-3']);
-    expect(order(sortBy(sortBy(s, 'action'), 'action'))).toHaveLength(3);
+    const actions = (v: ImportSession) => ext(view(v)).shown.map(id => view(v).ticketed!.rows.find(r => r.id === id)!.action);
+    const first = view(s).ticketed!.rows[0];
+    const changed = act(s, { type: 'ticketed-action', id: first.id, action: first.allowedActions.find(a => a !== first.action)! });
+    const labelled = actions(sortBy(changed, 'action'));
+    expect(labelled).toHaveLength(3);
+    expect(actions(sortBy(sortBy(changed, 'action'), 'action'))).toEqual([...labelled].reverse());
   });
 
   it('puts PROJ-9 before PROJ-10 when sorting by ticket', async () => {
     jira.tickets = { 'PROJ-10': veracodeTicket(['101']), 'PROJ-9': veracodeTicket(['102']) };
     const s = onTicketed(await open(recipe('veracode', writeVeracode([{ id: '101', file: 'A.java' }, { id: '102', file: 'B.java' }]))));
     expect(order(sortBy(s, 'ticket'))).toEqual(['PROJ-9', 'PROJ-10']);
+  });
+
+  it('shows no sort, and keeps the report order, once the sorted extra column is no longer configured', async () => {
+    const sorted = sortBy(await openOwned(), 'extra:customfield_1');
+    expect(ext(view(sorted)).sort).toEqual({ column: 'extra:customfield_1', descending: false });
+    reportFields = [];
+    deps = makeDeps();
+    const fresh = onTicketed(await open(recipe('veracode', writeVeracode(FLAWS))));
+    const stale = { ...fresh, working: sorted.working };
+    expect(ext(view(stale)).sort).toBeNull();
+    expect(order(stale)).toEqual(order(fresh));
   });
 
   it('refuses to sort by Pick, Result or a column it does not show', async () => {

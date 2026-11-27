@@ -2,6 +2,7 @@
 // finding, one per Waltz ticket). The CSV and Excel renderers both read this, so their column order cannot drift.
 // Pure and vscode-free.
 import type { Overview, OverviewFlag, OverviewRow, OverviewTable } from './securityOverview';
+import { EXTRA_COLUMN_PREFIX } from './naturalCompare';
 import { severityLabel } from './veracodeReport';
 
 export type ColumnKind = 'text' | 'number' | 'date';
@@ -44,7 +45,6 @@ const VERACODE_COLUMNS = [
 const WALTZ_COLUMNS = [text('Remediation action'), text('Plan status'), text('Members')];
 // Appended after the older columns so no existing column moves for someone with a saved Excel macro or pivot.
 const ASSIGNEE_COLUMN = text('Assignee');
-const EXTRA_PREFIX = 'extra:';
 
 const FLAG_TEXT = { overdue: 'overdue', 'due-before-release': 'due before release' } as const;
 const MATCH_TEXT = { tracked: 'tracked', stale: 'stale', 'in-report-no-ticket': 'in report, no ticket' } as const;
@@ -79,7 +79,7 @@ function leadCells(row: OverviewRow, table: OverviewTable, hasReport: boolean, e
     'Detail source': row.detailSource,
     Assignee: assigneeCell(row),
   };
-  for (const column of extraColumns) cells[EXTRA_PREFIX + column.id] = row.ticketKey === null ? null : row.extra?.[column.id] ?? null;
+  for (const column of extraColumns) cells[EXTRA_COLUMN_PREFIX + column.id] = row.ticketKey === null ? null : row.extra?.[column.id] ?? null;
   if (hasReport) cells['Report match'] = row.reportMatch ? MATCH_TEXT[row.reportMatch] : '';
   return cells;
 }
@@ -92,7 +92,7 @@ function leadCells(row: OverviewRow, table: OverviewTable, hasReport: boolean, e
 export function buildOverviewSheet(overview: Overview): OverviewSheet {
   const columns = [
     ...LEAD_COLUMNS, ...(overview.hasReport ? REPORT_COLUMNS : []), ...DETAIL_COLUMNS, ...VERACODE_COLUMNS, ...WALTZ_COLUMNS,
-    ASSIGNEE_COLUMN, ...overview.extraColumns.map((c): OverviewColumn => ({ id: EXTRA_PREFIX + c.id, title: c.name, kind: 'text' })),
+    ASSIGNEE_COLUMN, ...overview.extraColumns.map((c): OverviewColumn => ({ id: EXTRA_COLUMN_PREFIX + c.id, title: c.name, kind: 'text' })),
   ];
   const records: OverviewRecord[] = [];
   const push = (flag: OverviewFlag, cells: Record<string, Cell>): void => {

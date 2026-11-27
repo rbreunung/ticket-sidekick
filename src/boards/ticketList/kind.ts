@@ -1,6 +1,6 @@
 import { isSystemFilterId } from '../../utils/jiraSystemFilters';
 import { splitOrderBy } from '../../utils/jqlOrderBy';
-import { extraColumnId, nextSort, sortNatural } from '../../utils/naturalCompare';
+import { extraColumnId, isNaturalColumn, nextSort, sortNatural, type NaturalColumn } from '../../utils/naturalCompare';
 import type { BoardKind, CheckMode } from '../../sessions/boardKind';
 import type { Conflict, Session } from '../../sessions/sessionTypes';
 import type { WorkflowGraph } from '../../services/WorkflowService';
@@ -282,12 +282,7 @@ function orderedRows(session: ListSession): TicketRow[] {
   return [...rows].sort((a, b) => sortValue(a, column).localeCompare(sortValue(b, column)) * (sort.descending ? -1 : 1));
 }
 
-/** Assignee and the extra columns sort in natural order with empty values last; the others by `sortValue`. */
-function isNaturalColumn(column: SortColumn): column is 'assignee' | `extra:${string}` {
-  return column === 'assignee' || extraColumnId(column) !== null;
-}
-
-function naturalText(row: TicketRow, column: 'assignee' | `extra:${string}`): string {
+function naturalText(row: TicketRow, column: NaturalColumn): string {
   return column === 'assignee' ? row.assignee : row.extra?.[extraColumnId(column)!] ?? '';
 }
 
@@ -344,7 +339,7 @@ function differences(shownRows: TicketRow[], freshRows: TicketRow[], results: Re
   return changed.length + gone.length + added > 0 ? { changed, gone, added } : null;
 }
 
-function sortValue(row: TicketRow, column: Exclude<SortColumn, 'assignee' | `extra:${string}`>): string {
+function sortValue(row: TicketRow, column: Exclude<SortColumn, NaturalColumn>): string {
   if (column === 'key') {
     const [project, number] = row.key.split('-');
     return `${project}-${(number ?? '').padStart(9, '0')}`;
