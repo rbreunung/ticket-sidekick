@@ -100,6 +100,12 @@ export interface BoardKind<R, D, W, A, V, X> {
   kind: string;
   /** Raise when the stored shape changes; a session of another format is rebuilt from its recipe (see `revalidate`) or discarded. */
   formatVersion: number;
+  /**
+   * Asked for again with no tab open, the board starts clean (nothing selected, no earlier results, the
+   * sources read again) instead of bringing back the stored session. A tab VS Code restores after a
+   * restart still gets its session. For boards whose state is a query and a selection, not work worth keeping.
+   */
+  freshOnOpen?: boolean;
   title(recipe: R): string;
   /** Turns the open input into a recipe, or the reason the board cannot open. */
   validate(input: unknown, deps: X): Promise<Validated<R>>;

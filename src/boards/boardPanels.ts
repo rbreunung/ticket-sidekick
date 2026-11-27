@@ -154,7 +154,8 @@ export class BoardPanels implements BoardHost {
       return { ok: true, title: REVIEW_START_TITLE };
     }
     if (!this.kinds.includes(kind)) return { ok: false, reason: 'there is no board of that name.' };
-    const opened = await this.manager.open(kind, input ?? {});
+    // A board that opens fresh keeps its session only while its tab is open; otherwise it starts clean.
+    const opened = await this.manager.open(kind, input ?? {}, { hasTab: id => this.panels.has(this.key({ kind, id, title: '' })) });
     if (!opened.ok) return opened;
     this.reveal({ kind, id: opened.id, title: opened.title });
     return { ok: true, title: opened.title };
@@ -165,6 +166,8 @@ export class BoardPanels implements BoardHost {
     if (!this.kinds.includes(kind)) return { ok: false, reason: 'there is no board of that name.' };
     const row = (await this.manager.list()).find(s => s.kind === kind && s.id === id);
     if (!row) return { ok: false, reason: 'this session is no longer stored.' };
+    // A board that opens fresh starts over from its stored list when no tab of it is open.
+    if (this.manager.opensFresh(kind) && !this.panels.has(this.key({ kind, id, title: '' }))) await this.manager.startOver(kind, id);
     this.reveal({ kind, id, title: row.title });
     return { ok: true };
   }

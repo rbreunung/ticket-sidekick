@@ -34,10 +34,11 @@ interface Deps {
   prefs?: Record<string, boolean>;
 }
 
-interface KindOptions { revalidate?: boolean; prepare?: boolean; preferences?: boolean }
+interface KindOptions { revalidate?: boolean; prepare?: boolean; preferences?: boolean; freshOnOpen?: boolean }
 
 function makeKind(formatVersion = 1, options: KindOptions = {}): BoardKind<Recipe, Derived, Working, Action, { tickets: Record<string, string>; selected: string[] }, Deps> {
   return {
+    ...(options.freshOnOpen ? { freshOnOpen: true } : {}),
     ...(options.preferences ? {
       preferences: {
         read: async (deps: Deps) => ({ ...(deps.prefs ?? {}) }),
@@ -1064,5 +1065,68 @@ describe('a preference kept on the board', () => {
     const state = await openReady(m);
     expect(state.preferences).toBeUndefined();
     await expect(m.preference('demo', state.id, 'loud', true)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe('a board that opens fresh', () => {
+  const select = async (m: SessionManager, id: string, key: string) => {
+    const state = await m.state('demo', id);
+    return m.action('demo', id, state.revision, { type: 'select', key });
+  };
+  const fresh = { freshOnOpen: true };
+
+  it('starts clean when it is asked for again and no tab of it is open, and reads its sources again', async () => {
+    const m = manager(1, fresh);
+    const first = await openReady(m);
+    await select(m, first.id, 'PROJ-1');
+    const readsBefore = source.reads.count;
+
+    const again = await m.open('demo', { project: 'PROJ' }, { hasTab: () => false });
+    expect(again.ok && again.id).toBe(first.id);
+    const state = await ready(m, first.id);
+    expect(state.view).toMatchObject({ selected: [] });
+    expect(state.restored).toBe(false);
+    expect(source.reads.count).toBeGreaterThan(readsBefore);
+  });
+
+  it('keeps its session when its tab is open, so asking for it only brings the tab forward', async () => {
+    const m = manager(1, fresh);
+    const first = await openReady(m);
+    await select(m, first.id, 'PROJ-1');
+    await m.open('demo', { project: 'PROJ' }, { hasTab: () => true });
+    expect((await m.state('demo', first.id)).view).toMatchObject({ selected: ['PROJ-1'] });
+  });
+
+  it('keeps what the developer chose on a board that does not ask to open fresh', async () => {
+    const m = manager();
+    const first = await openReady(m);
+    await select(m, first.id, 'PROJ-1');
+    await m.open('demo', { project: 'PROJ' }, { hasTab: () => false });
+    expect((await m.state('demo', first.id)).view).toMatchObject({ selected: ['PROJ-1'] });
+  });
+
+  it('brings a tab VS Code restores after a restart back with its session', async () => {
+    const first = manager(1, fresh);
+    const opened = await openReady(first);
+    await select(first, opened.id, 'PROJ-1');
+
+    const restarted = manager(1, fresh);
+    const state = await restarted.state('demo', opened.id);
+    expect(state.restored).toBe(true);
+    expect(state.view).toMatchObject({ selected: ['PROJ-1'] });
+  });
+
+  it('starts a stored session over from its own recipe, for the sessions board\'s Reopen', async () => {
+    const m = manager(1, fresh);
+    const first = await openReady(m);
+    await select(m, first.id, 'PROJ-1');
+    const restarted = manager(1, fresh);
+    expect(restarted.opensFresh('demo')).toBe(true);
+    expect(manager().opensFresh('demo')).toBe(false);
+    expect(await restarted.startOver('demo', first.id)).toBe(true);
+    const state = await ready(restarted, first.id);
+    expect(state.view).toMatchObject({ selected: [] });
+    expect(state.title).toBe('Demo: PROJ');
+    expect(await restarted.startOver('demo', 'demo-ffffffffffffffff')).toBe(false);
   });
 });

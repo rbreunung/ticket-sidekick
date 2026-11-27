@@ -466,6 +466,8 @@ interface PlannedTarget {
 export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketListWorking, TicketListAction, TicketListView, TicketListDeps> = {
   kind: TICKET_LIST_KIND,
   formatVersion: 2,
+  // The state is a query and a selection, read again from Jira: a list opened anew starts clean.
+  freshOnOpen: true,
   title: recipe => sourceTitle(recipe.source),
 
   validate: async (input, deps) => {

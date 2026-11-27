@@ -56,6 +56,11 @@ export interface PlanPreview {
 
 export type OpenResult = { ok: true; id: string; title: string } | { ok: false; reason: string };
 
+export interface OpenOptions {
+  /** Whether a tab of this session is open now; a board that opens fresh keeps its session only while one is. */
+  hasTab?(id: string): boolean;
+}
+
 export interface SessionManagerDeps {
   store: SessionStore;
   kinds: RegisteredKind[];
@@ -281,13 +286,15 @@ export class SessionManager {
   }
 
   /** Validates an open request and returns the session it belongs to, creating or restoring it. */
-  async open(kindName: string, input: unknown): Promise<OpenResult> {
+  async open(kindName: string, input: unknown, options: OpenOptions = {}): Promise<OpenResult> {
     const reg = this.kinds.get(kindName);
     if (!reg) return { ok: false, reason: 'Unknown board.' };
     const validated = await reg.kind.validate(input, await reg.deps());
     if (!validated.ok) return validated;
     const id = sessionIdFor(reg.kind.kind, reg.kind.sourceKey(validated.recipe));
     const title = reg.kind.title(validated.recipe);
+    // A board that opens fresh forgets its session when asked for with no tab open; it is built again below.
+    if (reg.kind.freshOnOpen && options.hasTab && !options.hasTab(id)) await this.discard(id);
     const formatBefore = this.entries.has(id) ? undefined : (await this.deps.store.load(id))?.session.formatVersion;
     const otherFormat = formatBefore !== undefined && formatBefore !== reg.kind.formatVersion;
     // A stored session of another format is rebuilt from this request, which is what the board is opened with now.
@@ -312,6 +319,24 @@ export class SessionManager {
     if (otherFormat) this.log('info', 'Rebuilt a stored session of another format', { kind: reg.kind.kind });
     this.building(id, reg, validated.recipe, otherFormat ? REBUILT_NOTICE : undefined);
     return { ok: true, id, title };
+  }
+
+  /** Whether this board starts clean when it is asked for with no tab open. */
+  opensFresh(kindName: string): boolean {
+    return this.kinds.get(kindName)?.kind.freshOnOpen === true;
+  }
+
+  /**
+   * Forgets a stored session's choices and results and builds it again from its own recipe, so the
+   * board opens clean without a new request. False when no such session is stored.
+   */
+  async startOver(kindName: string, id: string): Promise<boolean> {
+    const reg = this.kinds.get(kindName);
+    const session = reg ? await this.read(kindName, id) : undefined;
+    if (!reg || !session) return false;
+    await this.discard(id);
+    this.building(id, reg, session.recipe);
+    return true;
   }
 
   private async entry(kindName: string, id: string): Promise<Entry> {

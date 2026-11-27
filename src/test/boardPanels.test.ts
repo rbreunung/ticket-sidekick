@@ -55,7 +55,9 @@ import { BoardPanels } from '../boards/boardPanels';
 import { ImportStartScreen, type ImportStartDeps } from '../boards/import/startScreen';
 import { ReviewStartScreen } from '../boards/review/startScreen';
 import { securityReportKind, type SecurityReportDeps } from '../boards/securityReport/kind';
+import { ticketListKind, type TicketListDeps } from '../boards/ticketList/kind';
 import { registerKind } from '../sessions/boardKind';
+import { sessionIdFor } from '../sessions/sessionId';
 import { SessionManager } from '../sessions/sessionManager';
 import { SessionStore } from '../sessions/sessionStore';
 import type { TicketService } from '../services/TicketService';
@@ -292,5 +294,67 @@ describe('a tab VS Code brings back after a restart', () => {
     const restored = fakePanel();
     await panels.serializer().deserializeWebviewPanel(restored as never, { kind: 'import', id: '', title: 'x' });
     expect(restored.disposed).toBe(true);
+  });
+});
+
+describe('a ticket list opened again', () => {
+  const rows = ['PROJ-1', 'PROJ-2'].map(key => ({ key, summary: key, status: 'Open', issueType: 'Bug', assignee: '', priority: '', updated: 't1' }));
+  const listDeps = {
+    jiraConfigured: async () => true, baseUrl: async () => undefined, extraColumns: async () => ({ search: [], cleanup: [] }),
+    search: async () => ({ rows, truncated: false }), now: () => 1000,
+  } as unknown as TicketListDeps;
+  const request = { jql: 'project = PROJ' };
+  const idOfList = () => sessionIdFor('ticket-list', ticketListKind.sourceKey({ source: { type: 'jql', jql: 'project = PROJ' } }));
+
+  function listBoards() {
+    const m = new SessionManager({
+      store: new SessionStore(path.join(dir, 'list-sessions')),
+      kinds: [registerKind(ticketListKind, () => listDeps)],
+      now: () => Date.now(), confirm: async () => true, saveFile: async () => true,
+    });
+    return { m, p: new BoardPanels(m, ['ticket-list'], { fsPath: '/ext/out/board-pages' } as never, message => errors.push(message)) };
+  }
+  async function selected(m: SessionManager, id: string): Promise<number> {
+    let state = await m.state('ticket-list', id);
+    while (state.status === 'building' || state.status === 'checking') state = await m.state('ticket-list', id, state.tick, 1000);
+    if (state.status !== 'ready') throw new Error(`The list did not load: ${state.error}`);
+    return (state.view as { selectedCount: number }).selectedCount;
+  }
+
+  it('keeps its selection while its tab is open, and starts clean once the tab was closed', async () => {
+    const { m, p } = listBoards();
+    expect(await p.open('ticket-list', request)).toMatchObject({ ok: true });
+    const id = idOfList();
+    expect(await selected(m, id)).toBe(0);
+    const state = await m.state('ticket-list', id);
+    await m.action('ticket-list', id, state.revision, { type: 'select-all' });
+    expect(await selected(m, id)).toBe(2);
+
+    await p.open('ticket-list', request);
+    expect(created).toHaveLength(1);
+    expect(await selected(m, id)).toBe(2);
+
+    created[0].close();
+    await p.open('ticket-list', request);
+    expect(created).toHaveLength(2);
+    expect(await selected(m, id)).toBe(0);
+  });
+
+  it('starts clean from the sessions board\'s Reopen too, but keeps what a restored tab shows', async () => {
+    const { m, p } = listBoards();
+    await p.open('ticket-list', request);
+    const id = idOfList();
+    await selected(m, id);
+    const state = await m.state('ticket-list', id);
+    await m.action('ticket-list', id, state.revision, { type: 'select-all' });
+    created[0].close();
+
+    // VS Code brings the tab back after a restart: it asks for the state of the session, which is kept.
+    expect(await selected(m, id)).toBe(2);
+
+    // The sessions board's Reopen of a session with no tab starts over from the stored list.
+    expect(await p.openStored('ticket-list', id)).toEqual({ ok: true });
+    expect(created).toHaveLength(2);
+    expect(await selected(m, id)).toBe(0);
   });
 });
