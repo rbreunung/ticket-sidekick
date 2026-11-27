@@ -3,10 +3,7 @@
 // overview exports and the ticket list. Pure and vscode-free; the field names and the log come in as arguments.
 import type { JiraFieldMeta } from '../jira/IJiraClient';
 import type { DiagLogger } from '../utils/diagTypes';
-import { arrayItemText, renderFieldValue } from './TicketService';
-
-/** The longest value a cell keeps, which also keeps every Excel cell far below its 32,767-character limit. */
-export const MAX_EXTRA_VALUE_CHARS = 500;
+export { MAX_EXTRA_VALUE_CHARS, renderExtraValue } from './TicketService';
 
 export interface ResolvedColumn {
   id: string;
@@ -63,23 +60,4 @@ export async function resolveExtraColumns(
     else if (options.keepUnknown) columns.push({ id, name: id });
   }
   return columns;
-}
-
-const EMPTY_WORDS = new Set(['_Not set_', '_None_', '_Unassigned_']);
-
-/**
- * A field value as one line of plain text for a cell: the same per-type reading as the ticket list, except that a
- * list shows all its items joined with "; ". No value is the raw empty string, never a word like "Not set", so a
- * sort can tell it from a value. Whitespace collapses to single spaces and the text is cut at `MAX_EXTRA_VALUE_CHARS`.
- */
-export function renderExtraValue(value: unknown, meta: JiraFieldMeta): string {
-  let text: string;
-  if (Array.isArray(value) && !meta.schema.custom?.includes('gh-sprint')) {
-    text = value.map(arrayItemText).join('; ');
-  } else {
-    const rendered = renderFieldValue(value, meta);
-    text = EMPTY_WORDS.has(rendered) ? '' : rendered;
-  }
-  text = text.replace(/\s+/g, ' ').trim();
-  return text.length > MAX_EXTRA_VALUE_CHARS ? text.slice(0, MAX_EXTRA_VALUE_CHARS) : text;
 }

@@ -4,7 +4,7 @@ import { h, startBoard } from '../shared/board.js';
 // and sort are part of the session, so they are sent to the extension and come back in the view.
 
 const COLUMNS = [
-  ['source', 'Source'], ['summary', 'Item'], ['rating', 'Rating'], ['ticket', 'Ticket'], ['due', 'Due'], ['flag', 'Flag'],
+  ['source', 'Source'], ['summary', 'Item'], ['rating', 'Rating'], ['ticket', 'Ticket'], ['assignee', 'Assignee'], ['due', 'Due'], ['flag', 'Flag'],
 ];
 const FLAG_TEXT = { overdue: 'Overdue', 'due-before-release': 'Due before release' };
 const SOURCE_TEXT = { veracode: 'Veracode', waltz: 'Waltz' };
@@ -49,8 +49,8 @@ function render(view, board, busy) {
 
   const tables = view.tables.map((t, tableIndex) => h('section', {},
     h('h2', {}, releaseName(t.fixVersion), t.releaseDate ? h('span', { class: 'muted' }, ` · release ${t.releaseDate}`) : null),
-    t.rows.length === 0 ? h('p', { class: 'muted' }, 'No rows match the filters.') : h('table', {},
-      h('thead', {}, h('tr', {}, COLUMNS.map(([column, text]) => sortHeader(view, board, tableIndex, column, text)))),
+    t.rows.length === 0 ? h('p', { class: 'muted' }, 'No rows match the filters.') : h('div', { class: 'table-wrap' }, h('table', {},
+      h('thead', {}, h('tr', {}, [...COLUMNS, ...view.columns.map(c => [`extra:${c.id}`, c.name])].map(([column, text]) => sortHeader(view, board, tableIndex, column, text)))),
       h('tbody', {}, t.rows.map(row => h('tr', {},
         h('td', {}, SOURCE_TEXT[row.source] ?? row.source),
         h('td', {}, row.summary),
@@ -58,8 +58,10 @@ function render(view, board, busy) {
         h('td', {}, row.ticketKey
           ? (row.ticketUrl ? h('a', { href: row.ticketUrl, target: '_blank', rel: 'noreferrer' }, row.ticketKey) : row.ticketKey)
           : 'No ticket', row.status ? h('span', { class: 'muted' }, ` ${row.status}`) : null),
+        h('td', {}, row.assignee),
         h('td', {}, row.dueDate ?? ''),
-        h('td', { class: row.flag ? `flag-${row.flag}` : undefined }, FLAG_TEXT[row.flag] ?? '')))))));
+        h('td', { class: row.flag ? `flag-${row.flag}` : undefined }, FLAG_TEXT[row.flag] ?? ''),
+        row.values.map(value => h('td', {}, value))))))));
 
   return h('div', {},
     h('p', {}, `${view.totalTickets} open ticket(s): ${view.bySource.veracode} Veracode, ${view.bySource.waltz} Waltz.`),

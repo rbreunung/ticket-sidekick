@@ -9,6 +9,7 @@ import { formatFileSize } from '../utils/attachmentEligibility';
 import { mergedBanner, mergedSummary } from '../utils/ticketMerge';
 import { renderReviewTable, neutralizeMarkdownLinks, type ReviewTableColumn } from '../utils/chatPrimitives';
 import { fetchAllPages } from '../utils/reportImport';
+import type { ResolvedColumn } from './extraColumns';
 
 export type FieldResolutionResult =
   | { kind: 'match'; field: JiraFieldMeta }
@@ -35,6 +36,10 @@ export interface OverviewTicket {
   dueDate: string | null;
   fixVersions: string[];
   source: 'veracode' | 'waltz';
+  /** The assignee's display name; '' when the ticket is unassigned, absent when it was never read (an older stored reading). */
+  assignee?: string;
+  /** The configured extra columns' values as plain text by field id; '' when a field has no value. */
+  extra?: Record<string, string>;
 }
 
 export interface OverviewTicketList {
@@ -60,9 +65,11 @@ const CALENDAR_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}/;
 const ISSUE_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 const OVERVIEW_KEY_CHUNK = 50;
 
-function toOverviewTicket(issue: JiraIssue, fallbackSource: OverviewTicket['source']): OverviewTicket {
+function toOverviewTicket(issue: JiraIssue, fallbackSource: OverviewTicket['source'], columns: readonly ResolvedColumn[] = []): OverviewTicket {
   const labels = issue.fields.labels ?? [];
   const due = issue.fields.duedate;
+  const fields = issue.fields as unknown as Record<string, unknown>;
+  const assignee = issue.fields.assignee;
   return {
     key: issue.key,
     summary: issue.fields.summary ?? '',
@@ -71,6 +78,8 @@ function toOverviewTicket(issue: JiraIssue, fallbackSource: OverviewTicket['sour
     dueDate: typeof due === 'string' && CALENDAR_DATE_PATTERN.test(due) ? due.slice(0, 10) : null,
     fixVersions: (issue.fields.fixVersions ?? []).map(v => v.name),
     source: labels.includes(OVERVIEW_MARKER_LABELS.veracode) ? 'veracode' : labels.includes(OVERVIEW_MARKER_LABELS.waltz) ? 'waltz' : fallbackSource,
+    assignee: typeof assignee?.displayName === 'string' ? assignee.displayName : '',
+    extra: Object.fromEntries(columns.filter(c => c.meta).map(c => [c.id, renderExtraValue(fields[c.id], c.meta!)])),
   };
 }
 
@@ -249,6 +258,27 @@ export function renderFieldValue(value: unknown, meta: JiraFieldMeta): string {
   if (typeof value === 'number') return String(value);
   if (typeof value === 'string') return value;
   return String(value);
+}
+
+/** The longest value a cell keeps, which also keeps every Excel cell far below its 32,767-character limit. */
+export const MAX_EXTRA_VALUE_CHARS = 500;
+const EMPTY_VALUE_WORDS = new Set(['_Not set_', '_None_', '_Unassigned_']);
+
+/**
+ * A field value as one line of plain text for a cell: the same per-type reading as the ticket list, except that a
+ * list shows all its items joined with "; ". No value is the raw empty string, never a word like "Not set", so a
+ * sort can tell it from a value. Whitespace collapses to single spaces and the text is cut at `MAX_EXTRA_VALUE_CHARS`.
+ */
+export function renderExtraValue(value: unknown, meta: JiraFieldMeta): string {
+  let text: string;
+  if (Array.isArray(value) && !meta.schema.custom?.includes('gh-sprint')) {
+    text = value.map(arrayItemText).join('; ');
+  } else {
+    const rendered = renderFieldValue(value, meta);
+    text = EMPTY_VALUE_WORDS.has(rendered) ? '' : rendered;
+  }
+  text = text.replace(/\s+/g, ' ').trim();
+  return text.length > MAX_EXTRA_VALUE_CHARS ? text.slice(0, MAX_EXTRA_VALUE_CHARS) : text;
 }
 
 /**
@@ -855,16 +885,16 @@ export class TicketService {
    * security overview groups by. Reads every page up to {@link MAX_OVERVIEW_TICKETS}; a failed page rejects.
    * The project key is validated before it is put into JQL.
    */
-  async listOverviewTickets(projectKey: string): Promise<OverviewTicketList> {
+  async listOverviewTickets(projectKey: string, columns: readonly ResolvedColumn[] = []): Promise<OverviewTicketList> {
     if (!PROJECT_KEY_PATTERN.test(projectKey)) throw new Error(`"${projectKey}" is not a valid Jira project key.`);
     const jql = `project = ${projectKey} AND resolution is EMPTY AND (labels = "${OVERVIEW_MARKER_LABELS.veracode}" OR labels = "${OVERVIEW_MARKER_LABELS.waltz}") ORDER BY key ASC`;
     const issues = await fetchAllPages<JiraIssue>(
-      (startAt, pageToken) => this.searchTicketsRaw(jql, OVERVIEW_PAGE_SIZE, ['duedate', 'resolution'], startAt, pageToken),
+      (startAt, pageToken) => this.searchTicketsRaw(jql, OVERVIEW_PAGE_SIZE, ['duedate', 'resolution', ...columns.map(c => c.id)], startAt, pageToken),
       OVERVIEW_PAGE_SIZE,
       MAX_OVERVIEW_TICKETS,
       issue => issue.key,
     );
-    const tickets = issues.map(issue => toOverviewTicket(issue, 'waltz'));
+    const tickets = issues.map(issue => toOverviewTicket(issue, 'waltz', columns));
     return { tickets, truncated: issues.length >= MAX_OVERVIEW_TICKETS };
   }
 
@@ -873,18 +903,18 @@ export class TicketService {
    * validated before they reach JQL and read 50 at a time; `fallbackSource` names the importer when a ticket has
    * lost its marker label.
    */
-  async getOverviewTicketsByKeys(keys: string[], fallbackSource: OverviewTicket['source']): Promise<OverviewTicket[]> {
+  async getOverviewTicketsByKeys(keys: string[], fallbackSource: OverviewTicket['source'], columns: readonly ResolvedColumn[] = []): Promise<OverviewTicket[]> {
     const valid = [...new Set(keys)].filter(k => ISSUE_KEY_PATTERN.test(k));
     const tickets: OverviewTicket[] = [];
     for (let i = 0; i < valid.length; i += OVERVIEW_KEY_CHUNK) {
       const chunk = valid.slice(i, i + OVERVIEW_KEY_CHUNK);
       const issues = await fetchAllPages<JiraIssue>(
-        (startAt, pageToken) => this.searchTicketsRaw(`key in (${chunk.join(', ')}) ORDER BY key ASC`, OVERVIEW_KEY_CHUNK, ['duedate', 'resolution'], startAt, pageToken),
+        (startAt, pageToken) => this.searchTicketsRaw(`key in (${chunk.join(', ')}) ORDER BY key ASC`, OVERVIEW_KEY_CHUNK, ['duedate', 'resolution', ...columns.map(c => c.id)], startAt, pageToken),
         OVERVIEW_KEY_CHUNK,
         OVERVIEW_KEY_CHUNK,
         issue => issue.key,
       );
-      tickets.push(...issues.map(issue => toOverviewTicket(issue, fallbackSource)));
+      tickets.push(...issues.map(issue => toOverviewTicket(issue, fallbackSource, columns)));
     }
     return tickets;
   }

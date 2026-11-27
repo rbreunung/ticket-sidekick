@@ -1,9 +1,11 @@
 import type { BoardKind } from '../../sessions/boardKind';
 import type { Session } from '../../sessions/sessionTypes';
 import type { TicketService } from '../../services/TicketService';
+import type { ResolvedColumn } from '../../services/extraColumns';
 import { normalizeProjectKey } from '../../services/configValidation';
 import type { DiagLogger } from '../../utils/diagTypes';
 import { describeJiraFailure } from '../../utils/jiraFailureText';
+import { compareNatural } from '../../utils/naturalCompare';
 import { buildOverview, type Overview, type OverviewFlag, type OverviewInput, type OverviewRow, type OverviewSource } from '../../utils/securityOverview';
 import { renderOverviewCsv } from '../../utils/securityOverviewCsv';
 import { renderOverviewXlsx } from '../../utils/securityOverviewXlsx';
@@ -27,7 +29,7 @@ export interface SecurityReportData {
 }
 
 export type FlagFilter = 'overdue' | 'due-before-release' | 'none';
-export type SortColumn = 'source' | 'summary' | 'rating' | 'ticket' | 'due' | 'flag';
+export type SortColumn = 'source' | 'summary' | 'rating' | 'ticket' | 'assignee' | 'due' | 'flag' | `extra:${string}`;
 
 export interface SecurityReportWorking {
   /** A Fix Version name, or '' for the tickets not assigned to a release. */
@@ -45,6 +47,8 @@ export type SecurityReportAction =
 export interface SecurityReportDeps {
   /** The ticket service and base URL when Jira is set up in this window. */
   jira(): Promise<{ ticketService: TicketService; baseUrl: string } | undefined>;
+  /** The extra columns `ticketSidekick.jira.securityReportFields` asks for, resolved against Jira's field names. */
+  extraColumns?(): Promise<ResolvedColumn[]>;
   /** `ticketSidekick.jira.defaultProject`, possibly empty. */
   defaultProject(): string;
   csvDelimiter(): string;
@@ -61,6 +65,10 @@ export interface ReportRowView {
   ticketKey: string | null;
   ticketUrl: string | null;
   status: string | null;
+  /** The assignee as shown: the name, "Unassigned", a dash when this saved reading never read it, nothing without a ticket. */
+  assignee: string;
+  /** The extra columns' values in the order of `columns`. */
+  values: string[];
   dueDate: string | null;
   flag: OverviewFlag;
 }
@@ -88,15 +96,37 @@ export interface SecurityReportView {
   releases: string[];
   filters: Pick<SecurityReportWorking, 'release' | 'flag' | 'tool'>;
   sort: SecurityReportWorking['sort'];
+  /** The extra columns after Flag. */
+  columns: Array<{ id: string; name: string }>;
   tables: ReportTableView[];
 }
 
-const SORT_COLUMNS: readonly SortColumn[] = ['source', 'summary', 'rating', 'ticket', 'due', 'flag'];
+const SORT_COLUMNS: readonly SortColumn[] = ['source', 'summary', 'rating', 'ticket', 'assignee', 'due', 'flag'];
+const NOT_READ = '\u2014';
+const EXTRA_PREFIX = 'extra:';
 const FLAG_FILTERS: readonly FlagFilter[] = ['overdue', 'due-before-release', 'none'];
 const NO_FILTERS: SecurityReportWorking = { release: null, flag: null, tool: null, sort: null };
 
 function overviewOf(data: SecurityReportData): Overview {
   return buildOverview(data.input);
+}
+
+/** A column that sorts as natural text with empty values last: Assignee and the extra columns. */
+function naturalText(row: OverviewRow, column: SortColumn): string | null {
+  if (column === 'assignee') return row.ticketKey === null ? '' : row.assignee ?? '';
+  if (column.startsWith(EXTRA_PREFIX)) return row.extra?.[column.slice(EXTRA_PREFIX.length)] ?? '';
+  return null;
+}
+
+function isKnownColumn(column: unknown, data: SecurityReportData): column is SortColumn {
+  if (typeof column !== 'string') return false;
+  if ((SORT_COLUMNS as readonly string[]).includes(column)) return true;
+  return column.startsWith(EXTRA_PREFIX) && (data.input.extraColumns ?? []).some(c => c.id === column.slice(EXTRA_PREFIX.length));
+}
+
+function assigneeText(row: OverviewRow): string {
+  if (row.ticketKey === null) return '';
+  return row.assignee === undefined ? NOT_READ : row.assignee === '' ? 'Unassigned' : row.assignee;
 }
 
 function sortValue(row: OverviewRow, column: SortColumn): string {
@@ -105,8 +135,10 @@ function sortValue(row: OverviewRow, column: SortColumn): string {
     case 'summary': return row.summary.toLowerCase();
     case 'rating': return row.rating.toLowerCase();
     case 'ticket': return row.ticketKey ?? '';
+    case 'assignee': return naturalText(row, column) ?? '';
     case 'due': return row.dueDate ?? '9999-99-99';
     case 'flag': return row.flag === 'overdue' ? '0' : row.flag === 'due-before-release' ? '1' : '2';
+    default: return naturalText(row, column) ?? '';
   }
 }
 
@@ -134,7 +166,10 @@ export function buildReportView(session: Session<SecurityReportRecipe, SecurityR
     let rows = table.rows.filter(row => keepsRow(row, working));
     if (working.sort) {
       const { column, descending } = working.sort;
-      rows = [...rows].sort((a, b) => sortValue(a, column).localeCompare(sortValue(b, column)) * (descending ? -1 : 1));
+      rows = [...rows].sort((a, b) => {
+        if (naturalText(a, column) === null) return sortValue(a, column).localeCompare(sortValue(b, column)) * (descending ? -1 : 1);
+        return compareNatural(naturalText(a, column), naturalText(b, column), descending);
+      });
     }
     shown += new Set(rows.map(r => r.ticketKey).filter(Boolean)).size;
     tables.push({
@@ -143,14 +178,16 @@ export function buildReportView(session: Session<SecurityReportRecipe, SecurityR
       rows: rows.map(row => ({
         source: row.source, summary: row.summary, rating: row.rating, ticketKey: row.ticketKey,
         ticketUrl: row.ticketKey && baseUrl ? `${baseUrl}/browse/${encodeURIComponent(row.ticketKey)}` : null,
-        status: row.status, dueDate: row.dueDate, flag: row.flag,
+        status: row.status, assignee: assigneeText(row), values: overview.extraColumns.map(c => row.extra?.[c.id] ?? ''),
+        dueDate: row.dueDate, flag: row.flag,
       })),
     });
   }
   return {
     project: session.recipe.project, totalTickets: overview.ticketCount, shownTickets: shown, bySource: overview.bySource,
     unreadCount: overview.unreadCount, warnings, releases: overview.tables.map(t => t.fixVersion ?? ''),
-    filters: { release: working.release, flag: working.flag, tool: working.tool }, sort: working.sort, tables,
+    filters: { release: working.release, flag: working.flag, tool: working.tool }, sort: working.sort,
+    columns: overview.extraColumns.map(({ id, name }) => ({ id, name })), tables,
   };
 }
 
@@ -194,9 +231,10 @@ export const securityReportKind: BoardKind<
     const jira = await deps.jira();
     if (!jira) throw new Error('Jira is not set up in this window.');
     const { ticketService, baseUrl } = jira;
+    const columns = (await deps.extraColumns?.()) ?? [];
     let list;
     try {
-      list = await ticketService.listOverviewTickets(recipe.project);
+      list = await ticketService.listOverviewTickets(recipe.project, columns);
     } catch (err) {
       deps.onDiag?.('error', 'Security report search failed', { projectKey: recipe.project, error: err instanceof Error ? err.message : String(err) });
       // Status and a short reason only; Jira's response body never reaches the page.
@@ -218,7 +256,10 @@ export const securityReportKind: BoardKind<
       readAt: deps.now(),
       fingerprints: {},
       data: {
-        input: { tickets: list.tickets, descriptions: texts, versions, today: deps.today(), baseUrl, projectKey: recipe.project },
+        input: {
+          tickets: list.tickets, descriptions: texts, versions, today: deps.today(), baseUrl, projectKey: recipe.project,
+          extraColumns: columns.map(({ id, name }) => ({ id, name })),
+        },
         truncated: list.truncated,
         versionsFailed,
       },
@@ -229,14 +270,16 @@ export const securityReportKind: BoardKind<
   reconcile: (session, fresh) => {
     const releases = new Set(overviewOf(fresh.data).tables.map(t => t.fixVersion ?? ''));
     const release = session.working.release !== null && releases.has(session.working.release) ? session.working.release : null;
-    return { derived: fresh, working: { ...session.working, release }, conflicts: [] };
+    // A sort on a column the setting no longer lists is dropped; a sort on a built-in column stays.
+    const sort = session.working.sort && isKnownColumn(session.working.sort.column, fresh.data) ? session.working.sort : null;
+    return { derived: fresh, working: { ...session.working, release, sort }, conflicts: [] };
   },
 
   reduce: (session, action) => {
     const working = session.working;
     if (action?.type === 'clear') return { ok: true, working: { ...NO_FILTERS } };
     if (action?.type === 'sort') {
-      if (!SORT_COLUMNS.includes(action.column)) return { ok: false, reason: 'Unknown column.' };
+      if (!isKnownColumn(action.column, session.derived.data)) return { ok: false, reason: 'Unknown column.' };
       // A second click on the same column turns the order around; a third takes the sort off.
       const current = working.sort?.column === action.column ? working.sort : null;
       const sort = !current ? { column: action.column, descending: false } : current.descending ? null : { column: action.column, descending: true };
