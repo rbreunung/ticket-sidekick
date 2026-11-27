@@ -22,8 +22,7 @@ function looksLikeSession(value: unknown): value is Session {
     && isSessionId(s.id) && typeof s.kind === 'string'
     && Number.isInteger(s.formatVersion) && Number.isInteger(s.revision)
     && typeof s.createdAt === 'number' && typeof s.lastUsedAt === 'number'
-    && typeof s.derived === 'object' && s.derived !== null && typeof s.derived.readAt === 'number'
-    && Array.isArray(s.conflicts);
+    && typeof s.derived === 'object' && s.derived !== null && typeof s.derived.readAt === 'number';
 }
 
 export class SessionStore {

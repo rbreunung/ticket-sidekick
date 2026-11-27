@@ -189,6 +189,8 @@ export const securityReportKind: BoardKind<
 > = {
   kind: SECURITY_REPORT_KIND,
   formatVersion: 1,
+  // The report is a reading of Jira: a report opened anew, or brought back after a restart, is read again.
+  freshOnOpen: true,
   title: recipe => `Security report: ${recipe.project}`,
 
   // A named project is used as named: one that is not a project key is refused, never swapped
@@ -264,7 +266,7 @@ export const securityReportKind: BoardKind<
     const releases = new Set(overviewOf(fresh.data).tables.map(t => t.fixVersion ?? ''));
     const release = session.working.release !== null && releases.has(session.working.release) ? session.working.release : null;
     const sort = session.working.sort && isKnownColumn(session.working.sort.column, fresh.data) ? session.working.sort : null;
-    return { derived: fresh, working: { ...session.working, release, sort }, conflicts: [] };
+    return { derived: fresh, working: { ...session.working, release, sort } };
   },
 
   reduce: (session, action) => {

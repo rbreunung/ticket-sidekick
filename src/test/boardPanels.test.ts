@@ -23,6 +23,9 @@ interface FakePanel {
 
 const created: FakePanel[] = [];
 const clipboard: string[] = [];
+/** Board tabs VS Code lists but has not handed to the extension yet, by label. */
+const unrestored: string[] = [];
+const closedTabs: string[] = [];
 
 function fakePanel(title = ''): FakePanel {
   let receive: ((m: unknown) => unknown) | undefined;
@@ -44,18 +47,30 @@ function fakePanel(title = ''): FakePanel {
   return panel;
 }
 
-vi.mock('vscode', () => ({
+vi.mock('vscode', () => {
+  const TabInputWebview = class { constructor(public viewType: string) {} };
+  return {
   ViewColumn: { Active: -1 },
   Uri: { joinPath: (base: { fsPath: string }, ...parts: string[]) => ({ fsPath: [base.fsPath, ...parts].join('/') }) },
   env: { clipboard: { writeText: async (text: string) => { clipboard.push(text); } } },
-  window: { createWebviewPanel: (_type: string, title: string) => { const p = fakePanel(title); created.push(p); return p; } },
-}));
+  TabInputWebview,
+  window: {
+    createWebviewPanel: (_type: string, title: string) => { const p = fakePanel(title); created.push(p); return p; },
+    tabGroups: {
+      get all() { return [{ tabs: unrestored.map(label => ({ label, input: new TabInputWebview('mainThreadWebview-ticketSidekick.board') })) }]; },
+      close: async (tabs: Array<{ label: string }>) => { closedTabs.push(...tabs.map(t => t.label)); unrestored.length = 0; return true; },
+    },
+  },
+};
+});
 
 import { BoardPanels } from '../boards/boardPanels';
 import { ImportStartScreen, type ImportStartDeps } from '../boards/import/startScreen';
 import { ReviewStartScreen } from '../boards/review/startScreen';
 import { securityReportKind, type SecurityReportDeps } from '../boards/securityReport/kind';
+import { ticketListKind, type TicketListDeps } from '../boards/ticketList/kind';
 import { registerKind } from '../sessions/boardKind';
+import { sessionIdFor } from '../sessions/sessionId';
 import { SessionManager } from '../sessions/sessionManager';
 import { SessionStore } from '../sessions/sessionStore';
 import type { TicketService } from '../services/TicketService';
@@ -100,6 +115,8 @@ function startScreen(over: Partial<ImportStartDeps> = {}): ImportStartScreen {
 let errors: string[];
 
 beforeEach(async () => {
+  unrestored.length = 0;
+  closedTabs.length = 0;
   created.length = 0;
   errors = [];
   dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ts-panels-'));
@@ -292,5 +309,121 @@ describe('a tab VS Code brings back after a restart', () => {
     const restored = fakePanel();
     await panels.serializer().deserializeWebviewPanel(restored as never, { kind: 'import', id: '', title: 'x' });
     expect(restored.disposed).toBe(true);
+  });
+});
+
+describe('a ticket list opened again', () => {
+  const rows = ['PROJ-1', 'PROJ-2'].map(key => ({ key, summary: key, status: 'Open', issueType: 'Bug', assignee: '', priority: '', updated: 't1' }));
+  const listDeps = {
+    jiraConfigured: async () => true, baseUrl: async () => undefined, extraColumns: async () => ({ search: [], cleanup: [] }),
+    search: async () => ({ rows, truncated: false }), now: () => 1000,
+  } as unknown as TicketListDeps;
+  const request = { jql: 'project = PROJ' };
+  const idOfList = () => sessionIdFor('ticket-list', ticketListKind.sourceKey({ source: { type: 'jql', jql: 'project = PROJ' } }));
+
+  function listBoards() {
+    const m = new SessionManager({
+      store: new SessionStore(path.join(dir, 'list-sessions')),
+      kinds: [registerKind(ticketListKind, () => listDeps)],
+      now: () => Date.now(), confirm: async () => true, saveFile: async () => true,
+    });
+    return { m, p: new BoardPanels(m, ['ticket-list'], { fsPath: '/ext/out/board-pages' } as never, message => errors.push(message)) };
+  }
+  async function selected(m: SessionManager, id: string): Promise<number> {
+    let state = await m.state('ticket-list', id);
+    while (state.status === 'building' || state.status === 'checking') state = await m.state('ticket-list', id, state.tick, 1000);
+    if (state.status !== 'ready') throw new Error(`The list did not load: ${state.error}`);
+    return (state.view as { selectedCount: number }).selectedCount;
+  }
+
+  it('keeps its selection while its tab is open, and starts clean once the tab was closed', async () => {
+    const { m, p } = listBoards();
+    expect(await p.open('ticket-list', request)).toMatchObject({ ok: true });
+    const id = idOfList();
+    expect(await selected(m, id)).toBe(0);
+    const state = await m.state('ticket-list', id);
+    await m.action('ticket-list', id, state.revision, { type: 'select-all' });
+    expect(await selected(m, id)).toBe(2);
+
+    await p.open('ticket-list', request);
+    expect(created).toHaveLength(1);
+    expect(await selected(m, id)).toBe(2);
+
+    created[0].close();
+    await p.open('ticket-list', request);
+    expect(created).toHaveLength(2);
+    expect(await selected(m, id)).toBe(0);
+  });
+
+  it('reads the list again when VS Code brings its tab back after a restart, so nothing old is shown', async () => {
+    const { m, p } = listBoards();
+    await p.open('ticket-list', request);
+    const id = idOfList();
+    await selected(m, id);
+    const state = await m.state('ticket-list', id);
+    await m.action('ticket-list', id, state.revision, { type: 'select-all' });
+    expect(await selected(m, id)).toBe(2);
+    created[0].close();
+
+    const restored = fakePanel();
+    await p.serializer().deserializeWebviewPanel(restored as never, { kind: 'ticket-list', id, title: created[0].title });
+    expect(restored.disposed).toBe(false);
+    expect(await selected(m, id)).toBe(0);
+  });
+
+  it('keeps its selection and opens one tab when its tab is waiting to be restored after a restart', async () => {
+    const { m, p } = listBoards();
+    await p.open('ticket-list', request);
+    const id = idOfList();
+    await selected(m, id);
+    const state = await m.state('ticket-list', id);
+    await m.action('ticket-list', id, state.revision, { type: 'select-all' });
+    const title = created[0].title;
+    created[0].close();
+    closedTabs.length = 0;
+
+    // VS Code lists the board's tab after a restart but has not handed it to the extension yet.
+    unrestored.push(title);
+    await p.open('ticket-list', request);
+    expect(await selected(m, id)).toBe(2);
+    expect(created).toHaveLength(2);
+    expect(closedTabs).toEqual([title]);
+
+    // Asked for from the sessions board's Reopen, it does not start over either.
+    unrestored.push(title);
+    expect(await p.openStored('ticket-list', id)).toEqual({ ok: true });
+    expect(await selected(m, id)).toBe(2);
+  });
+
+  it('does not start over from the sessions board\'s Reopen while its tab is open', async () => {
+    const { m, p } = listBoards();
+    await p.open('ticket-list', request);
+    const id = idOfList();
+    await selected(m, id);
+    const state = await m.state('ticket-list', id);
+    await m.action('ticket-list', id, state.revision, { type: 'select-all' });
+
+    expect(await p.openStored('ticket-list', id)).toEqual({ ok: true });
+    expect(created).toHaveLength(1);
+    expect(created[0].revealed).toBeGreaterThan(0);
+    expect(await selected(m, id)).toBe(2);
+  });
+
+  it('starts clean from the sessions board\'s Reopen too, but keeps what a restored tab shows', async () => {
+    const { m, p } = listBoards();
+    await p.open('ticket-list', request);
+    const id = idOfList();
+    await selected(m, id);
+    const state = await m.state('ticket-list', id);
+    await m.action('ticket-list', id, state.revision, { type: 'select-all' });
+    created[0].close();
+
+    // VS Code brings the tab back after a restart: it asks for the state of the session, which is kept.
+    expect(await selected(m, id)).toBe(2);
+
+    // The sessions board's Reopen of a session with no tab starts over from the stored list.
+    expect(await p.openStored('ticket-list', id)).toEqual({ ok: true });
+    expect(created).toHaveLength(2);
+    expect(await selected(m, id)).toBe(0);
   });
 });

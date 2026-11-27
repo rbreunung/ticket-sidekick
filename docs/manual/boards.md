@@ -45,14 +45,15 @@ Copilot opens this board whenever you ask to see a list of tickets or to change 
 
 1. Select the tickets with their checkboxes, or **Select all**. The selection holds across pages.
 2. Choose one change: **Move to status** (with an optional resolution) or **Set field** (a field's name or id, how to change it, and a value), then **Set change**. For a list field such as labels or components, **Add value** and **Remove value** change one value and keep the others; **Set to** replaces the whole value.
-3. **Preview** lists exactly what will be written to each selected ticket. Nothing is written yet.
-4. **Apply** writes. When the change touches more than one ticket, or closes a ticket, VS Code asks you to confirm in its own dialog first; the dialog names every selected ticket, on every page.
+3. **Apply** writes the change at once. The button names what it writes and how many tickets, for example "Move 12 tickets to Done" or "Add to labels on 3 tickets", so the board on show is the preview: no dialog follows. Until a change is chosen and a ticket is selected, it reads "Apply" and is off.
 
-After Apply the board reads the list again and shows a result per ticket: **Done**, **Failed** with Jira's reason, or **Not written**.
+The action line holds the change controls, **Apply**, **Refresh**, **Check each ticket before writing** and how many tickets are selected. After Apply the board reads the list again and shows a result per ticket: **Done**, **Failed** with Jira's reason, or **Not written**, and one message with the count written and each ticket that was not.
 
-- **A change Copilot proposed.** When you asked for a change in chat ("move my done tickets to Closed"), the board opens with that change filled in, marked "Proposed by Copilot", and every row selected. Check it, deselect rows, then preview and apply. Copilot cannot apply it. A list opened with a proposed move applies the selected tickets **of the page in view** only, like a cleanup.
+- **A change Copilot proposed.** When you asked for a change in chat ("move my done tickets to Closed"), the board opens with that change filled in, marked "Proposed by Copilot", and every row selected. Check it, deselect rows, then apply. Copilot cannot apply it. A list opened with a proposed move applies the selected tickets **of the page in view** only, like a cleanup.
 - **Out of date.** When the board finds that tickets changed in Jira, left the query or newly match it, it says it is out of date and you can only page until you press **Refresh**. Refresh shows the tickets as they are now and keeps your selection of every ticket still listed. A saved filter's tickets are asked of Jira as `filter = <id>`, so they always follow the filter as it is in Jira, in the order its query sorts by: when the filter was edited in Jira, **Refresh** lists its new tickets, and the query under the title shows its new text. Asking for the same filter again marks the board out of date when the filter's query changed; press **Refresh**. When only the filter's query cannot be read, the tickets are still the current ones and the board says the query shown is the one it opened with. When the filter itself is gone (for example, deleted), the check fails and the board keeps the old list, with nothing writable.
-- **Jira is the truth.** Before writing, the board reads each ticket again. A ticket that changed in Jira since the board read it is not written to; it is listed under the title with its stored and its current status, until you press **Drop**.
+- **Jira is the truth.** Before writing, the board reads each ticket again. A ticket that changed in Jira since the board read it is not written to: its row says so and the message after Apply names it. The board has read the list again by then, so the ticket shows as it is now and you can select it and apply once more; only when that read failed does the board mark itself out of date and offer **Refresh**. Update times are compared as moments, since Jira writes the offset in two ways, and each refusal is logged to the Ticket Sidekick output channel with both times.
+- **Check each ticket before writing.** On by default. Turn it off to write without reading each ticket first, for example when Jira's update times make untouched tickets look changed. A change someone else made is then overwritten without notice. The choice is kept for you across boards and restarts; it is not in the Settings screen.
+- **Closing and reopening.** The board has no Close button: close its tab. Asking for the same list again, with its tab closed, starts clean (nothing selected, no earlier results, the tickets read again). A tab VS Code brings back after a restart is read again too, so nothing old is shown.
 - **Moves** use a direct transition when there is one, else the workflow path Ticket Sidekick has cached for the project and issue type, discovering it once if needed.
 - **Fields** are set as the `jira_update_field` tool sets them: any field by its display name or id, a sprint by its name, a list field from comma-separated values.
 
@@ -64,9 +65,9 @@ A cleanup is the ticket list loaded from a rule in the `cleanupRules` of `.jira-
 - **Incomplete rules.** A rule without `name`, `project`, `issueType` or `targetState` is not run. Asking for it says which field is missing, and the Command Palette command lists only complete rules and names the skipped ones.
 - **Rows.** Every ticket starts selected and shows the status it moves to. With `closeSubtasks`, each ticket's open subtasks are listed beneath it with their own target status and resolution. You select tickets only; their subtasks follow.
 - **Paths.** When the board loads, it works out a path through the workflow for every ticket, discovering the workflow once when none is cached. A ticket without a path, or with a subtask without one, shows the reason and cannot be selected.
-- **Resolution.** A resolution is sent only with a move to a final status: one in Jira's Done category, read with the workflow (in a workflow cached before that, a status named like Done, Resolved, Closed, Won't Fix, Rejected or Cancelled). When the rule moves tickets to a final status and names no resolution, choose one on the board, or **No resolution**, before you preview. A move Jira refuses with a resolution is tried once more without one.
+- **Resolution.** A resolution is sent only with a move to a final status: one in Jira's Done category, read with the workflow (in a workflow cached before that, a status named like Done, Resolved, Closed, Won't Fix, Rejected or Cancelled). When the rule moves tickets to a final status and names no resolution, choose one on the board, or **No resolution**, before you apply. A move Jira refuses with a resolution is tried once more without one.
 - **Applying.** A cleanup applies the selected tickets **of the page in view**. The moved tickets leave the list, so the next ones move up onto the same page, still selected: check them and apply again for the rest. Subtasks move before their ticket. When a subtask is not moved, its ticket stays as it is and its result names the subtask.
-- **The rule is read again** on every load and Refresh, so an edit to `.jira-templates.json` shows on the next Refresh. A cleanup asked for again with the same rule and fix version continues its board.
+- **The rule is read again** on every load and Refresh, so an edit to `.jira-templates.json` shows on the next Refresh. A cleanup asked for again with the same rule and fix version starts its board clean, like any ticket list.
 
 ## Jira Import Board
 
@@ -84,62 +85,63 @@ The Jira Import Board turns a Veracode Detailed Report (`.xml`), a Waltz OSS Rep
 
 ### The tabs
 
-The line at the top names the report kind, the file, the project, the template and the issue type. Below it is one tab per group, each with its row count: **New**, **Already ticketed**, **Stale**, and for Waltz **Accepted**. Each tab has its own filter, its own controls and its own Preview and Apply, so a preview never mixes groups. The board opens on the first tab with work left. A tab shows all its rows, without pages.
+The line at the top names the report kind, the file, the project, the template and the issue type. Below it is one tab per group, each with its row count: **New**, **Already ticketed**, **Stale**, and for Waltz **Accepted**. Each tab has its own filter and its own controls, so an action never mixes groups. The board opens on the first tab with work left. A tab shows all its rows, without pages.
 
 **New**: findings (Veracode) or components (Waltz) without a ticket.
 
 - The **Create** checkbox puts a row in the create. **Select all** and **Select none** set every row.
 - **Merge selected** folds the selected rows into one ticket, and **Unmerge** splits them again. A merge stays on the board until you unmerge it or create the ticket.
-- **Preview create** lists the tickets to create. A Veracode ticket gets its Due Date from `ticketSidekick.veracode.slaDays`. When Jira refuses the Due Date field, the ticket is created without it and its result says so.
-- **Add selected to ticket**: type a ticket key, choose **as a comment** or **as a rewrite**, then **Preview add…**. The preview reads the ticket first and shows its summary and status. It warns when the ticket is resolved, and for a rewrite it lists the findings the ticket records that the rewrite drops. A comment adds the labels and one comment; it does not settle that ticket's rows on Already ticketed.
-- Waltz only: **Preview accept CVEs of selected…** and **Preview accept components of selected…**, with an optional reason. CVEs can be accepted from New rows only.
+- **Create** writes the tickets at once; the button names how many ("Create 8 tickets"). A Veracode ticket gets its Due Date from `ticketSidekick.veracode.slaDays`. When Jira refuses the Due Date field, the ticket is created without it and its result says so.
+- **Add selected to ticket**: type a ticket key, choose **as a comment** or **as a rewrite**, then **Preview add…**. This keeps a preview, because it reads the ticket first and shows its summary and status. It warns when the ticket is resolved, and for a rewrite it lists the findings the ticket records that the rewrite drops. A comment adds the labels and one comment; it does not settle that ticket's rows on Already ticketed.
+- Waltz only: **Accept CVEs of N selected** and **Accept components of N selected**, with an optional reason; each writes the accepted list at once. CVEs can be accepted from New rows only.
 
 **Already ticketed**: report items that already have a ticket.
 
 - The tab opens on **Changed**: the rows whose findings changed since their ticket was written, and the tickets that have no Due Date yet (marked "No Due Date"). **Unchanged** and **All** show the other rows. Each filter shows its count.
 - Each row shows its ticket with status, the finding, what changed, the ticket's assignee, the columns you list in `ticketSidekick.jira.securityReportFields`, and its action: **rewrite**, **leave**, or **new ticket** when every ticket of the item is resolved. What each does is in [Report Imports](report-imports.md#reviewing-an-import).
 - When a finding has more than one open ticket, the Ticket cell names the others under "also open:" (up to three, then a count). A changed date shows the ticket's recorded date next to the report's, for example `Planned date none → 2026-12-15`; a Veracode ticket without a Due Date shows `Due Date missing → <date>`.
-- Click a column title to sort the rows by it (Ticket, Finding, Change, Assignee, an extra column or Action): a second click turns the order around, a third takes the sort off. Sorting is natural, so PROJ-9 comes before PROJ-10, and empty values come last. It changes only what is shown: **Preview changes…** writes in the report's order. A board saved before these columns existed shows a dash for the assignee until you press **Refresh**.
-- **Set all shown to** changes the action of the rows the filter shows, and no other row. **Preview changes…** writes the action of every row, shown or not.
-- A rewrite rebuilds the whole ticket, so the rows of one ticket are all on **rewrite** or none of them; the preview refuses a mix and names the rows.
-- A ticket that changed in Jira since the board read it is not written to. Its result says so, and the board lists it with its stored and current state until you drop it. When the board could not read the tickets' update times, it says so above the tabs, and Already ticketed writes nothing until a **Refresh** reads them.
-- Pick rows with their checkboxes for a ticket merge (below). Waltz only: **Preview accept components of picked…**.
+- Click a column title to sort the rows by it (Ticket, Finding, Change, Assignee, an extra column or Action): a second click turns the order around, a third takes the sort off. Sorting is natural, so PROJ-9 comes before PROJ-10, and empty values come last. It changes only what is shown: **Write N tickets** writes in the report's order. A board saved before these columns existed shows a dash for the assignee until you press **Refresh**.
+- **Set all shown to** changes the action of the rows the filter shows, and no other row. **Write N tickets** writes the action of every row, shown or not, and names how many tickets that is.
+- A rewrite rebuilds the whole ticket, so the rows of one ticket are all on **rewrite** or none of them; Write refuses a mix and names the rows.
+- A ticket that changed in Jira since the board read it is not written to. Its result says so, and the tab is marked out of date: press **Refresh** to read the tickets again. When the board could not read the tickets' update times, it says so above the tabs, and Already ticketed writes nothing until a **Refresh** reads them.
+- Pick rows with their checkboxes for a ticket merge (below). Waltz only: **Accept components of N picked**.
 
 **Stale**: open tickets whose finding is no longer in the report.
 
-- Check the tickets to close. For each issue type among them, choose **Move to**: your matching cleanup rules first, then every status the workflow can reach. A closing status that no rule gives a resolution also asks for a **Resolution**. One Apply closes the tickets of every issue type that has its answers.
+- Check the tickets to close. For each issue type among them, choose **Move to**: your matching cleanup rules first, then every status the workflow can reach. A closing status that no rule gives a resolution also asks for a **Resolution**. **Close N tickets** closes the tickets of every issue type that has its answers, at once.
 - A ticket without a discovered workflow cannot be checked, and its row says why; `/ts-jira workflow <KEY>` discovers it.
 - When the search for stale tickets fails, the tab says so and the other tabs still work.
 
-**Accepted** (Waltz only): the entries of `.jira-oss-accepted.json`, with **Unaccept…** for a CVE and **Unaccept component…** for a whole component. When the list hid anything from this report, a line above the tabs says how much, for example "2 accepted CVEs hidden · 1 accepted component hidden". When the file cannot be read in full, accept and unaccept are refused with the warning and the file is left alone.
+**Accepted** (Waltz only): the entries of `.jira-oss-accepted.json`, with **Unaccept** for a CVE and **Unaccept component** for a whole component; each writes at once. When the list hid anything from this report, a line above the tabs says how much, for example "2 accepted CVEs hidden · 1 accepted component hidden". When the file cannot be read in full, accept and unaccept are refused with the warning and the file is left alone.
 
-### Preview, Apply and the VS Code dialog
+### Writing on one click
 
-- Every change is a preview first, then **Apply**. VS Code asks in its own dialog when the change writes more than one ticket or closes a ticket. Accept, unaccept and **Reload report** write nothing to Jira and ask no dialog.
-- One Apply writes at most 50 tickets. The preview says how many remain for the next Apply. A rewrite of one ticket is never split between two Applies.
+- Create, **Write N tickets** on Already ticketed, **Close N tickets**, accept and unaccept, **Reload report**, **Save as pattern** and the ticket merge's Retry, Ignore, Stop and close write on one click. The button names what it writes, and no dialog or VS Code confirmation follows.
+- Two actions keep one preview, because it shows what the board cannot know before it reads Jira: adding to a ticket (its state, a resolved ticket, the findings a rewrite drops) and starting a ticket merge (the steps, the warnings and missing Jira pieces). The preview is a dialog with Apply and no VS Code confirmation after it. The email model check keeps its preview and its consent step too.
+- One click writes at most 50 tickets; the button then shows how many remain. A rewrite of one ticket is never split between two clicks.
 - While an Apply runs, the board shows its progress and disables every control except the tabs. Each finished write is saved at once; see [How a board keeps its data](#how-a-board-keeps-its-data).
 - Each row then shows its result: created or written, **Failed** with the reason, or **Not written**.
 
 ### Ticket merge
 
-On Already ticketed, pick the rows of the tickets to merge and choose the ticket to keep, from the picked ones or by typing its key. **Preview merge tickets…** reads the tickets and shows the steps, the warnings and any missing Jira pieces. Apply always asks the VS Code dialog, then opens a **Ticket merge** tab that lists each step with its status. A Waltz merge rewrites the kept ticket; a Veracode merge closes the others. See [Merging tickets](report-imports.md#merging-tickets).
+On Already ticketed, pick the rows of the tickets to merge and choose the ticket to keep, from the picked ones or by typing its key. **Preview merge tickets…** reads the tickets and shows the steps, the warnings and any missing Jira pieces. Apply in that preview opens a **Ticket merge** tab that lists each step with its status. A Waltz merge rewrites the kept ticket; a Veracode merge closes the others. See [Merging tickets](report-imports.md#merging-tickets).
 
-- **A failed step** stops the merge. **Retry…** runs it again, **Ignore…** skips it and goes on, **Stop…** ends the merge. Each is a preview and an Apply.
-- **Before the closes**, choose the target status and, where asked, the resolution for every issue type of the tickets to close. Then **Preview close…**: one Apply closes them all.
+- **A failed step** stops the merge. **Retry** runs it again, **Ignore** skips it and goes on, **Stop** ends the merge. Each writes on one click.
+- **Before the closes**, choose the target status and, where asked, the resolution for every issue type of the tickets to close. Then **Close N tickets**: one click closes them all.
 - **While the merge is unfinished**, Apply on every other tab is refused. You can still make your choices there.
 - **When the merge ends**, the tab lists the steps that were not done and the tickets Jira closed without their resolution. **Acknowledge and close this tab** closes it.
-- **After a restart** the merge tab comes back with its finished, failed and waiting steps and its open question.
+- **After a restart** the import board is read again like the other boards that read Jira, so an unfinished ticket merge is not carried over: start it again from the report.
 
 ### Out of date and Refresh
 
-The board checks the report file and Jira when it opens, after a restart and when you press **Refresh**.
+The board reads the report file and Jira when it opens, when VS Code brings its tab back after a restart, and when you press **Refresh**.
 
-- A tab whose rows changed, and on which you have no unfinished choices, shows the new reading at once. The board's own writes never count as a change, also after a restart.
+- A tab whose rows changed, and on which you have no unfinished choices, shows the new reading at once. The board's own writes never count as a change.
 - A tab with unfinished choices is marked **out of date** and offers only **Refresh**. Unfinished choices are New rows left out or merged, actions you changed on Already ticketed, checked Stale tickets, and a running ticket merge.
 - **Refresh** keeps every choice whose rows still exist and lists the choices it dropped, each with the reason. **Dismiss** hides that list.
 - The same happens after **Unaccept** and after a ticket merge ends.
 - **Refresh during a ticket merge** reads every tab except Already ticketed, which stays on the reading the merge started from and stays marked until the merge ends.
-- **Reload report…** reads the report file and Jira again, and also picks up edits to `.jira-oss-accepted.json`. Its preview lists each unfinished choice as "kept if the row is still in the report, dropped otherwise"; after Apply the dropped ones are named.
+- **Reload report** reads the report file and Jira again, and also picks up edits to `.jira-oss-accepted.json`. A choice is kept if its row is still in the report and dropped otherwise; the dropped ones are named afterwards.
 
 ### When something is missing
 
@@ -173,11 +175,12 @@ Copilot can read a finished review with `bitbucket_read_findings` and a file at 
 Every board shows a **session**: the data it read and what you set on the board. The page itself holds nothing.
 
 - **As of.** The line under the title says when the data was read. Jira, Bitbucket and report files stay the truth; the session is a cache of them.
-- **Opening again.** Asking for the same thing again (the same project, query or filter) continues its session. The board appears at once with the stored data, then checks the source in the background and updates.
-- **After a restart.** VS Code brings a board's tab back with the window, and the board shows its stored session, marked "restored session", then checks the source.
+- **What is kept.** Only the review board keeps its session: asking for the same pull request again, or restarting VS Code, brings back its findings, discussion and drafts, and any number of reviews can be open at once. The ticket list, cleanup, security report and import boards read their source again whenever they are opened anew or brought back after a restart; they keep nothing from the earlier session.
+- **Opening again (review).** Asking for the same pull request again continues its session. The board appears at once with the stored data, then checks the source in the background and updates.
+- **After a restart (review).** VS Code brings the review's tab back with the window, and the board shows its stored session, marked "restored session", then checks the source.
 - **If the check fails.** The stored data stays on show, with a line saying the check failed and when the data is from. A board that writes applies nothing until a check passes: it offers paging and **Refresh** only.
-- **While Apply runs** the board shows its progress and disables every control except its tabs. Each finished write is saved at once, so a board brought back after VS Code closed in the middle of an Apply shows the finished tickets as done, and the next preview covers only the rest.
-- **Close** on a board deletes its session and closes its tab. Closing the tab with its × keeps the session, so the board opens again where you left it.
+- **While Apply runs** the board shows its progress and disables every control except its tabs. Each finished write is saved at once, so a review brought back after VS Code closed in the middle of an Apply shows what finished. The other boards read Jira again and show the tickets as they are now.
+- **Close** on a board that has the button (the import, review, sessions and security report boards) deletes its session and closes its tab. Closing the review's tab with its × keeps its session, so the review opens again where you left it. The ticket list, cleanup, security report and import boards open fresh when asked for again with no tab open, and after a restart.
 
 ## Stored sessions
 

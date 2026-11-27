@@ -4,7 +4,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { registerKind, type BoardKind } from '../sessions/boardKind';
 import { sessionIdFor } from '../sessions/sessionId';
-import { SessionManager } from '../sessions/sessionManager';
+import { SessionManager, type SessionManagerDeps } from '../sessions/sessionManager';
 import { SessionStore } from '../sessions/sessionStore';
 import type { Session } from '../sessions/sessionTypes';
 
@@ -18,6 +18,8 @@ interface Deps {
   tickets: Record<string, string>;
   reads: { count: number };
   failRead?: boolean;
+  /** A read that waits for the test, to hold a check that is under way. */
+  baseGate?: Promise<void>;
   modes?: string[];
   /** Apply stops with an error after this many targets, as if the window closed mid-write. */
   stopAfter?: number;
@@ -30,10 +32,29 @@ interface Deps {
   /** What the kind's `prepare` reads before a close's preview: a ticket's owner, or an error. */
   owner?: string | Error;
   prepares?: number;
+  /** What the board keeps outside its sessions, as its deps store it. */
+  prefs?: Record<string, boolean>;
+  /** The board's stored settings cannot be read or written. */
+  prefsFail?: 'read' | 'write';
 }
 
-function makeKind(formatVersion = 1, options: { revalidate?: boolean; prepare?: boolean } = {}): BoardKind<Recipe, Derived, Working, Action, { tickets: Record<string, string>; selected: string[] }, Deps> {
+interface KindOptions { revalidate?: boolean; prepare?: boolean; preferences?: boolean; freshOnOpen?: boolean }
+
+function makeKind(formatVersion = 1, options: KindOptions = {}): BoardKind<Recipe, Derived, Working, Action, { tickets: Record<string, string>; selected: string[] }, Deps> {
   return {
+    ...(options.freshOnOpen ? { freshOnOpen: true } : {}),
+    ...(options.preferences ? {
+      preferences: {
+        read: async (deps: Deps) => { if (deps.prefsFail === 'read') throw new Error('storage unavailable'); return { ...(deps.prefs ?? {}) }; },
+        write: async (name: string, value: unknown, deps: Deps) => {
+          if (name !== 'loud') return 'There is no setting by that name.';
+          if (typeof value !== 'boolean') return 'The setting is on or off.';
+          if (deps.prefsFail === 'write') throw new Error('storage unavailable');
+          deps.prefs = { ...(deps.prefs ?? {}), loud: value };
+          return undefined;
+        },
+      },
+    } : {}),
     ...(options.revalidate ? {
       revalidate: async (recipe: unknown, deps: Deps) => {
         const project = (recipe as { project?: unknown })?.project;
@@ -62,19 +83,17 @@ function makeKind(formatVersion = 1, options: { revalidate?: boolean; prepare?: 
     initialWorking: () => ({ selected: [] }),
     read: async (_r, deps) => {
       deps.reads.count++;
+      await deps.baseGate;
       if (deps.failRead) throw new Error('Jira answered 503');
       return { readAt: deps.reads.count, fingerprints: {}, data: { tickets: { ...deps.tickets } } };
     },
     reconcile: (session, fresh, mode) => {
       source.modes?.push(mode ?? 'none');
+      // A selected ticket that changed since the board read it leaves the selection.
       const gone = session.working.selected.filter(key => fresh.data.tickets[key] !== session.derived.data.tickets[key]);
       return {
         derived: fresh,
         working: { selected: session.working.selected.filter(key => !gone.includes(key)) },
-        conflicts: gone.map(key => ({
-          id: key, target: key, message: 'Changed in Jira since it was selected.',
-          stored: session.derived.data.tickets[key], fresh: fresh.data.tickets[key] ?? 'gone',
-        })),
       };
     },
     reduce: (session, action) => {
@@ -124,8 +143,9 @@ let confirmations: string[];
 let confirmAnswer: boolean;
 let clock: number;
 
-function manager(formatVersion = 1, options: { revalidate?: boolean; prepare?: boolean } = {}): SessionManager {
+function manager(formatVersion = 1, options: KindOptions = {}, onDiag?: SessionManagerDeps['onDiag']): SessionManager {
   return new SessionManager({
+    ...(onDiag ? { onDiag } : {}),
     store: new SessionStore(dir),
     kinds: [registerKind(makeKind(formatVersion, options), () => source)],
     now: () => clock,
@@ -240,7 +260,7 @@ describe('restart', () => {
     expect(source.reads.count).toBeGreaterThan(readsBefore);
   });
 
-  it('marks working state that no longer fits the fresh reading as a conflict', async () => {
+  it('drops working state that no longer fits the fresh reading, and says nothing of conflicts', async () => {
     const first = manager();
     const state = await openReady(first);
     await first.action('demo', state.id, state.revision, { type: 'select', key: 'PROJ-1' });
@@ -248,11 +268,23 @@ describe('restart', () => {
 
     const restarted = manager();
     const checked = await restarted.refresh('demo', state.id);
-    expect(checked.conflicts).toEqual([{ id: 'PROJ-1', target: 'PROJ-1', message: 'Changed in Jira since it was selected.', stored: 'Open', fresh: 'Closed' }]);
     expect(checked.view).toMatchObject({ selected: [] });
+    expect(checked).not.toHaveProperty('conflicts');
+  });
 
-    const dropped = await restarted.action('demo', state.id, checked.revision, { type: 'conflict/drop', id: 'PROJ-1' });
-    expect(dropped.conflicts).toEqual([]);
+  it('opens a stored session written before conflicts were removed, whether or not it still has the list', async () => {
+    const first = manager();
+    const state = await openReady(first);
+    const file = path.join(dir, `${state.id}.json`);
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const conflicts of [[{ id: 'PROJ-1', target: 'PROJ-1', message: 'Changed in Jira.' }], undefined]) {
+      const written = { ...stored, session: { ...stored.session, ...(conflicts ? { conflicts } : {}) } };
+      if (!conflicts) delete written.session.conflicts;
+      fs.writeFileSync(file, JSON.stringify(written));
+      const reopened = await manager().state('demo', state.id);
+      expect(reopened.restored).toBe(true);
+      expect(reopened.view).toMatchObject({ selected: [] });
+    }
   });
 
   it('tells the board whether a check ran by itself or on Refresh', async () => {
@@ -713,7 +745,7 @@ const runKind: BoardKind<Recipe, Derived, RunWorking, Action, RunWorking, RunDep
     await deps.readGate;
     return { readAt: deps.reads.count, fingerprints: {}, data: { tickets: { ...deps.tickets } } };
   },
-  reconcile: (session, fresh) => ({ derived: fresh, working: { ...session.working, checks: session.working.checks + 1 }, conflicts: [] }),
+  reconcile: (session, fresh) => ({ derived: fresh, working: { ...session.working, checks: session.working.checks + 1 } }),
   reduce: (session, action) => {
     if (action.type !== 'select') return { ok: false, reason: 'Unknown action.' };
     return { ok: true, working: { ...session.working, selected: [...session.working.selected, action.key] } };
@@ -998,5 +1030,159 @@ describe('a model run on a board', () => {
     deps.gates.open(2);
     await new Promise(resolve => setTimeout(resolve, 10));
     expect(await new SessionStore(dir).load(before.id)).toBeUndefined();
+  });
+});
+
+describe('a preference kept on the board', () => {
+  it('shows what the board keeps with its state', async () => {
+    source.prefs = { loud: true };
+    const state = await openReady(manager(1, { preferences: true }));
+    expect(state.preferences).toEqual({ loud: true });
+  });
+
+  it('stores a changed value outside the session and shows it at once, without changing the session', async () => {
+    const m = manager(1, { preferences: true });
+    const state = await openReady(m);
+    const next = await m.preference('demo', state.id, 'loud', false);
+    expect(next.preferences).toEqual({ loud: false });
+    expect(source.prefs).toEqual({ loud: false });
+    expect(next.revision).toBe(state.revision);
+  });
+
+  it('shows a value another tab or window changed, not the one it read first', async () => {
+    source.prefs = { loud: true };
+    const m = manager(1, { preferences: true });
+    const state = await openReady(m);
+    expect(state.preferences).toEqual({ loud: true });
+    source.prefs = { loud: false };
+    expect((await m.state('demo', state.id)).preferences).toEqual({ loud: false });
+  });
+
+  it('shows the board with no settings, and says so in the log, while its settings cannot be read, and shows them once they can', async () => {
+    source.prefs = { loud: true };
+    source.prefsFail = 'read';
+    const logs: string[] = [];
+    const m = manager(1, { preferences: true }, (level, message) => { logs.push(`${level}: ${message}`); });
+    const state = await openReady(m);
+    expect(state.preferences).toBeUndefined();
+    expect(state.status).toBe('ready');
+    await m.state('demo', state.id);
+    await m.state('demo', state.id);
+    expect(logs.filter(l => l === 'warn: Could not read what the board keeps outside its sessions')).toHaveLength(1);
+    source.prefsFail = undefined;
+    expect((await m.state('demo', state.id)).preferences).toEqual({ loud: true });
+  });
+
+  it('refuses a change it cannot store, and keeps showing what it had', async () => {
+    source.prefs = { loud: true };
+    const m = manager(1, { preferences: true });
+    const state = await openReady(m);
+    source.prefsFail = 'write';
+    await expect(m.preference('demo', state.id, 'loud', false)).rejects.toThrow('storage unavailable');
+    source.prefsFail = undefined;
+    expect((await m.state('demo', state.id)).preferences).toEqual({ loud: true });
+  });
+
+  it('is still there when the session is gone and the board is opened again', async () => {
+    const m = manager(1, { preferences: true });
+    const state = await openReady(m);
+    await m.preference('demo', state.id, 'loud', false);
+    await m.discard(state.id);
+    const again = await openReady(manager(1, { preferences: true }));
+    expect(again.preferences).toEqual({ loud: false });
+  });
+
+  it('refuses a name or a value the board does not take, and keeps what it had', async () => {
+    source.prefs = { loud: true };
+    const m = manager(1, { preferences: true });
+    const state = await openReady(m);
+    await expect(m.preference('demo', state.id, 'quiet', true)).rejects.toMatchObject({ status: 400, message: 'There is no setting by that name.' });
+    await expect(m.preference('demo', state.id, 'loud', 'yes')).rejects.toMatchObject({ status: 400, message: 'The setting is on or off.' });
+    expect(source.prefs).toEqual({ loud: true });
+  });
+
+  it('refuses a board that keeps nothing outside its session', async () => {
+    const m = manager();
+    const state = await openReady(m);
+    expect(state.preferences).toBeUndefined();
+    await expect(m.preference('demo', state.id, 'loud', true)).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe('a board that opens fresh', () => {
+  const select = async (m: SessionManager, id: string, key: string) => {
+    const state = await m.state('demo', id);
+    return m.action('demo', id, state.revision, { type: 'select', key });
+  };
+  const fresh = { freshOnOpen: true };
+
+  it('starts clean when it is asked for again and no tab of it is open, and reads its sources again', async () => {
+    const m = manager(1, fresh);
+    const first = await openReady(m);
+    await select(m, first.id, 'PROJ-1');
+    const readsBefore = source.reads.count;
+
+    const again = await m.open('demo', { project: 'PROJ' }, { hasTab: () => false });
+    expect(again.ok && again.id).toBe(first.id);
+    const state = await ready(m, first.id);
+    expect(state.view).toMatchObject({ selected: [] });
+    expect(state.restored).toBe(false);
+    expect(source.reads.count).toBeGreaterThan(readsBefore);
+  });
+
+  it('keeps its session when its tab is open, so asking for it only brings the tab forward', async () => {
+    const m = manager(1, fresh);
+    const first = await openReady(m);
+    await select(m, first.id, 'PROJ-1');
+    await m.open('demo', { project: 'PROJ' }, { hasTab: () => true });
+    expect((await m.state('demo', first.id)).view).toMatchObject({ selected: ['PROJ-1'] });
+  });
+
+  it('keeps what the developer chose on a board that does not ask to open fresh', async () => {
+    const m = manager();
+    const first = await openReady(m);
+    await select(m, first.id, 'PROJ-1');
+    await m.open('demo', { project: 'PROJ' }, { hasTab: () => false });
+    expect((await m.state('demo', first.id)).view).toMatchObject({ selected: ['PROJ-1'] });
+  });
+
+  it('brings a tab VS Code restores after a restart back with its session', async () => {
+    const first = manager(1, fresh);
+    const opened = await openReady(first);
+    await select(first, opened.id, 'PROJ-1');
+
+    const restarted = manager(1, fresh);
+    const state = await restarted.state('demo', opened.id);
+    expect(state.restored).toBe(true);
+    expect(state.view).toMatchObject({ selected: ['PROJ-1'] });
+  });
+
+  it('does not store a session again when its check ends after the session was discarded', async () => {
+    const m = manager(1, fresh);
+    const first = await openReady(m);
+    let release!: () => void;
+    source.baseGate = new Promise(resolve => { release = resolve; });
+    const refreshing = m.refresh('demo', first.id);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    await m.discard(first.id);
+    release();
+    source.baseGate = undefined;
+    await refreshing.catch(() => undefined);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect((await new SessionStore(dir).list()).map(s => s.session.id)).not.toContain(first.id);
+  });
+
+  it('starts a stored session over from its own recipe, for the sessions board\'s Reopen', async () => {
+    const m = manager(1, fresh);
+    const first = await openReady(m);
+    await select(m, first.id, 'PROJ-1');
+    const restarted = manager(1, fresh);
+    expect(restarted.opensFresh('demo')).toBe(true);
+    expect(manager().opensFresh('demo')).toBe(false);
+    expect(await restarted.startOver('demo', first.id)).toBe(true);
+    const state = await ready(restarted, first.id);
+    expect(state.view).toMatchObject({ selected: [] });
+    expect(state.title).toBe('Demo: PROJ');
+    expect(await restarted.startOver('demo', 'demo-ffffffffffffffff')).toBe(false);
   });
 });

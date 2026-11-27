@@ -339,7 +339,7 @@ function planStart(session: ImportSession, action: Record<string, unknown>, prep
   // A merge writes the kept ticket and every source and closes the sources.
   const plan: WritePlan<MergePayload> = {
     title: `Merge ${sources.length} ${sources.length === 1 ? 'ticket' : 'tickets'} into ${survivor}`,
-    lines, risky: true, payload,
+    lines, risky: false, payload,
   };
   return { ok: true, plan };
 }
@@ -396,7 +396,7 @@ function planContinue(session: ImportSession, op: 'retry' | 'ignore' | 'stop' | 
     }
   }
   const count = lines.filter(l => l.change.startsWith('Close')).length;
-  return { ok: true, plan: { title: `Close ${count} merged ${count === 1 ? 'ticket' : 'tickets'}`, lines, risky: true, payload } };
+  return { ok: true, plan: { title: `Close ${count} merged ${count === 1 ? 'ticket' : 'tickets'}`, lines, risky: false, payload } };
 }
 
 // ---------------------------------------------------------------------------------------------

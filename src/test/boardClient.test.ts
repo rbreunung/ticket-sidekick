@@ -16,7 +16,7 @@ let closed = false;
 function base(): BoardState {
   return {
     id: SESSION, kind: 'runs', title: 'Review', status: 'ready', tick: 1, revision: 1, asOf: 1_000,
-    restored: false, stored: true, conflicts: [], writesBlocked: false, view: {},
+    restored: false, stored: true, writesBlocked: false, view: {},
   };
 }
 
@@ -47,9 +47,12 @@ async function loadPage(answer: (op: string, body: Record<string, unknown>) => P
   const { startBoard, h } = await import('../../board-pages/shared/board.js' as string);
   startBoard({
     root: page.root,
-    render: (_view: unknown, board: { running(what: string): unknown; run(r: unknown): void; act(a: unknown): void }, locked: boolean) => h('div', {},
+    render: (_view: unknown, board: { running(what: string): unknown; run(r: unknown): void; act(a: unknown): void; setPreference(name: string, value: boolean): void; apply(a: unknown): void; preview(a: unknown): void }, locked: boolean) => h('div', {},
       h('vscode-button', { id: 'explain-1', disabled: locked || Boolean(board.running('explain:1')), onClick: () => board.run({ type: 'explain', n: 1 }) }, 'Explain'),
       h('vscode-button', { id: 'select', disabled: locked, onClick: () => board.act({ type: 'select' }) }, 'Select'),
+      h('vscode-button', { id: 'apply', disabled: locked, onClick: () => board.apply({ type: 'apply' }) }, 'Apply'),
+      h('vscode-button', { id: 'preview', disabled: locked, onClick: () => board.preview({ type: 'apply' }) }, 'Preview'),
+      h('vscode-button', { id: 'quiet', disabled: locked, onClick: () => board.setPreference('loud', false) }, 'Quiet'),
       h('vscode-button', { id: 'pass', disabled: locked, onClick: () => board.run({ type: 'pass' }) }, 'Run the pass')),
   });
   await settle();
@@ -62,6 +65,65 @@ afterEach(() => {
 
 const byId = (id: string) => page.document.getElementById(id) as FakeElement | null;
 const disabled = (id: string) => Boolean(byId(id)?.disabled);
+
+const dialogs = () => page.document.body.elements().filter(el => el.tagName === 'dialog');
+
+describe('a board page that writes', () => {
+  const plan = { planId: 'p1', title: 'Move 2 tickets to Done', lines: [{ target: 'PROJ-1', change: 'Status: Open → Done' }], risky: false };
+
+  it('previews and applies in one click with no dialog, then says what was written and what was not', async () => {
+    state = base();
+    await loadPage(async op => {
+      if (op === 'preview') return plan;
+      if (op === 'apply') {
+        state = { ...state, tick: state.tick + 1, revision: 2 };
+        return { results: [{ target: 'PROJ-1', outcome: 'done' }, { target: 'PROJ-2', outcome: 'refused', reason: 'changed in Jira since the board read it' }], state };
+      }
+      throw { status: 404, message: 'Unknown request.' };
+    });
+    byId('apply')!.dispatch('click');
+    await settle();
+    expect(page.posted.map(m => m.op).filter(op => op === 'preview' || op === 'apply')).toEqual(['preview', 'apply']);
+    expect(page.posted.find(m => m.op === 'preview')!.body).toEqual({ revision: 1, action: { type: 'apply' } });
+    expect(page.posted.find(m => m.op === 'apply')!.body).toEqual({ planId: 'p1' });
+    expect(dialogs()).toEqual([]);
+    expect(page.root.textContent).toContain('1 written. 1 not written: PROJ-2 (changed in Jira since the board read it)');
+  });
+
+  it('writes nothing and shows why when the preview is refused', async () => {
+    state = base();
+    await loadPage(async op => {
+      if (op === 'preview') throw { status: 400, message: 'Select at least one ticket.' };
+      throw { status: 404, message: 'Unknown request.' };
+    });
+    byId('apply')!.dispatch('click');
+    await settle();
+    expect(page.posted.filter(m => m.op === 'apply')).toEqual([]);
+    expect(page.root.textContent).toContain('Select at least one ticket.');
+  });
+
+  it('still shows the plan in a dialog, and writes nothing yet, for a board that previews first', async () => {
+    state = base();
+    await loadPage(async op => {
+      if (op === 'preview') return plan;
+      throw { status: 404, message: 'Unknown request.' };
+    });
+    byId('preview')!.dispatch('click');
+    await settle();
+    expect(dialogs()).toHaveLength(1);
+    expect(page.posted.filter(m => m.op === 'apply')).toEqual([]);
+  });
+
+  it('leaves Refresh and Close to a page that draws its own action line, and keeps them for the others', async () => {
+    state = { ...base(), view: { ownActionLine: true } };
+    await loadPage(async () => { throw { status: 404, message: 'Unknown request.' }; });
+    expect(byId('refresh')).toBeNull();
+    expect(byId('discard')).toBeNull();
+    await push({ view: {} });
+    expect(byId('refresh')).not.toBeNull();
+    expect(byId('discard')).not.toBeNull();
+  });
+});
 
 describe('a board page during a model run', () => {
   it('starts the pass, shows each step, locks every control but Stop, and stops it', async () => {
@@ -101,6 +163,17 @@ describe('a board page during a model run', () => {
     byId('select')!.dispatch('click');
     await settle();
     expect(page.posted.filter(m => m.op === 'action')).toHaveLength(1);
+  });
+
+  it('sends a setting the board keeps for itself on its own, without the session revision, and shows the answer', async () => {
+    state = { ...base(), preferences: { loud: true } };
+    await loadPage(async (op, body) => {
+      if (op === 'preference') { state = { ...state, tick: state.tick + 1, preferences: { loud: body.value as boolean } }; return state; }
+      throw { status: 404, message: 'Unknown request.' };
+    });
+    byId('quiet')!.dispatch('click');
+    await settle();
+    expect(page.posted.filter(m => m.op === 'preference').map(m => m.body)).toEqual([{ name: 'loud', value: false }]);
   });
 
   it('shows why a run was refused', async () => {

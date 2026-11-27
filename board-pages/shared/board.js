@@ -211,6 +211,21 @@ export function startBoard({ root, render, loading }) {
     async refresh() {
       await run(async () => { state = await api('refresh'); });
     },
+    /** One setting the board keeps for itself, outside its session (`state.preferences`); the extension refuses a name or value the board does not take. */
+    async setPreference(name, value) {
+      await run(async () => { state = await api('preference', { name, value }); });
+    },
+    /**
+     * Writes what a writing action does in one click, with no dialog: the board on show is the
+     * preview. The extension still plans first and refuses an action it cannot plan (nothing selected,
+     * no change chosen), and that refusal shows as the banner.
+     */
+    async apply(action) {
+      await run(async () => {
+        const plan = await api('preview', { revision: state.revision, action });
+        await applyPlan(plan);
+      });
+    },
     /** Shows exactly what a writing action will do; nothing is written before Apply. */
     async preview(action) {
       await run(async () => {
@@ -285,6 +300,21 @@ export function startBoard({ root, render, loading }) {
     }
   }
 
+  /** Writes a previewed plan once and keeps what it did: the message, and the plan's lines with each target's result. */
+  async function applyPlan(plan) {
+    applyingPlan = plan;
+    try {
+      const applied = await api('apply', { planId: plan.planId });
+      state = applied.state;
+      const done = applied.results.filter(r => r.outcome === 'done').length;
+      const rest = applied.results.filter(r => r.outcome !== 'done');
+      message = `${done} written.` + (rest.length ? ` ${rest.length} not written: ${rest.map(r => `${r.target} (${r.reason ?? r.outcome})`).join('; ')}` : '');
+      lastApply = { seq: ++applies, title: plan.title, lines: plan.lines, results: applied.results, message };
+    } finally {
+      applyingPlan = undefined;
+    }
+  }
+
   function showPlan(plan) {
     const dialog = h('dialog', { class: 'plan', 'aria-labelledby': 'plan-title' },
       h('h2', { id: 'plan-title' }, plan.title),
@@ -297,19 +327,7 @@ export function startBoard({ root, render, loading }) {
           autofocus: true,
           onClick: () => {
             dialog.close();
-            void run(async () => {
-              applyingPlan = plan;
-              try {
-                const applied = await api('apply', { planId: plan.planId });
-                state = applied.state;
-                const done = applied.results.filter(r => r.outcome === 'done').length;
-                const rest = applied.results.filter(r => r.outcome !== 'done');
-                message = `${done} written.` + (rest.length ? ` ${rest.length} not written: ${rest.map(r => `${r.target} (${r.reason ?? r.outcome})`).join('; ')}` : '');
-                lastApply = { seq: ++applies, title: plan.title, lines: plan.lines, results: applied.results, message };
-              } finally {
-                applyingPlan = undefined;
-              }
-            });
+            void run(() => applyPlan(plan));
           },
         }, 'Apply'),
         h('vscode-button', { secondary: true, onClick: () => dialog.close() }, 'Cancel')));
@@ -325,14 +343,6 @@ export function startBoard({ root, render, loading }) {
     if (state.notice) items.push(h('p', { class: 'banner' }, state.notice));
     if (state.error) items.push(h('p', { class: 'banner error', role: 'alert' }, state.status === 'failed' ? `Could not load: ${state.error}` : `The check failed: ${state.error} The data shown is from ${formatTime(state.asOf)}.${state.writesBlocked ? ' Nothing can be applied until a check passes: use Refresh.' : ''}`));
     if (!state.stored && state.status === 'ready') items.push(h('p', { class: 'banner' }, 'This session is too large to store and will not survive a restart.'));
-    if (state.conflicts.length > 0) {
-      items.push(h('section', { class: 'banner conflicts', 'aria-label': 'Conflicts' },
-        h('p', {}, `${state.conflicts.length} choice(s) no longer match what was just read:`),
-        h('ul', {}, state.conflicts.map(c => h('li', {},
-          h('strong', {}, c.target), ` ${c.message}`,
-          c.stored !== undefined || c.fresh !== undefined ? h('span', { class: 'muted' }, ` Stored: ${c.stored ?? 'none'}. Now: ${c.fresh ?? 'none'}.`) : null,
-          ' ', h('vscode-button', { secondary: true, disabled: locked(), onClick: () => board.act({ type: 'conflict/drop', id: c.id }) }, 'Drop'))))));
-    }
     return items;
   }
 
@@ -391,7 +401,8 @@ export function startBoard({ root, render, loading }) {
               : state.asOf ? `As of ${formatTime(state.asOf)}${state.restored ? ' (restored session)' : ''}.` : '') : null,
       applying ? h('progress', { id: 'apply-progress', max: applying.total, value: applying.done, 'aria-label': 'Apply progress' }) : null,
       pass ? h('progress', { id: 'run-progress', max: pass.total, value: pass.done, 'aria-label': 'Run progress' }) : null,
-      state && !stopped ? h('div', { class: 'bar' },
+      // A page that draws its own action line (`view.ownActionLine`) has no Refresh or Close here.
+      state && !stopped && !state.view?.ownActionLine ? h('div', { class: 'bar' },
         pass ? h('vscode-button', { id: 'stop-run', disabled: stopping, onClick: () => board.stop() }, 'Stop') : null,
         h('vscode-button', { id: 'refresh', secondary: true, disabled: locked() || state.status !== 'ready' && state.status !== 'failed', onClick: () => board.refresh() }, 'Refresh'),
         h('vscode-button', {

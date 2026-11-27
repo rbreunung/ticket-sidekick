@@ -119,15 +119,9 @@ classDiagram
     runs
     outcomes
   }
-  class Conflict {
-    target
-    stored
-    fresh
-  }
   Session --> Recipe
   Session --> Derived
   Session --> Working
-  Session --> "0..*" Conflict
 ```
 
 - **`id`** is derived from the kind and the normalised source, so there is one session per source (R54): the same report file, query, PR or project always maps to the same session.
@@ -145,10 +139,9 @@ stateDiagram-v2
   Building --> Ready: sources read
   Restored --> Ready: shown at once, "as of" time
   Ready --> Checking: background check or Refresh
-  Checking --> Ready: nothing changed
-  Checking --> Conflicted: sources changed
-  Conflicted --> Ready: each conflict resolved or dropped
-  Ready --> Previewing: action that writes
+  Checking --> Ready: nothing changed, or the stale parts marked out of date
+  Ready --> Applying: Apply on one click (ticket list, cleanup, import)
+  Ready --> Previewing: action that previews first
   Previewing --> Ready: cancelled
   Previewing --> Applying: Apply, and native confirmation where required
   Applying --> Ready: results recorded
@@ -163,12 +156,13 @@ stateDiagram-v2
 2. The board panels ask the session manager to open the board. The board kind validates the recipe; the manager derives the session ID from kind and source and creates or restores the session.
 3. The extension opens an editor tab, or brings the board's existing tab forward. The tab is a webview; the extension writes its document, which loads the board's page script, the shared client and the style from the extension folder. Its content policy lets scripts load from those files only. The agent learns only "opened" or the reason.
 4. The page posts a request for the session's state. A stored session is shown at once with its "as of" time; otherwise the board kind builds it from the sources.
+5. A kind with `freshOnOpen` (the ticket list, which also serves the cleanup board) does not bring its stored session back when it is asked for with no tab open: the manager forgets it and builds the board anew from the new request, and the sessions board's Reopen starts the stored list over (`startOver`). A tab VS Code restores after a restart is started over the same way, when the tab is first shown (`BoardPanels.serializer`). The ticket list, security report and import boards use it; the review board does not, since a review is work worth keeping (D28). Nothing depends on noticing why a tab closed.
 
-### 4.2 Freshness and conflicts (R55, R56)
+### 4.2 Freshness (R55, R56)
 
 - After showing a stored session, the manager asks the board kind to **check** the sources in the background. Refresh runs the same check on demand. The manager tells `reconcile` which of the two it is (`CheckMode`: `background` or `refresh`).
-- The board kind's `reconcile` compares stored and fresh data and returns the updated derived data plus a list of **conflicts**: working state whose target changed or disappeared. A kind may instead keep the stored data after a background check and mark itself out of date: the ticket list does, allows only paging until Refresh, and on Refresh takes the fresh rows and keeps the selection of every ticket still listed.
-- A board shows a banner with the count, marks each conflict in place, can show the stored and the fresh value, and offers **resolve** (accept the fresh state and redo or keep the choice) or **drop** per conflict.
+- The board kind's `reconcile` compares stored and fresh data and returns the updated derived data and working state; choices whose target changed or disappeared are dropped from the working state. A kind may instead keep the stored data after a background check and mark itself out of date: the ticket list does, allows only paging until Refresh, and on Refresh takes the fresh rows and keeps the selection of every ticket still listed. There is no list of conflicts and no banner for one.
+- A write refused because its target changed also marks the board out of date, but only where the rows on show are old: the ticket list reads its list again at the end of an Apply, so it is marked only when that read failed; the import board's Already ticketed tab is not read again after an Apply, so it is always marked.
 - The import board keeps the out-of-date mark **per tab**: `read` gives each tab's slice its own fingerprint, a `background` check first discounts the changes the board's own recorded writes explain, a changed tab without unfinished choices takes its fresh slice at once, and a changed tab with unfinished choices is marked and offers only Refresh. Refresh keeps every choice whose rows still exist and names the dropped ones.
 - A PR review is never re-run by a check. The check only compares the PR's head commit and sets "the PR has moved since this review"; re-running is the developer's choice.
 
@@ -189,9 +183,13 @@ sequenceDiagram
   M->>K: plan(session, action, prepared)
   K-->>M: write plan: exactly what will be written
   M-->>P: plan and plan id (single use, short-lived, in memory)
-  U->>P: Apply
+  alt the page asks for one click (ticket list, cleanup, most import actions)
+    Note over P: the page applies the plan at once, with no dialog
+  else the board previews first (import merge start and add-to-ticket, the model check, a Bitbucket post)
+    U->>P: Apply in the plan dialog
+  end
   P->>M: apply(plan id)
-  alt several tickets, a close, or a Bitbucket post
+  opt the plan is risky (a Bitbucket post)
     M->>V: native confirmation naming the plan
     V-->>M: accepted
   end
@@ -207,9 +205,9 @@ sequenceDiagram
   M->>M: log each write, save the session
 ```
 
-- A write needs a **plan ID** that only `preview` issues. The manager keeps it in memory, tied to the session revision, and redeems it once. A page cannot write a risky change without the native confirmation, which no page or script can click.
-- **Risky** means: more than one ticket, closing a ticket, or anything posted to Bitbucket. The board kind's plan states it; the manager enforces it.
-- Before writing, the board kind reads each target again and refuses the ones that changed since the session last read them. A refused target becomes a conflict.
+- A write needs a **plan ID** that only `preview` issues. The manager keeps it in memory, tied to the session revision, and redeems it once. The shared client's `board.apply` asks for the preview and redeems the plan at once, so one click writes and a plan the extension cannot make (nothing selected, no change chosen) is refused with its reason; `board.preview` shows the plan in a dialog first.
+- **Risky** means a write the native VS Code confirmation guards, which no page or script can click: today only what is posted to Bitbucket. The board kind's plan states it; the manager enforces it. The ticket list, cleanup and import boards mark no plan risky (D25): the board on show is the preview, and the Apply button names what it writes and how many.
+- Before writing, the board kind reads each target again and refuses the ones whose `updated` time is not the moment the session read (compared as instants, since Jira spells its offset two ways); a refusal is logged with both times. The ticket list can skip that read with its "Check each ticket before writing" setting (D27), which is off only by the developer's choice; the import board's Already ticketed check always runs.
 - **Progress and the save per write.** `apply` reports each finished target through a `progress` callback and awaits it before the next write. The manager saves the reported working state without raising the revision and tells the page, which shows the progress and disables every control except its tabs. A board restored after an interrupted Apply therefore shows the finished targets as done, and its next plan leaves them out. Every board does this: the ticket list records each moved or updated ticket with Jira's `updated` after the write, and the import board its created tickets with their dedup keys and its written tickets.
 - **`prepare`.** A plan that must show something read from Jira (the import board's add-to-ticket target, the tickets of a ticket merge) gets it from the kind's optional `prepare`, which the manager awaits before the pure `plan`.
 - Multi-step runs (a ticket merge) are working state: each step is recorded as pending, done, failed or skipped before the next one starts, so a restart continues at the right step and never repeats a done one.
@@ -250,12 +248,14 @@ A board kind is the only place that knows one board's rules. It is a plain objec
 | `sourceKey(recipe)`, `sourceLabel(recipe)` | The normalised source the session ID is derived from, and its short description for the sessions board |
 | `initialWorking(recipe)`, `reopen?(session, recipe)` | The working state of a new session, and of a session asked for again with a new request (for example another proposed change) |
 | `read(recipe, deps)` | Reads the sources. Used to build a new session and to check a stored one |
-| `reconcile(session, fresh)` | **Pure.** Lays the stored working state over a fresh reading and returns the conflicts |
+| `reconcile(session, fresh)` | **Pure.** Lays the stored working state over a fresh reading and returns the derived data and working state, with what no longer fits dropped or marked out of date |
 | `reduce(session, action)` | **Pure.** Applies a non-writing action (select, merge rows, pick an action, filter, change screen) and returns the new working state or a refusal |
 | `prepare?(session, action, deps)` | Reads what a writing action's plan must show; its result goes to `plan` |
 | `plan?(session, action, prepared)` | **Pure.** Returns the write plan for a writing action: targets, what is written, and whether it is risky. Kinds without writes omit it |
 | `apply?(session, plan, deps, progress)` | Reads the targets again, writes the unchanged ones, reports each finished one through `progress`, and returns the result per target |
 | `exportFile?(session, format, deps)` | A file the developer saves from the board |
+| `freshOnOpen?` | The board starts clean when it is asked for with no tab open or brought back after a restart, instead of bringing its stored session back (4.1) |
+| `preferences?` | Settings the board keeps for itself outside its sessions: `read(deps)` and `write(name, value, deps)`, which names the settings it takes and refuses the rest. The ticket list keeps "check each ticket before writing" this way |
 | `view(session)` | The data the page gets: never more than it shows |
 
 The interface is `BoardKind` in `src/sessions/boardKind.ts`. Besides the kind's members, `SessionManager.relocate(kind, id, recipe)` gives a session another source of the same kind: `revalidate` checks the new recipe, the session moves to the new source's id (saved there, the old file deleted, open previews dropped), and a check runs. It refuses when another session already has that id. The import board uses it for "Pick the file again".
@@ -285,7 +285,8 @@ extension → page    { id, ok: true, data }  or  { id, ok: false, status, error
 | `preview` with `revision`, `action` | Returns a write plan and its plan ID |
 | `apply` with `planId` | Redeems a plan ID |
 | `save` with `format` | For boards that export: writes a file through VS Code's save dialog |
-| `discard` | Deletes the session and closes its tab (the page's Close) |
+| `preference` with `name`, `value` | Changes one setting the board's kind keeps outside its sessions; not part of the session, so it needs no revision. The kind refuses any other name or value |
+| `discard` | Deletes the session and closes its tab (the page's Close, on the boards that have one: not the ticket list and cleanup board) |
 | `run` with `revision`, `request`; `stop` with optional `what` | Starts a model run the kind names from `request`, or stops it (4.5) |
 | `copy` | The review board only: puts the selected findings on the clipboard through the host's `copyText`, built in the extension from the stored review, never from the page |
 | `pick-file` | The import board only: "Pick the file again". The path comes from VS Code's native open dialog, never from the page; the session moves with `relocate` and the tab follows it to the new id |
@@ -296,7 +297,7 @@ extension → page    { id, ok: true, data }  or  { id, ok: false, status, error
 - `status` on a refusal follows HTTP numbers because the shared client tells cases apart by them: 400 malformed, 404 gone, 409 changed meanwhile, 500 unexpected (fixed sentence to the page, detail to the log).
 - Actions on one session are processed one after another.
 - Two tabs cannot show the same session: opening it again brings the existing tab forward.
-- Pages are plain files in `board-pages/`, copied to `out/board-pages` with the VS Code Elements bundle. They share one client module (`shared/board.js`: load state, send action, render banner, conflicts, preview and Apply) and one style that uses VS Code's own `--vscode-*` theme variables. A board supplies `page.js` with its table and controls; the extension writes the HTML document (`boardPanelHtml.ts`).
+- Pages are plain files in `board-pages/`, copied to `out/board-pages` with the VS Code Elements bundle. They share one client module (`shared/board.js`: load state, send action, render the banners, preview and Apply, and `apply` for one click; a page that draws its own action line sets `view.ownActionLine` so the shared header leaves out Refresh and Close) and one style that uses VS Code's own `--vscode-*` theme variables. A board supplies `page.js` with its table and controls; the extension writes the HTML document (`boardPanelHtml.ts`).
 
 ---
 
@@ -320,7 +321,7 @@ The agent cannot act on a board; it can only ask for one to be opened. Tool desc
 | Another machine, user or process reaches a board | There is nothing to reach: no port is open. A board is a webview; only its own page can post to it |
 | A web page or injected content runs script in a board | The tab's content policy allows scripts from the extension's own files only, no inline script, nothing from the network. Pages write Jira, Bitbucket and report text with `textContent`, never as HTML |
 | A board page is tricked into acting on another session | The tab, not the page, names the session (section 6) |
-| A script in the page writes to Jira | Nothing is written without a plan ID from a preview, and a risky write needs the native confirmation, which no page or script can click |
+| A script in the page writes to Jira | Nothing is written without a plan ID from a preview. A post to Bitbucket also needs the native confirmation, which no page or script can click. The ticket list, cleanup and import boards write on one click (D25): the page is the extension's own script under its content policy, and the per-ticket check stays on unless the developer turns it off. The server cannot tell a click from a script, so these writes rest on the page staying free of injected script: no board page writes HTML from a string (`src/test/boardPagesGuard.test.ts` fails on `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write` or `eval`), and the one preview of merge start and add-to-ticket is shown by the page, not enforced by the server |
 | A prompt-injected agent | The agent gets no rows from a board and has no way to act on one; its own write tools each show a confirmation |
 | Stale cache leads to a wrong write | Targets are read again before every write and changed ones are refused |
 | Session files leak data | They sit in VS Code's per-workspace extension storage with the user's file permissions, hold no credentials, expire, and can be cleared with one command |
@@ -332,7 +333,7 @@ The agent cannot act on a board; it can only ask for one to be opened. Tool desc
 ```text
 src/
   sessions/            vscode-free
-    sessionTypes.ts    Session, Recipe, Derived, Working, Conflict, WritePlan
+    sessionTypes.ts    Session, Recipe, Derived, Working, WritePlan
     sessionId.ts       id from kind and source
     sessionStore.ts    files: load, save (atomic), list, delete, expire
     sessionManager.ts  open, state, action, check, preview, apply, plan ids, per-session queue
@@ -403,7 +404,7 @@ Logged in full, with rejected alternatives, in `copilot-harness-migration.md` fr
 | D8 | A session is stored in full: recipe, derived data and working state | Maintainer |
 | D9 | The stored session is a cache: shown at once, checked in the background, never trusted for a write | Maintainer |
 | D10 | One session per source; expiry after unused days, a clear command, a sessions board | Maintainer |
-| D11 | Risky board writes need a native VS Code confirmation | Maintainer |
+| D11 | Risky board writes need a native VS Code confirmation. Reversed for the ticket list, cleanup and import boards by D25; it still holds for a post to Bitbucket | Maintainer |
 | D12 | Session files live in the extension's per-workspace storage folder, one file per session, not in `workspaceState` | Approved |
 | D13 | The session ID is derived from kind and source; the tab holds it and VS Code hands it back on restore | Approved |
 | D14 | A write needs a single-use plan ID issued by a preview | Approved |
@@ -417,6 +418,10 @@ Logged in full, with rejected alternatives, in `copilot-harness-migration.md` fr
 | D22 | `@jira` and `@bitbucket` were deprecated, then removed once the import and review boards existed: `@jira` on 2026-11-16, `@bitbucket` on 2026-11-23 | Maintainer |
 | D23 | A stored session of another format is rebuilt from its stored recipe when the kind's `revalidate` accepts it, with a notice and without the earlier choices; still never migrated (narrows D17) | Maintainer |
 | D24 | Every board saves its session after each write of an Apply, so an interrupted Apply resumes with only the rest | Maintainer |
+| D25 | The ticket list, cleanup and import boards write on one click, with no plan dialog and no native confirmation (D11 reversed for them): the board on show is the preview and the Apply button names what it writes. Merge start, add-to-ticket and the email model check keep one preview, because it shows what Jira says or asks for consent; a post to Bitbucket keeps its confirmation. A refused write raises no conflict list; the view is marked out of date where its rows are old. Requested 2026-11-27: the preview and the dialog added a click and showed what the board already shows, and the conflicts banner repeated the Apply result | Requested |
+| D26 | The ticket list and cleanup board open fresh when asked for with no tab open (D28 adds the restart). A restored tab VS Code has not shown yet is not known to the extension (it hands the tab over when the tab is first shown), so `BoardPanels` counts it as open through `window.tabGroups` (viewType and title) and replaces it with the new tab. Nothing relies on noticing why a tab closed | Requested |
+| D27 | A board may keep settings of its own outside its sessions, changed by the narrow `preference` request. The ticket list keeps "check each ticket before writing", on by default, per user and not in the Settings screen, so a developer can keep closing tickets while a refusal they cannot explain is open | Requested |
+| D28 | Only the review board keeps its session across a restart. The ticket list, cleanup, security report and import boards are read again when asked for with no tab open and when VS Code brings their tab back (`freshOnOpen`), because what they show must be correct and recent; an unfinished ticket merge is not carried over. Requested 2026-11-27 | Requested |
 
 ---
 

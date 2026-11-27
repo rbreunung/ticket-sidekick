@@ -2,11 +2,13 @@ import { isSystemFilterId } from '../../utils/jiraSystemFilters';
 import { splitOrderBy } from '../../utils/jqlOrderBy';
 import { extraColumnId, isNaturalColumn, nextSort, sortNatural, type NaturalColumn } from '../../utils/naturalCompare';
 import type { BoardKind, CheckMode } from '../../sessions/boardKind';
-import type { Conflict, Session } from '../../sessions/sessionTypes';
+import type { Session } from '../../sessions/sessionTypes';
 import type { WorkflowGraph } from '../../services/WorkflowService';
 import type { CleanupRule } from '../../templates/TemplateService';
 import { SUBTASK_KEYS_PER_QUERY, buildCleanupQuery, buildSubtaskQueries, cleanupTargets, describeFixVersion, lookupCleanupRule, pathProblem } from './cleanupSource';
 import { isFinalStatus } from '../../utils/finalStatus';
+import type { DiagLogger } from '../../utils/diagTypes';
+import { sameUpdatedTime } from '../../utils/updatedTime';
 
 // The ticket list board: the tickets of a JQL query or a saved filter, with a selection and one
 // change (a move to a status, or a field value) that is applied to the selected tickets after a
@@ -93,7 +95,6 @@ export interface CleanupInfo {
   rule: string;
   targetState: string;
   /** Moving a ticket to the target closes it (Jira's Done category, or the usual names). */
-  targetFinal: boolean;
   subtaskTargetState?: string;
   /** The rule names no resolution for a status that closes tickets: one is chosen on the board. */
   needsResolution: boolean;
@@ -173,6 +174,11 @@ export interface TicketListDeps {
   /** The resolution names Jira offers. */
   resolutions(): Promise<string[]>;
   now(): number;
+  /** Whether Apply reads each ticket before writing it; kept outside the sessions, on by default. */
+  checkBeforeWrite(): Promise<boolean>;
+  setCheckBeforeWrite(on: boolean): Promise<void>;
+  /** Where the board logs what it refuses, for the Ticket Sidekick output channel. */
+  onDiag?: DiagLogger;
 }
 
 export type ViewRow = TicketRow & { url: string | null; selected: boolean; result: Omit<RowResult, 'updated'> | null; subtasks?: ViewRow[] };
@@ -201,6 +207,10 @@ export interface TicketListView {
   change: ListChange | null;
   proposed: boolean;
   sort: TicketListWorking['sort'];
+  /** The page draws Apply and Refresh on its own action line, so the shared header leaves both out. */
+  ownActionLine: true;
+  /** The Apply button: what it writes, named. The page also turns it off while the board is busy or out of date. */
+  applyButton: { label: string; enabled: boolean };
 }
 
 export const MAX_LIST_ROWS = 300;
@@ -331,8 +341,9 @@ function differences(shownRows: TicketRow[], freshRows: TicketRow[], results: Re
   const written = (key: string) => results[key]?.outcome === 'done';
   const changed = shown.filter(row => {
     const current = now.get(row.key);
-    if (!current || current.updated === row.updated) return false;
-    return !(written(row.key) && results[row.key].updated === current.updated);
+    if (!current || sameUpdatedTime(current.updated, row.updated)) return false;
+    const own = results[row.key]?.updated;
+    return !(written(row.key) && own !== undefined && sameUpdatedTime(own, current.updated));
   }).map(row => row.key);
   const gone = shown.filter(row => !now.has(row.key) && !written(row.key)).map(row => row.key);
   const added = fresh.filter(row => !before.has(row.key)).length;
@@ -421,11 +432,10 @@ async function readCleanup(source: Extract<ListSource, { type: 'rule' }>, deps: 
   }
 
   // A resolution is asked for only when a listed move closes a ticket and the rule names none for it.
-  const targetFinal = rows.length > 0 ? rows.some(r => r.final) : await finalOf(rule.issueType, targets.targetState);
   const needsResolution = (!targets.resolution && rows.some(r => r.final))
     || (!targets.subtaskResolution && rows.some(r => (r.subtasks ?? []).some(sub => sub.final)));
   const cleanup: CleanupInfo = {
-    rule: rule.name, targetState: targets.targetState, targetFinal,
+    rule: rule.name, targetState: targets.targetState,
     ...(rule.closeSubtasks ? { subtaskTargetState: targets.subtaskTargetState } : {}),
     needsResolution, resolutions: needsResolution ? await deps.resolutions() : [],
     ...(describeFixVersion(query.fixVersion) ? { scope: describeFixVersion(query.fixVersion) } : {}),
@@ -454,6 +464,8 @@ interface PlannedTarget {
 export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketListWorking, TicketListAction, TicketListView, TicketListDeps> = {
   kind: TICKET_LIST_KIND,
   formatVersion: 2,
+  // The state is a query and a selection, read again from Jira: a list opened anew starts clean.
+  freshOnOpen: true,
   title: recipe => sourceTitle(recipe.source),
 
   validate: async (input, deps) => {
@@ -560,8 +572,8 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     const found = differs && queryChanged ? { ...differs, queryChanged: true } : differs;
     if (mode === 'background') {
       return found
-        ? { derived: session.derived, working: { ...session.working, outOfDate: found }, conflicts: [] }
-        : { derived: fresh, working: { ...session.working, outOfDate: null }, conflicts: [] };
+        ? { derived: session.derived, working: { ...session.working, outOfDate: found } }
+        : { derived: fresh, working: { ...session.working, outOfDate: null } };
     }
     const now = new Set(fresh.data.rows.map(row => row.key));
     const listed = new Set(allTickets(fresh.data.rows).map(row => row.key));
@@ -572,7 +584,6 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     return {
       derived: fresh,
       working: { ...session.working, selection, outOfDate: null, results, page: clampPage(session.working.page, fresh.data.rows.length) },
-      conflicts: [],
     };
   },
 
@@ -630,13 +641,12 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     if (!change) return { ok: false, reason: 'Choose a change first: a status to move to, or a field and a value.' };
     const rows = selectedRows(session);
     if (rows.length === 0) return { ok: false, reason: isCleanup(session) ? 'Select at least one ticket on this page.' : 'Select at least one ticket.' };
-    const closes = change.type === 'transition' && isFinalStatus(change.status);
     return {
       ok: true,
       plan: {
         title: change.type === 'transition' ? `Move ${rows.length} ticket(s) to ${change.status}` : `${fieldVerb(change.operation)} ${change.field} on ${rows.length} ticket(s)`,
         lines: rows.map(row => ({ target: row.key, change: describeChange(change, row) })),
-        risky: rows.length > 1 || closes,
+        risky: false,
         payload: { change, targets: rows.map((row): PlannedTarget => ({ key: row.key, updated: row.updated, status: row.status })) },
       },
     };
@@ -645,7 +655,8 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
   apply: async (session, plan, deps, progress) => {
     const { change, targets } = plan.payload as { change: ListChange | null; targets: PlannedTarget[] };
     const results: Record<string, RowResult> = {};
-    const conflicts: Conflict[] = [];
+    /** The tickets refused because they changed in Jira since the board read them. */
+    const changed: string[] = [];
     const total = targets.reduce((n, t) => n + 1 + (t.subtasks?.length ?? 0), 0);
     let finished = 0;
     /**
@@ -667,23 +678,33 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
         done: finished, total,
       });
     };
-    /** Reads the ticket again and writes it only when it is as the board read it; says whether it was written. */
-    const writeOne = async (target: { key: string; updated: string; status: string }, write: () => Promise<unknown>): Promise<boolean> => {
+    // Whether each ticket is read before it is written; the developer's choice on the board.
+    const check = await deps.checkBeforeWrite();
+    /** Reads a ticket again when the board checks; false, with the result recorded, when it is gone or moved since the board read it. */
+    const verified = async (target: { key: string; updated: string }): Promise<boolean> => {
+      // The truth is Jira: a ticket that moved since the board read it is not written to.
+      const current = check ? await deps.readTicket(target.key) : undefined;
+      if (check && !current) {
+        results[target.key] = { outcome: 'refused', reason: 'no longer exists in Jira' };
+        return false;
+      }
+      if (current && !sameUpdatedTime(current.updated, target.updated)) {
+        deps.onDiag?.('warn', `Ticket list: ${target.key} changed in Jira since the board read it, so it was not written to`, {
+          key: target.key, stored: target.updated, current: current.updated,
+        });
+        results[target.key] = { outcome: 'refused', reason: 'changed in Jira since the board read it' };
+        changed.push(target.key);
+        return false;
+      }
+      return true;
+    };
+    /** Writes a ticket, after checking it when the board checks (unless the caller already did); says whether it was written. */
+    const writeOne = async (target: { key: string; updated: string }, write: () => Promise<unknown>, alreadyChecked = false): Promise<boolean> => {
       try {
-        // The truth is Jira: a ticket that moved since the board read it is not written to.
-        const current = await deps.readTicket(target.key);
-        if (!current) {
-          results[target.key] = { outcome: 'refused', reason: 'no longer exists in Jira' };
-          return false;
-        }
-        if (current.updated !== target.updated) {
-          results[target.key] = { outcome: 'refused', reason: 'changed in Jira since the board read it' };
-          conflicts.push({ id: target.key, target: target.key, message: 'changed in Jira and was not written to.', stored: target.status, fresh: current.status });
-          return false;
-        }
+        if (!alreadyChecked && !(await verified(target))) return false;
         await write();
         // The time Jira gives the ticket after this write; when it cannot be read, a later check counts the ticket as changed.
-        const after = await deps.readTicket(target.key).catch(() => undefined);
+        const after = check ? await deps.readTicket(target.key).catch(() => undefined) : undefined;
         results[target.key] = { outcome: 'done', ...(after ? { updated: after.updated } : {}) };
         return true;
       } catch (err) {
@@ -693,6 +714,19 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     };
     for (const target of targets) {
       if (target.move) {
+        // The parent is checked before its subtasks move, because moving a subtask can change the parent's own time.
+        let parentChecked = false;
+        if ((target.subtasks ?? []).length > 0) {
+          try { parentChecked = await verified(target); } catch (err) {
+            results[target.key] = { outcome: 'failed', reason: err instanceof Error ? err.message : String(err) };
+          }
+          if (!parentChecked) {
+            // Nothing of this parent is written; its subtasks stay as they are.
+            for (const sub of target.subtasks ?? []) results[sub.key] = { outcome: 'refused', reason: `not moved, because its parent ${target.key} was not moved` };
+            await report();
+            continue;
+          }
+        }
         // Subtasks first; a parent whose subtask was not moved stays as it is.
         let failed: string | undefined;
         for (const sub of target.subtasks ?? []) {
@@ -701,7 +735,7 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
         }
         const move = target.move;
         if (failed) results[target.key] = { outcome: 'refused', reason: `not moved, because subtask ${failed} was not moved` };
-        else await writeOne(target, () => deps.move(move.key, move.target, move.resolution));
+        else await writeOne(target, () => deps.move(move.key, move.target, move.resolution), parentChecked);
       } else if (change?.type === 'transition') {
         await writeOne(target, () => deps.move(target.key, change.status, change.resolution));
       } else if (change) {
@@ -711,11 +745,16 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
     }
     // Show what Jira holds now; when that read fails the rows stay as they were, with the results.
     let derived = session.derived;
+    let reread = true;
     try {
       derived = await ticketListKind.read(session.recipe, deps);
     } catch {
       // The results below still say what was written.
+      reread = false;
     }
+    // A ticket refused because it changed is already shown as it is now when the list was read again;
+    // when it could not be, the rows on show are the old ones, so the board says it is out of date.
+    const outOfDate = !reread && changed.length > 0 ? { changed, gone: [], added: 0 } : session.working.outOfDate;
     return {
       results: targets.flatMap(t => [...(t.subtasks ?? []), t]).map(t => {
         const { outcome, reason } = results[t.key];
@@ -727,10 +766,19 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
       working: {
         ...session.working,
         selection: session.recipe.source.type === 'rule' ? session.working.selection : { mode: 'only', keys: [] },
-        proposed: false, results,
+        proposed: false, results, outOfDate,
       },
-      conflicts,
     };
+  },
+
+  preferences: {
+    read: async deps => ({ checkBeforeWrite: await deps.checkBeforeWrite() }),
+    write: async (name, value, deps) => {
+      if (name !== 'checkBeforeWrite') return 'This board has no such setting.';
+      if (typeof value !== 'boolean') return 'The setting is on or off.';
+      await deps.setCheckBeforeWrite(value);
+      return undefined;
+    },
   },
 
   view: session => {
@@ -763,9 +811,26 @@ export const ticketListKind: BoardKind<TicketListRecipe, TicketListData, TicketL
       totalRows: rows.length, page, pageCount: pageCount(rows.length), outOfDate: working.outOfDate,
       selectedCount: data.rows.filter(r => selectable(r) && isSelected(working.selection, r.key)).length,
       change: working.change, proposed: working.proposed, sort: activeSort(session),
+      ownActionLine: true, applyButton: applyButton(session),
     };
   },
 };
+
+/** What the Apply button says: the move or field change and the number of tickets it writes, or plain "Apply" while it cannot write. */
+function applyButton(session: ListSession): TicketListView['applyButton'] {
+  const idle = { label: 'Apply', enabled: false };
+  const count = selectedRows(session).length;
+  if (count === 0) return idle;
+  const tickets = `${count} ticket${count === 1 ? '' : 's'}`;
+  if (session.recipe.source.type === 'rule') {
+    const info = session.derived.data.cleanup;
+    if (!info || (info.needsResolution && session.working.resolution === null)) return idle;
+    return { label: `Move ${tickets} to ${info.targetState}`, enabled: true };
+  }
+  const { change } = session.working;
+  if (!change) return idle;
+  return { label: change.type === 'transition' ? `Move ${tickets} to ${change.status}` : `${fieldVerb(change.operation)} ${change.field} on ${tickets}`, enabled: true };
+}
 
 /** The query the rows on show were read with. */
 function listedJql(session: ListSession): string {
@@ -828,7 +893,7 @@ function planCleanup(session: ListSession): ReturnType<NonNullable<typeof ticket
     plan: {
       title: `Move ${rows.length} ticket(s) to ${info.targetState}${subtaskCount ? `, with ${subtaskCount} subtask(s) first` : ''}`,
       lines: targets.flatMap(t => [...(t.subtasks ?? []).map(sub => describe(sub, `Subtask of ${t.key}: `)), describe(t.move!)]),
-      risky: rows.length + subtaskCount > 1 || info.targetFinal,
+      risky: false,
       payload: { change: null, targets },
     },
   };

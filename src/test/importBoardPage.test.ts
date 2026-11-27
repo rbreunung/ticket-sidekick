@@ -44,7 +44,6 @@ const live = () => byId('board-live')?.textContent ?? '';
 const click = async (el: FakeElement) => { el.dispatch('click'); await settle(); };
 /** Ticks a checkbox, as a click on it does in the browser. */
 const tick = async (el: FakeElement) => { el.checked = !el.checked; el.dispatch('change'); await settle(); };
-const buttonNamed = (scope: FakeElement, text: string) => scope.elements().find(el => el.tagName === 'vscode-button' && el.textContent === text);
 const actionsPosted = () => page.posted.filter(m => m.op === 'action').map(m => m.body.action as Record<string, unknown>);
 
 // ---- a canned extension side -------------------------------------------------------------
@@ -118,7 +117,7 @@ function baseView(extra: Partial<ImportView> = {}): ImportView {
 function boardState(view: ImportView | undefined, extra: Partial<BoardState> = {}): BoardState {
   return {
     id: SESSION, kind: 'import', title: view?.title ?? 'Veracode import: report.xml', status: 'ready', tick: 1, revision: 1, asOf: 1_000,
-    restored: false, stored: true, conflicts: [], writesBlocked: false, ...(view ? { view } : {}), ...extra,
+    restored: false, stored: true, writesBlocked: false, ...(view ? { view } : {}), ...extra,
   };
 }
 
@@ -175,7 +174,8 @@ describe('the import board page', () => {
     installCanned({
       state: boardState(baseView()),
       answer: async op => {
-        if (op === 'preview') return { planId: 'p1', title: 'Create 7 ticket(s) in PROJ', lines: [], risky: true };
+        if (op === 'preview') return { planId: 'p1', title: 'Create 7 ticket(s) in PROJ', lines: [], risky: false };
+        if (op === 'apply') return { results: [], state: canned.state };
         if (op === 'save') return { outcome: 'saved' };
         throw { status: 404, message: 'Unknown request.' };
       },
@@ -183,8 +183,7 @@ describe('the import board page', () => {
     await loadPage();
     await tick(must('include-N2'));
     await click(must('merge-selected'));
-    await click(must('preview-create'));
-    page.document.body.elements().find(el => el.tagName === 'dialog')?.close();
+    await click(must('apply-create'));
     await click(must('save-csv'));
     await click(must('reload-report'));
 
@@ -194,7 +193,7 @@ describe('the import board page', () => {
       expect(asBoardRequest(message)).toBeDefined();
     }
     expect(JSON.stringify(page.posted)).not.toContain(SESSION);
-    expect(page.posted.map(m => m.op)).toEqual(expect.arrayContaining(['state', 'action', 'preview', 'save']));
+    expect(page.posted.map(m => m.op)).toEqual(expect.arrayContaining(['state', 'action', 'preview', 'apply', 'save']));
   });
 
   it('a partial Apply shows each row\'s state, takes the done rows out of the selection and announces the summary', async () => {
@@ -203,16 +202,15 @@ describe('the import board page', () => {
       state: boardState(baseView()),
       answer: async op => {
         if (op === 'preview') {
-          return { planId: 'p1', title: 'Create 7 ticket(s) in PROJ', risky: true, lines: [1, 2, 3, 4, 5, 6, 7].map(n => ({ target: `Flaw ${100 + n}`, change: 'New Bug' })) };
+          return { planId: 'p1', title: 'Create 7 ticket(s) in PROJ', risky: false, lines: [1, 2, 3, 4, 5, 6, 7].map(n => ({ target: `Flaw ${100 + n}`, change: 'New Bug' })) };
         }
         if (op === 'apply') return new Promise(resolve => { finishApply = resolve; });
         throw { status: 404, message: 'Unknown request.' };
       },
     });
     await loadPage();
-    await click(must('preview-create'));
-    const dialog = page.document.body.elements().find(el => el.tagName === 'dialog')!;
-    await click(buttonNamed(dialog, 'Apply')!);
+    await click(must('apply-create'));
+    expect(page.document.body.elements().some(el => el.tagName === 'dialog')).toBe(false);
 
     // While the Apply runs: the rows written so far show their ticket, the rest wait, and every
     // control but the tabs is disabled.
@@ -221,7 +219,7 @@ describe('the import board page', () => {
     expect(resultOf('N1')).toMatch(/Created PROJ-1/);
     expect(resultOf('N5')).toMatch(/Waiting to be written/);
     expect(live()).toMatch(/Applying: 2 of 7 done/);
-    expect(must('preview-create').disabled).toBe(true);
+    expect(must('apply-create').disabled).toBe(true);
     expect(must('include-N5').disabled).toBe(true);
     expect(must('tab-ticketed').disabled).toBeFalsy();
 
@@ -264,7 +262,7 @@ describe('the import board page', () => {
 
     expect(must('tab-new').textContent).toBe('New (7, out of date)');
     expect(live()).toMatch(/New is out of date/);
-    expect(must('preview-create').disabled).toBe(true);
+    expect(must('apply-create').disabled).toBe(true);
     expect(must('include-N1').disabled).toBe(true);
     await click(must('refresh-tab'));
     expect(page.posted.at(-1)?.op).toBe('refresh');
@@ -294,7 +292,7 @@ describe('the import board page', () => {
     await click(must('tab-new'));
     expect(must('panel-new').textContent).toMatch(/A ticket merge is running/);
 
-    await click(must('preview-create'));
+    await click(must('apply-create'));
     expect(live()).toContain('A ticket merge is not finished. Finish or stop the merge first.');
     expect(must('include-N3').disabled).toBeFalsy();
     await tick(must('include-N3'));
@@ -311,6 +309,7 @@ describe('the import board page', () => {
       state: boardState(baseView({ tab: 'ticketed', new: undefined, ticketed: { columns: [], show: 'all', rows: [ticketedRow(1), ticketedRow(2)] }, ext: { ...baseView().ext, merge } })),
       answer: async op => {
         if (op === 'preview') return { planId: 'p2', title: 'Retry', lines: [], risky: false };
+        if (op === 'apply') return { results: [], state: canned.state };
         throw { status: 404, message: 'Unknown request.' };
       },
     });
@@ -319,8 +318,9 @@ describe('the import board page', () => {
     expect(panel.textContent).toContain('PROJ-2: link the tickets — Failed: Jira answered 403');
     expect(panel.textContent).toContain('PROJ-1: rewrite the kept ticket — Done');
     await click(must('merge-retry'));
-    expect(page.posted.at(-1)).toMatchObject({ op: 'preview', body: { action: { type: 'merge-retry' } } });
-    page.document.body.elements().find(el => el.tagName === 'dialog')?.close();
+    expect(page.posted.filter(m => m.op === 'preview').at(-1)).toMatchObject({ body: { action: { type: 'merge-retry' } } });
+    expect(page.posted.at(-1)).toMatchObject({ op: 'apply', body: { planId: 'p2' } });
+    expect(page.document.body.elements().some(el => el.tagName === 'dialog')).toBe(false);
     expect(byId('merge-ignore')).not.toBeNull();
     expect(byId('merge-stop')).not.toBeNull();
 
@@ -341,7 +341,7 @@ describe('the import board page', () => {
     target.dispatch('change');
     await settle();
     expect(actionsPosted().at(-1)).toEqual({ type: 'merge-close-target', issueType: 'Bug', option: 'status:Done' });
-    expect(must('preview-merge-close').disabled).toBe(true);
+    expect(must('apply-merge-close').disabled).toBe(true);
 
     await push({ view: baseView({ tab: 'ticketed', new: undefined, ticketed: { columns: [], show: 'all', rows: [] }, ext: { ...baseView().ext, merge: { ...merge, state: 'finished', actions: ['acknowledge'], failed: undefined, report: { missing: [], closedWithout: [], workflowHint: false } } } }) });
     await click(must('merge-acknowledge'));
@@ -445,10 +445,66 @@ describe('the import board page', () => {
       answer: async op => (op === 'pick-file' ? { outcome: 'picked', id: 'import-new', state: { ...canned.state, error: undefined, errorCode: undefined, writesBlocked: false } } : undefined),
     });
     await loadPage();
-    expect(must('preview-create').disabled).toBe(true);
+    expect(must('apply-create').disabled).toBe(true);
     await click(must('pick-file-again'));
     expect(page.posted.at(-1)).toMatchObject({ op: 'pick-file', body: {} });
-    expect(must('preview-create').disabled).toBeFalsy();
+    expect(must('apply-create').disabled).toBeFalsy();
+  });
+});
+
+describe('what an import button does on one click', () => {
+  const dialogs = () => page.document.body.elements().filter(el => el.tagName === 'dialog');
+  const plan = { planId: 'p1', title: 'A plan', lines: [{ target: 'PROJ-1', change: 'x' }], risky: false };
+  const answerPlan = async (op: string) => {
+    if (op === 'preview') return plan;
+    if (op === 'apply') return { results: [], state: canned.state };
+    throw { status: 404, message: 'Unknown request.' };
+  };
+  const ticketedView = (toWrite: number) => baseView({
+    tab: 'ticketed', new: undefined, ticketed: { columns: [], show: 'all', rows: [ticketedRow(1), ticketedRow(2)] },
+    ext: { ...baseView().ext, ticketed: { filter: 'all', shown: ['A1', 'A2'], sort: null, noDueDate: [], notice: null, counts: { changed: 1, unchanged: 1, all: 2 }, toWrite, actionLabels: {} } },
+  });
+
+  it('names what a create writes, never more than one click creates, and has no button to click while there is nothing', async () => {
+    installCanned({ state: boardState(baseView()), answer: answerPlan });
+    await loadPage();
+    expect(must('apply-create').textContent).toBe('Create 7 tickets');
+    await push({ view: baseView({ ext: { ...baseView().ext, new: { toCreate: 1, perApply: 50, addedTo: {} } } }) });
+    expect(must('apply-create').textContent).toBe('Create 1 ticket');
+    await push({ view: baseView({ ext: { ...baseView().ext, new: { toCreate: 120, perApply: 50, addedTo: {} } } }) });
+    expect(must('apply-create').textContent).toBe('Create 50 tickets');
+    await push({ view: baseView({ ext: { ...baseView().ext, new: { toCreate: 0, perApply: 50, addedTo: {} } } }) });
+    expect(must('apply-create').textContent).toBe('Create tickets');
+    expect(must('apply-create').disabled).toBe(true);
+  });
+
+  it('names the tickets the Already ticketed tab writes, and writes them on one click', async () => {
+    installCanned({ state: boardState(ticketedView(2)), answer: answerPlan });
+    await loadPage();
+    expect(must('apply-ticketed').textContent).toBe('Write 2 tickets');
+    await click(must('apply-ticketed'));
+    expect(page.posted.map(m => m.op).filter(op => op === 'preview' || op === 'apply')).toEqual(['preview', 'apply']);
+    expect(dialogs()).toEqual([]);
+    await push({ view: ticketedView(0) });
+    expect(must('apply-ticketed').textContent).toBe('Write changes');
+    expect(must('apply-ticketed').disabled).toBe(true);
+  });
+
+  it('keeps one preview, and writes nothing from it yet, for adding to a ticket and for starting a merge', async () => {
+    installCanned({ state: boardState(baseView()), answer: answerPlan });
+    await loadPage();
+    await click(must('preview-add'));
+    expect(page.posted.map(m => m.op)).toContain('preview');
+    expect(page.posted.map(m => m.op)).not.toContain('apply');
+    expect(dialogs()).toHaveLength(1);
+    dialogs()[0].close();
+
+    await push({ view: ticketedView(2) });
+    await tick(must('pick-A1'));
+    await click(must('preview-merge'));
+    expect(page.posted.filter(m => m.op === 'preview').at(-1)).toMatchObject({ body: { action: { type: 'merge-start' } } });
+    expect(page.posted.map(m => m.op)).not.toContain('apply');
+    expect(dialogs()).toHaveLength(1);
   });
 });
 
@@ -500,16 +556,15 @@ describe('the import board page against the import kind', () => {
       return reply.data;
     });
     await loadPage();
-    for (let n = 0; n < 50 && !byId('preview-create'); n++) await settle();
+    for (let n = 0; n < 50 && !byId('apply-create'); n++) await settle();
 
     const row = page.root.elements().find(el => el.tagName === 'tr' && el.textContent.includes('Flaw 101'))!;
     expect(row.textContent).toContain(CRAFTED_FILE);
     expect(page.document.body.elements().some(el => el.tagName === 'img')).toBe(false);
     expect(page.document.body.elements().some(el => el.tagName === 'a' && String(el.href ?? '').includes('evil.example'))).toBe(false);
 
-    await click(must('preview-create'));
-    const dialog = page.document.body.elements().find(el => el.tagName === 'dialog')!;
-    await click(buttonNamed(dialog, 'Apply')!);
+    await click(must('apply-create'));
+    expect(page.document.body.elements().some(el => el.tagName === 'dialog')).toBe(false);
     for (let n = 0; n < 50 && jira.createIssueCalls.length === 0; n++) await settle();
     await settle();
 

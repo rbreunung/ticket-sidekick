@@ -1,4 +1,4 @@
-import type { ApplyLineResult, Conflict, DerivedPart, RunningState, Session, WritePlan } from './sessionTypes';
+import type { ApplyLineResult, DerivedPart, RunningState, Session, WritePlan } from './sessionTypes';
 
 // A board kind is the one place that knows a board's rules. `reduce`, `plan` and `reconcile` are
 // pure, so a board's behaviour is tested as scenarios without a browser or a server. The session
@@ -18,15 +18,12 @@ export type CheckMode = 'background' | 'refresh';
 export interface Reconciled<D, W> {
   derived: DerivedPart<D>;
   working: W;
-  conflicts: Conflict[];
 }
 
 export interface Applied<D, W> {
   results: ApplyLineResult[];
   derived: DerivedPart<D>;
   working: W;
-  /** Targets that changed since the board read them become conflicts. */
-  conflicts?: Conflict[];
 }
 
 /** What `apply` reports after each finished target: the working state that records what is done so far. */
@@ -103,6 +100,13 @@ export interface BoardKind<R, D, W, A, V, X> {
   kind: string;
   /** Raise when the stored shape changes; a session of another format is rebuilt from its recipe (see `revalidate`) or discarded. */
   formatVersion: number;
+  /**
+   * Asked for again with no tab open, or brought back by VS Code after a restart, the board starts
+   * clean (nothing selected, no earlier results, the sources read again) instead of bringing back the
+   * stored session. For boards whose state is a reading of a source and some choices, not work worth
+   * keeping; a review is the board that is kept.
+   */
+  freshOnOpen?: boolean;
   title(recipe: R): string;
   /** Turns the open input into a recipe, or the reason the board cannot open. */
   validate(input: unknown, deps: X): Promise<Validated<R>>;
@@ -126,7 +130,7 @@ export interface BoardKind<R, D, W, A, V, X> {
    * keep showing what the developer saw after a background check and take the fresh reading only on Refresh.
    */
   reconcile(session: Session<R, D, W>, fresh: DerivedPart<D>, mode: CheckMode): Reconciled<D, W>;
-  /** A non-writing action: select, filter, pick, resolve or drop a conflict. */
+  /** A non-writing action: select, filter, pick or resolve. */
   reduce(session: Session<R, D, W>, action: A): Reduced<W>;
   /**
    * What a writing action needs to read before its plan can be shown, such as the target ticket of
@@ -156,6 +160,15 @@ export interface BoardKind<R, D, W, A, V, X> {
   interrupted?(working: W): W;
   /** A file the developer saves from the board, always built from the reading the board shows. */
   exportFile?(session: Session<R, D, W>, format: string, deps: X): Promise<ExportedFile>;
+  /**
+   * What the developer keeps on the board itself, stored outside any session so it outlives it. The
+   * page may change only a name `write` takes: it answers with the reason when it does not take the
+   * name or the value, and with nothing once it stored it.
+   */
+  preferences?: {
+    read(deps: X): Promise<Record<string, boolean>>;
+    write(name: string, value: unknown, deps: X): Promise<string | undefined>;
+  };
   /** What the page gets: never more than it shows. */
   view(session: Session<R, D, W>): V;
 }

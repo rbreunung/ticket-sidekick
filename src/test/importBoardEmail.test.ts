@@ -33,7 +33,7 @@ async function openEmails(files: string[], importDeps = deps): Promise<ImportSes
   if (!validated.ok) throw new Error(validated.reason);
   return {
     id: importSessionId(r), kind: 'import', formatVersion: importKind.formatVersion, revision: 1, createdAt: 0, lastUsedAt: 0,
-    recipe: validated.recipe, derived: await importKind.read(validated.recipe, importDeps), working: importKind.initialWorking(validated.recipe), conflicts: [],
+    recipe: validated.recipe, derived: await importKind.read(validated.recipe, importDeps), working: importKind.initialWorking(validated.recipe),
   };
 }
 
@@ -101,7 +101,7 @@ describe('creating tickets from emails', () => {
     const b = emlFile(dir, 'b.eml', 'Export is slow', { attachment: 'log.txt' });
     const session = await openEmails([a, b]);
     const p = await plan(session, { type: 'new-create' });
-    expect(p.risky).toBe(true);
+    expect(p.risky).toBe(false);
     const { applied, session: after } = await apply(session, p);
     expect(applied.results.map(r => r.outcome)).toEqual(['done', 'done']);
     expect(jira.createIssueCalls.map(c => c.summary)).toEqual(['Login fails', 'Export is slow']);

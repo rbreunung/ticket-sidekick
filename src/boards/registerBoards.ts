@@ -9,7 +9,7 @@ import { createVeracodeDescriptor } from '../imports/veracode';
 import { createWaltzDescriptor } from '../imports/waltz';
 import { checkEmailBatchCaps, createEmailDescriptor } from '../imports/email';
 import { parseEmlFile } from '../utils/emlParser';
-import { resolveBoilerplatePatterns } from '../utils/emailBoilerplate';
+import { patternIsSaved, resolveBoilerplatePatterns } from '../utils/emailBoilerplate';
 import { EMAIL_MODEL_SETTING, REVIEW_MODEL_SETTING, modelHandle, type BoardChatMessage, type BoardModels, type ModelSettings } from './boardModels';
 import { emailSettings, veracodeSettings, waltzSettings } from '../services/importSettings';
 import { registerKind } from '../sessions/boardKind';
@@ -36,6 +36,9 @@ import { overviewColumnsReader } from './overviewColumns';
 import { ticketListJiraDeps } from './ticketList/jiraDeps';
 import { checkCleanupRules, describeRuleProblem, type RuleProblem } from './ticketList/cleanupSource';
 import { TICKET_LIST_KIND, ticketListKind } from './ticketList/kind';
+
+/** Where the ticket list board keeps whether Apply reads each ticket before it writes it. */
+const TICKET_LIST_CHECK_KEY = 'ticketSidekick.boards.ticketList.checkBeforeWrite';
 
 // VS Code glue for the boards: where sessions are stored, the native confirmation and save dialog,
 // the editor tabs, the retention setting and the commands. Everything it wires is free of `vscode`.
@@ -157,6 +160,11 @@ export function registerBoards(
     getJira,
     workspaceFolder,
     now: () => Date.now(),
+    // The board's own "check each ticket before writing" choice: per user, outside any session and not a Settings entry.
+    preferences: {
+      get: () => context.globalState.get<boolean>(TICKET_LIST_CHECK_KEY),
+      set: async on => { await context.globalState.update(TICKET_LIST_CHECK_KEY, on); },
+    },
     onDiag: log,
   });
   // One binding of the models and their settings, shared by the start screen and the email cleanup.
@@ -180,8 +188,11 @@ export function registerBoards(
       savePattern: async pattern => {
         const cfg = vscode.workspace.getConfiguration('ticketSidekick');
         const current = cfg.inspect<unknown>('email.boilerplatePatterns')?.globalValue;
+        // An equal pattern in the setting as the window sees it, at any level, is not saved a second time.
+        if (patternIsSaved(cfg.get<unknown>('email.boilerplatePatterns'), pattern) || patternIsSaved(current, pattern)) return 'already-saved';
         try {
           await cfg.update('email.boilerplatePatterns', [...(Array.isArray(current) ? current : []), pattern], vscode.ConfigurationTarget.Global);
+          return 'saved';
         } catch (err) {
           // An error may echo the written value, whose phrases are email text.
           const message = err instanceof Error ? err.message : String(err);

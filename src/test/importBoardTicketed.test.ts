@@ -217,7 +217,7 @@ async function open(r: ImportRecipe): Promise<ImportSession> {
   if (!validated.ok) throw new Error(validated.reason);
   return {
     id: importSessionId(r), kind: 'import', formatVersion: importKind.formatVersion, revision: 1, createdAt: 0, lastUsedAt: 0,
-    recipe: validated.recipe, derived: await importKind.read(validated.recipe, deps), working: importKind.initialWorking(validated.recipe), conflicts: [],
+    recipe: validated.recipe, derived: await importKind.read(validated.recipe, deps), working: importKind.initialWorking(validated.recipe),
   };
 }
 
@@ -428,6 +428,15 @@ describe('applying the Already ticketed actions', () => {
     return onTicketed(await open(recipe('veracode', file)));
   }
 
+  it('counts the tickets the next Apply writes, for the button that names them', async () => {
+    const session = await twoRowsOneTicket();
+    const toWrite = (s: ImportSession) => (ext(view(s)) as unknown as { toWrite: number }).toWrite;
+    expect(toWrite(session)).toBe(1);
+    expect(toWrite(session)).toBe(plan(session).lines.length);
+    const left = act(act(session, { type: 'ticketed-filter', filter: 'all' }), { type: 'ticketed-set-shown', action: 'leave' });
+    expect(toWrite(left)).toBe(0);
+  });
+
   it('refuses to plan while the Already ticketed tab is out of date, whatever the page shows', async () => {
     const session = await twoRowsOneTicket();
     expect(plan(session).lines).toHaveLength(1);
@@ -562,7 +571,6 @@ describe('applying the Already ticketed actions', () => {
 
     expect(applied.results.map(r => r.outcome)).toEqual(['done', 'refused']);
     expect(applied.results[1].reason).toMatch(/written earlier in this Apply/);
-    expect(applied.conflicts).toEqual([]);
     expect(jira.createIssueCalls).toHaveLength(1);
   });
 
@@ -574,7 +582,55 @@ describe('applying the Already ticketed actions', () => {
 
     const applied = await apply(session, plan(session));
     expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'done' })]);
-    expect(applied.conflicts).toEqual([]);
+  });
+
+  it('writes to a ticket whose update time Jira now spells another way but is the same moment', async () => {
+    jira.tickets = { 'PROJ-1': veracodeTicket(['101', '201'], { updated: '2026-05-01T10:00:00.000+0100' }) };
+    const file = writeVeracode([
+      { id: '101', file: 'A.java' }, { id: '102', file: 'A.java', line: 20 },
+      { id: '201', file: 'B.java' }, { id: '202', file: 'B.java', line: 20 },
+    ]);
+    const session = onTicketed(await open(recipe('veracode', file)));
+    jira.tickets['PROJ-1'].updated = '2026-05-01T10:00:00.000+01:00';
+
+    const applied = await apply(session, plan(session));
+    expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'done' })]);
+  });
+
+  it('refuses a ticket that is gone from Jira, logs that, and marks the tab out of date', async () => {
+    const session = await twoRowsOneTicket();
+    const logs: Array<{ level: string; details?: unknown }> = [];
+    deps = { ...deps, onDiag: (level, _message, details) => { logs.push({ level, details }); }, updatedTimes: async () => ({}) };
+
+    const applied = await apply(session, plan(session));
+    expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'refused', reason: 'changed in Jira since the board read it' })]);
+    expect(logs.filter(l => l.level === 'warn').map(l => l.details)).toContainEqual({ key: 'PROJ-1', stored: 't1', current: 'gone' });
+    expect(applied.working.outOfDate).toEqual(['ticketed']);
+  });
+
+  it('logs the ticket and both update times when it refuses a ticket that changed', async () => {
+    const session = await twoRowsOneTicket();
+    const logs: Array<{ level: string; details?: unknown }> = [];
+    deps = { ...deps, onDiag: (level, _message, details) => { logs.push({ level, details }); } };
+    jira.tickets['PROJ-1'].updated = 'x9';
+
+    const applied = await apply(session, plan(session));
+    expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-1', outcome: 'refused', reason: 'changed in Jira since the board read it' })]);
+    expect(logs.filter(l => l.level === 'warn').map(l => l.details)).toContainEqual({ key: 'PROJ-1', stored: 't1', current: 'x9' });
+  });
+
+  it('marks the Already ticketed tab out of date when a ticket changed, since it is not read again after an Apply', async () => {
+    const session = await twoRowsOneTicket();
+    jira.tickets['PROJ-1'].updated = 'x9';
+    const applied = await apply(session, plan(session));
+    expect(applied.working.outOfDate).toEqual(['ticketed']);
+    expect(importKind.plan!(applied.session, { type: 'ticketed-apply' } as never)).toEqual({ ok: false, reason: 'The Already ticketed tab is out of date. Refresh it first.' });
+  });
+
+  it('leaves the tab as it was when every ticket was written', async () => {
+    const session = await twoRowsOneTicket();
+    const applied = await apply(session, plan(session));
+    expect(applied.working.outOfDate).toEqual([]);
   });
 
   it('refuses to write when the tickets\' update times could not be read, and says so', async () => {
@@ -648,7 +704,7 @@ describe('applying the Already ticketed actions', () => {
     const session = onTicketed(await open(recipe('veracode', writeVeracode(flaws))));
     const p = plan(session);
     expect(p.lines).toHaveLength(50);
-    expect(p.risky).toBe(true);
+    expect(p.risky).toBe(false);
     expect(p.title).toMatch(/2 .*remain/);
   });
 });

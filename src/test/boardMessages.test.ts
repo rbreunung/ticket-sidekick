@@ -213,6 +213,14 @@ describe('a board page and the extension', () => {
   });
 });
 
+describe('a setting the board keeps for itself', () => {
+  it('is refused for a board that keeps none, and for a request that names no setting', async () => {
+    const state = await openReady();
+    expect(await ask(report(state.id), 'preference', { name: 'loud', value: true })).toMatchObject({ status: 404 });
+    expect(await ask(report(state.id), 'preference', { value: true })).toMatchObject({ status: 400, body: { error: 'Invalid setting.' } });
+  });
+});
+
 describe('a model run asked for by a board page', () => {
   /** A board whose one run is a pass of two steps that ends only when the page stops it. */
   const passKind: BoardKind<{ name: string }, null, { pass: string }, unknown, { pass: string }, null> = {
@@ -224,7 +232,7 @@ describe('a model run asked for by a board page', () => {
     sourceLabel: r => r.name,
     initialWorking: () => ({ pass: 'idle' }),
     read: async () => ({ readAt: 1, fingerprints: {}, data: null }),
-    reconcile: (session, fresh) => ({ derived: fresh, working: session.working, conflicts: [] }),
+    reconcile: (session, fresh) => ({ derived: fresh, working: session.working }),
     reduce: () => ({ ok: false, reason: 'Unknown action.' }),
     beginRun: (session, request) => (request === 'pass'
       ? { ok: true, size: 'pass', what: 'pass', label: 'the pass', total: 2, working: { pass: 'running' } }
@@ -366,7 +374,7 @@ describe('Discuss in chat on the review board', () => {
     const id = reviewSessionId({ url: PR_URL });
     const store = new SessionStore(path.join(dir, 'review-sessions'));
     await store.save({
-      id, kind: REVIEW_KIND, formatVersion: reviewKind.formatVersion, revision: 3, createdAt: 1, lastUsedAt: 1, conflicts: [],
+      id, kind: REVIEW_KIND, formatVersion: reviewKind.formatVersion, revision: 3, createdAt: 1, lastUsedAt: 1,
       recipe: { url: PR_URL, host: 'bitbucket.example.com', project: 'PROJ', repo: 'app', prId: 482 },
       derived: { readAt: 1, fingerprints: { head: REVIEWED }, data: { pr: { title: 'Add transfers', author: 'Jane', headCommit: REVIEWED }, jiraConfigured: false, models: { options: [] } } },
       working: {
@@ -492,7 +500,7 @@ describe('picking the report file of an import again', () => {
     sourceLabel: r => r.reportPath,
     initialWorking: () => ({ tab: 'new' }),
     read: async r => ({ readAt: 1, fingerprints: {}, data: { path: r.reportPath } }),
-    reconcile: (session, fresh) => ({ derived: fresh, working: session.working, conflicts: [] }),
+    reconcile: (session, fresh) => ({ derived: fresh, working: session.working }),
     reduce: (_session, action) => ({ ok: true, working: { tab: action.tab } }),
     view: session => ({ path: session.derived.data.path, tab: session.working.tab }),
   };
@@ -582,7 +590,7 @@ describe('the import board page and the extension', () => {
     return { tab, state };
   }
 
-  it('shows the tabs, switches them, previews a create and applies it with the native confirmation for more than one ticket', async () => {
+  it('shows the tabs, switches them, previews a create and applies it without a native confirmation, even for more than one ticket', async () => {
     const { tab, state } = await openImport(['Login.java', 'Report.java']);
     expect(state.view.tabs.map((t: { id: string; count: number }) => [t.id, t.count])).toEqual([['new', 2], ['ticketed', 0], ['stale', 0]]);
 
@@ -591,11 +599,11 @@ describe('the import board page and the extension', () => {
     const back = (await ask(tab, 'action', { revision: switched.revision, action: { type: 'tab', tab: 'new' } })).body;
 
     const plan = (await ask(tab, 'preview', { revision: back.revision, action: { type: 'new-create' } })).body;
-    expect(plan).toMatchObject({ title: 'Create 2 ticket(s) in PROJ', risky: true });
+    expect(plan).toMatchObject({ title: 'Create 2 ticket(s) in PROJ', risky: false });
     expect(plan.lines.map((l: { target: string }) => l.target)).toEqual(['Flaw 101', 'Flaw 102']);
     const applied = (await ask(tab, 'apply', { planId: plan.planId })).body;
 
-    expect(confirmed).toEqual(['Create 2 ticket(s) in PROJ']);
+    expect(confirmed).toEqual([]);
     expect(applied.results.map((r: { target: string; outcome: string }) => [r.target, r.outcome])).toEqual([['Flaw 101: PROJ-100', 'done'], ['Flaw 102: PROJ-101', 'done']]);
     expect(applied.state.view.new.rows.map((r: { created?: string }) => r.created)).toEqual(['PROJ-100', 'PROJ-101']);
     // A plan is used once.

@@ -1,4 +1,4 @@
-import type { ApplyLineResult, Conflict, WritePlan } from '../../sessions/sessionTypes';
+import type { ApplyLineResult, WritePlan } from '../../sessions/sessionTypes';
 import { applyTicketedActionChange, buildReviewPage } from '../../imports/rows';
 import { runTicketedActions, type TicketedEvent } from '../../imports/ticketedActions';
 import {
@@ -10,6 +10,7 @@ import { BATCH_LIMIT } from '../../utils/reportImport';
 import { descriptorOf, type HandlerPayload, type ImportHandler, type ImportSession } from './handlers';
 import { rowKeyOf, ticketedRows, type ImportData, type ImportRow } from './read';
 import { describeChange, rowRef, rowWritten, type ImportWorking } from './kind';
+import { sameUpdatedTime } from '../../utils/updatedTime';
 
 // The import board's handler for the Already ticketed tab: filters, per-row actions and their writes. vscode-free.
 //
@@ -295,7 +296,7 @@ export const ticketedTabHandler: ImportHandler = {
         target: unit.ticket,
         change: describeUnit(unit, unit.rowKeys.map(k => byKey.get(k)!), a => LABELS[a]),
       })),
-      risky: now.length > 1,
+      risky: false,
       payload: { handler: NAME, units: now },
     };
     return { ok: true, plan };
@@ -312,7 +313,8 @@ export const ticketedTabHandler: ImportHandler = {
 
     let working: ImportWorking = { ...session.working, writes: { ...session.working.writes, tickets: { ...session.working.writes.tickets } } };
     const results: ApplyLineResult[] = [];
-    const conflicts: Conflict[] = [];
+    /** Whether a ticket was refused because it changed in Jira since the board read it. */
+    let sawChange = false;
     /** `updated` after this Apply's own writes, so a second write to the same ticket is not taken for someone else's change. */
     const own: Record<string, string> = {};
     /** Tickets this Apply wrote whose new `updated` could not be read: a second write cannot tell its own change apart. */
@@ -351,8 +353,11 @@ export const ticketedTabHandler: ImportHandler = {
         await finish({ target: unit.ticket, outcome: 'failed', reason: `could not be read: ${messageOf(err)}` });
         continue;
       }
-      if (current !== expected) {
-        conflicts.push({ id: unit.ticket, target: unit.ticket, message: 'changed in Jira and was not written to.', stored: expected, fresh: current ?? 'gone' });
+      if (current === undefined || !sameUpdatedTime(current, expected)) {
+        deps.onDiag?.('warn', `Import board: ${unit.ticket} changed in Jira since the board read it, so it was not written to`, {
+          key: unit.ticket, stored: expected, current: current ?? 'gone',
+        });
+        sawChange = true;
         await finish({ target: unit.ticket, outcome: 'refused', reason: 'changed in Jira since the board read it' });
         continue;
       }
@@ -424,7 +429,9 @@ export const ticketedTabHandler: ImportHandler = {
       await finish(outcome);
     }
 
-    return { results, derived: session.derived, working, conflicts };
+    // This apply does not read the tab again, so a ticket that changed means the rows on show are old.
+    if (sawChange && !working.outOfDate.includes('ticketed')) working = { ...working, outOfDate: [...working.outOfDate, 'ticketed'] };
+    return { results, derived: session.derived, working };
   },
 
   view: (session, tab) => {
@@ -439,6 +446,8 @@ export const ticketedTabHandler: ImportHandler = {
       noDueDate: rows.filter(r => hasNoDueDate(r) && !rowWritten(session.derived.data, session.working.writes, r)).map(r => r.id),
       notice: stateOf(session.working).notice ?? null,
       counts: { changed, unchanged, all: rows.length },
+      // The tickets the next Apply writes, for the button that names them.
+      toWrite: Math.min(unitsOf(session.derived.data, boardRows(session)).length, BATCH_LIMIT),
       actionLabels: LABELS,
     };
   },

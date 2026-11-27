@@ -59,20 +59,17 @@ A ticket field whose value is usually the same across many tickets of a kind —
 ## Boards
 
 ### Board
-A page in an editor tab (a VS Code webview) that shows a session and sends the developer's actions to the extension over the tab's message channel; the page holds no state. Also called an editor view. A write is shown as a preview before a second Apply click, and a write to several tickets, a close or a Bitbucket post also needs a VS Code confirmation. Built: the security report (no writes), the ticket list (search, bulk move, bulk field update, cleanup), the sessions board, the import board (Veracode, Waltz, emails) and the PR review board.
+A page in an editor tab (a VS Code webview) that shows a session and sends the developer's actions to the extension over the tab's message channel; the page holds no state. Also called an editor view. The ticket list, cleanup and import boards write on one click, with the Apply button naming what it writes: the board on show is the preview. Merge start, add to ticket and the email model check keep one preview, and a Bitbucket post also needs a VS Code confirmation. Built: the security report (no writes), the ticket list (search, bulk move, bulk field update, cleanup), the sessions board, the import board (Veracode, Waltz, emails) and the PR review board.
 *Avoid:* "canvas" — VS Code canvases were tried and removed; a board is never one.
 
 ### Cleanup board
-A ticket list board loaded from a `cleanupRules` rule, or opened with a proposed transition (an ad-hoc bulk close). It shows the `cleanupFields` columns, lists each parent's open subtasks beneath it (they follow the parent's selection), and applies only the selected rows of the page being viewed.
+A ticket list board loaded from a `cleanupRules` rule, or opened with a proposed transition (an ad-hoc bulk close). It shows the `cleanupFields` columns, lists each parent's open subtasks beneath it (they follow the parent's selection), and applies only the selected rows of the page being viewed. It has no Close button and opens fresh when asked for with no tab open; an optional "check each ticket before writing" box on its action line is on by default.
 
 ### Import board
-The board that imports a Veracode or Waltz report, or a batch of `.eml` emails, into Jira, one session per report file or per set of email files. It shows the review's groups as tabs (New, Already ticketed, Stale, and Accepted for Waltz), each with its own Preview and Apply, and gives a running ticket merge a tab of its own. A tab whose rows changed while it holds unfinished choices is marked out of date and offers only Refresh, which keeps every choice whose rows still exist. An email import has only the New tab, after a boilerplate cleanup stage whose model check runs only as a previewed, applied step. It replaced the `@jira` imports with the same rules and results.
+The board that imports a Veracode or Waltz report, or a batch of `.eml` emails, into Jira, one session per report file or per set of email files. It shows the review's groups as tabs (New, Already ticketed, Stale, and Accepted for Waltz), each with its own actions, and gives a running ticket merge a tab of its own. A tab whose rows changed while it holds unfinished choices is marked out of date and offers only Refresh, which keeps every choice whose rows still exist. An email import has only the New tab, after a boilerplate cleanup stage whose model check runs only as a previewed, applied step (its consent). It replaced the `@jira` imports with the same rules and results.
 
 ### Session
 The extension's record of one piece of board work: the recipe (what was asked for), the data derived from Jira, Bitbucket, a report file or a model run, and the developer's working state. There is one per source, it is cached on disk so a restart continues it, and it is never the truth: the sources are. Not the same as the old `@jira`/`@bitbucket` multi-turn session kept in `workspaceState`.
-
-### Conflict
-Working state in a session whose target changed or disappeared when the sources were read again. It stays on the board until the developer resolves or drops it.
 
 ### Extension tool
 A Jira or Bitbucket tool registered with VS Code as a language model tool, which Copilot's agent calls. It is the only way Copilot reaches Ticket Sidekick's tools; the Jira ones come from one catalog (`src/tools/jiraTools/`). An earlier MCP server offering the same tools was removed.

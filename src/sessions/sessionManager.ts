@@ -4,7 +4,7 @@ import { capitalised } from '../utils/textCase';
 import type { ApplyProgressReport, CheckMode, ExportedFile, RegisteredKind, RunFinished, RunProgressReport, WorkingUpdate } from './boardKind';
 import { sessionIdFor } from './sessionId';
 import type { SessionStore } from './sessionStore';
-import { SessionError, type ApplyLineResult, type Conflict, type DerivedPart, type PlanLine, type RunningState, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
+import { SessionError, type ApplyLineResult, type DerivedPart, type PlanLine, type RunningState, type Session, type SessionSummary, type WritePlan } from './sessionTypes';
 
 // Owns every session of this window: opens or restores it, runs its actions one after another,
 // checks it against the sources, and guards its writes. A write needs a plan id that only a
@@ -32,7 +32,6 @@ export interface BoardState {
   restored: boolean;
   /** False when the session is too large to store and will not survive a restart. */
   stored: boolean;
-  conflicts: Conflict[];
   notice?: string;
   error?: string;
   /** What kind of failure `error` is, when the board kind names it (e.g. `report-not-found`), so the page can offer the way out. */
@@ -43,6 +42,8 @@ export interface BoardState {
   applying?: { done: number; total: number };
   /** The model runs going on this board. A pass locks every other control; a call only its own. */
   running?: RunningState[];
+  /** What the board keeps outside its sessions (its kind's `preferences`); absent for a board that keeps none. */
+  preferences?: Record<string, boolean>;
   view?: unknown;
 }
 
@@ -54,6 +55,11 @@ export interface PlanPreview {
 }
 
 export type OpenResult = { ok: true; id: string; title: string } | { ok: false; reason: string };
+
+export interface OpenOptions {
+  /** Whether a tab of this session is open now; a board that opens fresh keeps its session only while one is. */
+  hasTab?(id: string): boolean;
+}
 
 export interface SessionManagerDeps {
   store: SessionStore;
@@ -69,7 +75,6 @@ export interface SessionManagerDeps {
 }
 
 const DEFAULT_PLAN_TTL_MS = 10 * 60 * 1000;
-const DROP_CONFLICT = 'conflict/drop';
 const REBUILT_NOTICE = 'This board was rebuilt after an update: the stored session came from another version of Ticket Sidekick, and its earlier choices were not kept.';
 
 interface Entry {
@@ -85,6 +90,10 @@ interface Entry {
   error?: string;
   errorCode?: string;
   applying?: { done: number; total: number };
+  /** The kind's preferences as last read; read on every state request and after each change. */
+  preferences?: Record<string, boolean>;
+  /** The last read of the board's own settings failed; the warning is logged once until a read works. */
+  preferencesFailed?: boolean;
   /** The runs going on, by name. */
   runs: Map<string, ActiveRun>;
   queue: Promise<unknown>;
@@ -156,7 +165,8 @@ export class SessionManager {
   }
 
   private async persist(entry: Entry): Promise<void> {
-    if (!entry.session) return;
+    // An entry that was discarded or replaced while its work ran must not bring its session back to disk.
+    if (!entry.session || this.entries.get(entry.id) !== entry) return;
     try {
       entry.stored = await this.deps.store.save(entry.session);
     } catch (err) {
@@ -232,7 +242,7 @@ export class SessionManager {
       entry.session = {
         id: entry.id, kind: kind.kind, formatVersion: kind.formatVersion, revision: 1,
         createdAt: now, lastUsedAt: now, recipe: entry.recipe, derived,
-        working: kind.initialWorking(entry.recipe), conflicts: [],
+        working: kind.initialWorking(entry.recipe),
       };
       // Stored before the board shows as ready, so "ready" always means "survives a restart".
       await this.persist(entry);
@@ -259,15 +269,12 @@ export class SessionManager {
       const { kind } = entry.reg;
       const fresh = await kind.read(session.recipe, await entry.reg.deps());
       const merged = kind.reconcile(session, fresh, mode);
-      if (merged.conflicts.length === 0 && unchanged(session, merged)) {
+      if (unchanged(session, merged)) {
         // Nothing changed: only the read time moves, and the revision stays, so an open preview stays valid.
         entry.session = { ...session, derived: { ...session.derived, readAt: merged.derived.readAt }, lastUsedAt: this.deps.now() };
       } else {
-        // A conflict stays until the developer resolves or drops it; a later check must not erase it.
-        const fresher = new Set(merged.conflicts.map(c => c.id));
         entry.session = {
           ...session, derived: merged.derived, working: merged.working,
-          conflicts: [...session.conflicts.filter(c => !fresher.has(c.id)), ...merged.conflicts],
           revision: session.revision + 1, lastUsedAt: this.deps.now(),
         };
       }
@@ -282,13 +289,15 @@ export class SessionManager {
   }
 
   /** Validates an open request and returns the session it belongs to, creating or restoring it. */
-  async open(kindName: string, input: unknown): Promise<OpenResult> {
+  async open(kindName: string, input: unknown, options: OpenOptions = {}): Promise<OpenResult> {
     const reg = this.kinds.get(kindName);
     if (!reg) return { ok: false, reason: 'Unknown board.' };
     const validated = await reg.kind.validate(input, await reg.deps());
     if (!validated.ok) return validated;
     const id = sessionIdFor(reg.kind.kind, reg.kind.sourceKey(validated.recipe));
     const title = reg.kind.title(validated.recipe);
+    // A board that opens fresh forgets its session when asked for with no tab open; it is built again below.
+    if (reg.kind.freshOnOpen && options.hasTab && !options.hasTab(id)) await this.discard(id);
     const formatBefore = this.entries.has(id) ? undefined : (await this.deps.store.load(id))?.session.formatVersion;
     const otherFormat = formatBefore !== undefined && formatBefore !== reg.kind.formatVersion;
     // A stored session of another format is rebuilt from this request, which is what the board is opened with now.
@@ -315,6 +324,24 @@ export class SessionManager {
     return { ok: true, id, title };
   }
 
+  /** Whether this board starts clean when it is asked for with no tab open. */
+  opensFresh(kindName: string): boolean {
+    return this.kinds.get(kindName)?.kind.freshOnOpen === true;
+  }
+
+  /**
+   * Forgets a stored session's choices and results and builds it again from its own recipe, so the
+   * board opens clean without a new request. False when no such session is stored.
+   */
+  async startOver(kindName: string, id: string): Promise<boolean> {
+    const reg = this.kinds.get(kindName);
+    const session = reg ? await this.read(kindName, id) : undefined;
+    if (!reg || !session) return false;
+    await this.discard(id);
+    this.building(id, reg, session.recipe);
+    return true;
+  }
+
   private async entry(kindName: string, id: string): Promise<Entry> {
     const entry = await this.find(this.kind(kindName), id);
     if (!entry) throw new SessionError(404, 'This session no longer exists. Ask for the board again.');
@@ -327,18 +354,50 @@ export class SessionManager {
     return {
       id: entry.id, kind: kind.kind, title: kind.title(entry.recipe), status: entry.status, tick: entry.tick,
       revision: session?.revision ?? 0, asOf: session?.derived.readAt, restored: entry.restored, stored: entry.stored,
-      conflicts: session?.conflicts ?? [], notice: entry.notice, error: entry.error,
+      notice: entry.notice, error: entry.error,
       ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
       writesBlocked: this.writesBlocked(entry),
       ...(entry.applying ? { applying: { ...entry.applying } } : {}),
       ...(entry.runs.size > 0 ? { running: [...entry.runs.values()].map(r => ({ ...r.state })) } : {}),
+      ...(entry.preferences ? { preferences: { ...entry.preferences } } : {}),
       view: session ? kind.view(session) : undefined,
     };
+  }
+
+  /** Reads what the kind keeps outside its sessions each time the board's state is asked for, since another tab or window may have changed it; a failed read keeps the last value. */
+  private async loadPreferences(entry: Entry): Promise<void> {
+    const { kind } = entry.reg;
+    if (!kind.preferences) return;
+    try {
+      entry.preferences = await kind.preferences.read(await entry.reg.deps());
+      entry.preferencesFailed = false;
+    } catch (err) {
+      // Said once until a read works again, since the board asks on every poll.
+      if (!entry.preferencesFailed) this.log('warn', 'Could not read what the board keeps outside its sessions', { kind: kind.kind, error: messageOf(err) });
+      entry.preferencesFailed = true;
+    }
+  }
+
+  /**
+   * Changes one thing the board keeps outside its sessions. It is not part of the session, so the
+   * revision stays and no preview is needed; the kind refuses a name or value it does not take.
+   */
+  async preference(kindName: string, id: string, name: string, value: unknown): Promise<BoardState> {
+    const entry = await this.entry(kindName, id);
+    const { kind } = entry.reg;
+    if (!kind.preferences) throw new SessionError(404, 'This board keeps no settings of its own.');
+    const deps = await entry.reg.deps();
+    const refused = await kind.preferences.write(name, value, deps);
+    if (refused !== undefined) throw new SessionError(400, refused);
+    entry.preferences = await kind.preferences.read(deps);
+    this.changed(entry);
+    return this.toState(entry);
   }
 
   /** The session's state; with `sinceTick`, waits until it changes or `waitMs` pass. */
   async state(kindName: string, id: string, sinceTick?: number, waitMs = 0): Promise<BoardState> {
     const entry = await this.entry(kindName, id);
+    await this.loadPreferences(entry);
     if (sinceTick !== undefined && sinceTick === entry.tick && waitMs > 0) {
       await new Promise<void>(resolve => {
         const timer = setTimeout(() => { entry.waiters.delete(wake); resolve(); }, waitMs);
@@ -383,15 +442,9 @@ export class SessionManager {
     const entry = await this.entry(kindName, id);
     return this.enqueue(entry, async () => {
       const session = this.requireCurrent(entry, revision);
-      const drop = action as { type?: unknown; id?: unknown } | null;
-      let next: Session;
-      if (drop && drop.type === DROP_CONFLICT && typeof drop.id === 'string') {
-        next = { ...session, conflicts: session.conflicts.filter(c => c.id !== drop.id) };
-      } else {
-        const reduced = entry.reg.kind.reduce(session, action);
-        if (!reduced.ok) throw new SessionError(400, reduced.reason);
-        next = { ...session, working: reduced.working };
-      }
+      const reduced = entry.reg.kind.reduce(session, action);
+      if (!reduced.ok) throw new SessionError(400, reduced.reason);
+      const next: Session = { ...session, working: reduced.working };
       entry.session = { ...next, revision: session.revision + 1, lastUsedAt: this.deps.now() };
       await this.persist(entry);
       this.changed(entry);
@@ -489,7 +542,6 @@ export class SessionManager {
       }
       entry.session = {
         ...session, derived: applied.derived, working: applied.working,
-        conflicts: [...session.conflicts, ...(applied.conflicts ?? [])],
         revision: session.revision + 1, lastUsedAt: this.deps.now(),
       };
       // A session discarded while the Apply ran stays discarded: the results still go back to the page.

@@ -35,7 +35,6 @@ async function session(working?: Partial<SecurityReportWorking>, d = deps()): Pr
     id: 'a'.repeat(24), kind: 'security-report', formatVersion: 1, revision: 1, createdAt: 0, lastUsedAt: 0, recipe,
     derived: await securityReportKind.read(recipe, d),
     working: { ...securityReportKind.initialWorking(recipe), ...working },
-    conflicts: [],
   };
 }
 
@@ -217,7 +216,6 @@ describe('a restored report checked against Jira', () => {
     const fresh = await securityReportKind.read(stored.recipe, moved);
     const merged = securityReportKind.reconcile(stored, fresh);
     expect(merged.working).toEqual({ release: null, flag: null, tool: 'veracode', sort: { column: 'due', descending: false } });
-    expect(merged.conflicts).toEqual([]);
   });
 });
 

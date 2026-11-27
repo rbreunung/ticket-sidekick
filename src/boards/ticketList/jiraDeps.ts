@@ -22,6 +22,8 @@ export interface TicketListJiraOptions {
   /** The first workspace folder, where the workflow cache lives. */
   workspaceFolder(): string | undefined;
   now(): number;
+  /** Where the board's own settings are kept, outside its sessions; absent means the defaults and no memory. */
+  preferences?: { get(): boolean | undefined; set(on: boolean): Promise<void> };
   onDiag?: DiagLogger;
 }
 
@@ -84,6 +86,10 @@ export function ticketListJiraDeps(options: TicketListJiraOptions): TicketListDe
       return access.configured ? access.config.baseUrl : undefined;
     },
     now: options.now,
+    ...(options.onDiag ? { onDiag: options.onDiag } : {}),
+    // On unless the developer turned it off on the board.
+    checkBeforeWrite: async () => options.preferences?.get() ?? true,
+    setCheckBeforeWrite: async on => { await options.preferences?.set(on); },
 
     resolveFilter: async filter => {
       try {

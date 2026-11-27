@@ -538,6 +538,16 @@ export function resolveBoilerplatePatterns(
   return patterns;
 }
 
+/**
+ * Whether the saved setting holds this pattern already: the same kind and the same phrases, read the
+ * way the setting is (phrases trimmed, a blank end as none). An entry that is not a pattern is skipped.
+ */
+export function patternIsSaved(saved: unknown, pattern: BoilerplatePattern): boolean {
+  const start = pattern.start.trim();
+  const end = pattern.end?.trim() || undefined;
+  return resolveBoilerplatePatterns(saved).some(p => p.kind === pattern.kind && p.start === start && p.end === end);
+}
+
 // A line's matchable text: the longest fragment between `[📎 …]` markers, emphasis removed.
 function phraseText(line: string): string {
   return line.split(/\[📎 [^\]]*\]/).map(cleanLine).reduce((a, b) => (b.length > a.length ? b : a), '');

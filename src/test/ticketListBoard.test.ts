@@ -22,12 +22,18 @@ interface Fake extends TicketListDeps {
   jira: Map<string, TicketRow>;
   moved: string[];
   fields: string[];
+  /** How many times a ticket was read one by one, before or after a write. */
+  reads: number;
+  /** What the board keeps outside its sessions: whether each ticket is read before it is written. */
+  check: boolean;
 }
 
 function fake(rows: TicketRow[] = [row(1), row(2), row(3, 'Done')]): Fake {
   const jira = new Map(rows.map(r => [r.key, { ...r }]));
   const deps: Fake = {
-    jira, moved: [], fields: [],
+    jira, moved: [], fields: [], reads: 0, check: true,
+    checkBeforeWrite: async () => deps.check,
+    setCheckBeforeWrite: async on => { deps.check = on; },
     jiraConfigured: async () => true,
     baseUrl: async () => 'https://jira.example.com',
     resolveFilter: async name => (name === 'mine' || name === '42' ? { id: '42', name: 'My open tickets', jql: 'assignee = currentUser()' } : `No saved filters found matching "${name}".`),
@@ -36,7 +42,7 @@ function fake(rows: TicketRow[] = [row(1), row(2), row(3, 'Done')]): Fake {
       rows: [...jira.values()].map(r => ({ ...r, extra: Object.fromEntries(fieldIds.map(id => [id, `${id} of ${r.key}`])) })),
       truncated: false,
     }),
-    readTicket: async key => { const t = jira.get(key); return t ? { status: t.status, updated: t.updated } : undefined; },
+    readTicket: async key => { deps.reads++; const t = jira.get(key); return t ? { status: t.status, updated: t.updated } : undefined; },
     move: async (key, status) => {
       if (key === 'PROJ-2' && status === 'Blocked') throw new Error('no path to Blocked');
       const t = jira.get(key)!; t.status = status; t.updated = 't2'; deps.moved.push(`${key}→${status}`); return 'moved';
@@ -61,7 +67,7 @@ async function open(deps: Fake, input: unknown = { jql: 'project = PROJ' }): Pro
   if (!validated.ok) throw new Error(validated.reason);
   return {
     id: 'a'.repeat(24), kind: 'ticket-list', formatVersion: 1, revision: 1, createdAt: 0, lastUsedAt: 0, recipe: validated.recipe,
-    derived: await ticketListKind.read(validated.recipe, deps), working: ticketListKind.initialWorking(validated.recipe), conflicts: [],
+    derived: await ticketListKind.read(validated.recipe, deps), working: ticketListKind.initialWorking(validated.recipe),
   };
 }
 
@@ -155,6 +161,40 @@ describe('selecting and choosing a change', () => {
   });
 });
 
+describe('the Apply button of a ticket list', () => {
+  const button = (s: ListSession) => ticketListKind.view(s).applyButton;
+  const move = { type: 'change', change: { type: 'transition', status: 'Done' } } as const;
+
+  it('draws its own action line, so the header offers neither Refresh nor Close', async () => {
+    expect(ticketListKind.view(await open(fake())).ownActionLine).toBe(true);
+  });
+
+  it('reads Apply and is off while no change is chosen or no ticket is selected', async () => {
+    const s = await open(fake());
+    expect(button(s)).toEqual({ label: 'Apply', enabled: false });
+    expect(button(act(s, { type: 'select-all' }))).toEqual({ label: 'Apply', enabled: false });
+    expect(button(act(s, move))).toEqual({ label: 'Apply', enabled: false });
+  });
+
+  it('names the move and the number of selected tickets, with the singular for one', async () => {
+    let s = act(await open(fake()), move);
+    s = act(s, { type: 'select', key: 'PROJ-1', on: true });
+    expect(button(s)).toEqual({ label: 'Move 1 ticket to Done', enabled: true });
+    s = act(s, { type: 'select', key: 'PROJ-2', on: true });
+    expect(button(s)).toEqual({ label: 'Move 2 tickets to Done', enabled: true });
+  });
+
+  it('names a field change by what it does to the field', async () => {
+    let s = act(await open(fake()), { type: 'select-all' });
+    s = act(s, { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup' } });
+    expect(button(s).label).toBe('Set labels on 3 tickets');
+    s = act(s, { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup', operation: 'add' } });
+    expect(button(s).label).toBe('Add to labels on 3 tickets');
+    s = act(s, { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup', operation: 'remove' } });
+    expect(button(s).label).toBe('Remove from labels on 3 tickets');
+  });
+});
+
 describe('previewing a change', () => {
   it('lists exactly what is written to each selected ticket', async () => {
     let s = await open(fake());
@@ -163,15 +203,15 @@ describe('previewing a change', () => {
     expect(planned).toMatchObject({ ok: true, plan: { title: 'Move 1 ticket(s) to In Review', lines: [{ target: 'PROJ-1', change: 'Status: Open → In Review' }], risky: false } });
   });
 
-  it('needs the VS Code confirmation for more than one ticket, and for closing even one', async () => {
+  it('asks for no VS Code confirmation, not for several tickets and not for closing one: the board is the preview', async () => {
     let s = await open(fake());
     s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup' } });
-    expect(ticketListKind.plan!(s, { type: 'apply' })).toMatchObject({ ok: true, plan: { risky: true } });
+    expect(ticketListKind.plan!(s, { type: 'apply' })).toMatchObject({ ok: true, plan: { risky: false } });
 
     let one = await open(fake());
     one = act(act(one, { type: 'select', key: 'PROJ-1', on: true }), { type: 'change', change: { type: 'transition', status: 'Closed', resolution: 'Fixed' } });
     const planned = ticketListKind.plan!(one, { type: 'apply' });
-    expect(planned).toMatchObject({ ok: true, plan: { risky: true, lines: [{ target: 'PROJ-1', change: 'Status: Open → Closed, resolution Fixed' }] } });
+    expect(planned).toMatchObject({ ok: true, plan: { risky: false, lines: [{ target: 'PROJ-1', change: 'Status: Open → Closed, resolution Fixed' }] } });
   });
 
   it('refuses without a change or without a selection', async () => {
@@ -203,7 +243,74 @@ describe('applying a change', () => {
     const { applied } = await apply(s, deps);
     expect(deps.fields).toEqual(['PROJ-1.labels=cleanup', 'PROJ-3.labels=cleanup']);
     expect(applied.results[1]).toEqual({ target: 'PROJ-2', outcome: 'refused', reason: 'changed in Jira since the board read it' });
-    expect(applied.conflicts).toEqual([{ id: 'PROJ-2', target: 'PROJ-2', message: 'changed in Jira and was not written to.', stored: 'Open', fresh: 'In Progress' }]);
+    // The list was read again after the writes, so the view is current and the refused ticket can be selected once more.
+    expect(applied.working.outOfDate).toBeNull();
+    const again = { ...s, derived: applied.derived, working: applied.working } as ListSession;
+    expect(ticketListKind.view(again).rows.find(r => r.key === 'PROJ-2')).toMatchObject({ status: 'In Progress', updated: 't9' });
+    expect(ticketListKind.reduce(again, { type: 'select', key: 'PROJ-2', on: true })).toMatchObject({ ok: true });
+  });
+
+  it('marks the list out of date when a ticket changed and the list could not be read again afterwards', async () => {
+    const deps = fake();
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup' } });
+    Object.assign(deps.jira.get('PROJ-2')!, { status: 'In Progress', updated: 't9' });
+    deps.search = async () => { throw new Error('Jira answered 503'); };
+    const { applied } = await apply(s, deps);
+    expect(applied.working.outOfDate).toEqual({ changed: ['PROJ-2'], gone: [], added: 0 });
+    const stale = { ...s, derived: applied.derived, working: applied.working } as ListSession;
+    expect(ticketListKind.plan!(stale, { type: 'apply' })).toMatchObject({ ok: false, reason: expect.stringContaining('Refresh') });
+  });
+
+  it('does not mark the list out of date for a ticket Jira refused for another reason', async () => {
+    const deps = fake();
+    let s = await open(deps);
+    s = act(act(s, { type: 'select', key: 'PROJ-2', on: true }), { type: 'change', change: { type: 'transition', status: 'Blocked' } });
+    deps.search = async () => { throw new Error('Jira answered 503'); };
+    const { applied } = await apply(s, deps);
+    expect(applied.results).toEqual([expect.objectContaining({ target: 'PROJ-2', outcome: 'failed' })]);
+    expect(applied.working.outOfDate).toBeNull();
+  });
+
+  it('writes a ticket whose update time Jira now spells another way but is the same moment', async () => {
+    const deps = fake([row(1, 'Open', '2026-05-01T10:00:00.000+0100')]);
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup' } });
+    deps.jira.get('PROJ-1')!.updated = '2026-05-01T10:00:00.000+01:00';
+    const { applied } = await apply(s, deps);
+    expect(deps.fields).toEqual(['PROJ-1.labels=cleanup']);
+    expect(applied.results).toEqual([{ target: 'PROJ-1', outcome: 'done' }]);
+  });
+
+  it('logs the ticket and both update times when it refuses a ticket that changed', async () => {
+    const deps = fake();
+    const logs: Array<{ level: string; message: string; details?: unknown }> = [];
+    deps.onDiag = (level, message, details) => { logs.push({ level, message, details }); };
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup' } });
+    Object.assign(deps.jira.get('PROJ-2')!, { updated: 't9' });
+    await apply(s, deps);
+    expect(logs.filter(l => l.level === 'warn').map(l => l.details)).toEqual([{ key: 'PROJ-2', stored: 't1', current: 't9' }]);
+  });
+
+  it('reads each ticket before and after writing it while the board checks before writing', async () => {
+    const deps = fake();
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup' } });
+    await apply(s, deps);
+    expect(deps.reads).toBe(6);
+  });
+
+  it('writes without reading any ticket first or after when the board does not check, even one that changed', async () => {
+    const deps = fake();
+    deps.check = false;
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'field', field: 'labels', value: 'cleanup' } });
+    Object.assign(deps.jira.get('PROJ-2')!, { updated: 't9' });
+    const { applied } = await apply(s, deps);
+    expect(deps.reads).toBe(0);
+    expect(deps.fields).toEqual(['PROJ-1.labels=cleanup', 'PROJ-2.labels=cleanup', 'PROJ-3.labels=cleanup']);
+    expect(applied.results.map(r => r.outcome)).toEqual(['done', 'done', 'done']);
   });
 
   it('reports a ticket Jira refused and goes on with the others', async () => {
@@ -233,7 +340,6 @@ describe('a list checked against Jira', () => {
     Object.assign(deps.jira.get('PROJ-1')!, { status: 'Done', updated: 't9' });
     deps.jira.delete('PROJ-3');
     const merged = ticketListKind.reconcile(s, await ticketListKind.read(s.recipe, deps), 'background');
-    expect(merged.conflicts).toEqual([]);
     const checked = { ...s, derived: merged.derived, working: merged.working };
     const view = ticketListKind.view(checked);
     expect(view.outOfDate).toEqual({ changed: ['PROJ-1'], gone: ['PROJ-3'], added: 0 });
@@ -374,7 +480,7 @@ describe('paging', () => {
     s = act(act(s, { type: 'page', page: 2 }), { type: 'change', change: { type: 'transition', status: 'Done' } });
     expect(ticketListKind.view(s).selectedCount).toBe(119);
     const planned = ticketListKind.plan!(s, { type: 'apply' });
-    expect(planned).toMatchObject({ ok: true, plan: { title: 'Move 119 ticket(s) to Done', risky: true } });
+    expect(planned).toMatchObject({ ok: true, plan: { title: 'Move 119 ticket(s) to Done', risky: false } });
     expect((planned as { plan: { lines: unknown[] } }).plan.lines).toHaveLength(119);
   });
 });
@@ -449,6 +555,25 @@ describe('an Apply interrupted and the board restored', () => {
     ]);
     const planned = ticketListKind.plan!(shown, { type: 'apply' });
     expect(planned.ok && planned.plan.lines.map(l => l.target)).toEqual(['PROJ-3', 'PROJ-4', 'PROJ-5']);
+  });
+
+  it('does not call a ticket it moved changed when the search spells its new update time another way', async () => {
+    const deps = five();
+    const move = deps.move;
+    deps.move = async (key, status, resolution) => {
+      const note = await move(key, status, resolution);
+      deps.jira.get(key)!.updated = '2026-05-01T11:00:00.000+0100';
+      return note;
+    };
+    deps.search = async () => ({
+      rows: [...deps.jira.values()].map(r => ({ ...r, updated: r.updated.replace(/([+-]\d\d)(\d\d)$/, '$1:$2') })),
+      truncated: false,
+    });
+    let s = await open(deps);
+    s = act(act(s, { type: 'select-all' }), { type: 'change', change: { type: 'transition', status: 'In Review' } });
+    const { working } = await interruptedApply(s, deps, 2);
+    const checked = ticketListKind.reconcile({ ...s, working }, await ticketListKind.read(s.recipe, deps), 'background');
+    expect(checked.working.outOfDate).toBeNull();
   });
 
   it('is out of date when a ticket it moved was changed again in Jira by someone else', async () => {
@@ -621,5 +746,22 @@ describe('a board on one of Jira\'s built-in filters', () => {
     const view = ticketListKind.view(await open(deps, { filter: '-1' }));
     expect(searched).toEqual(['assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC']);
     expect(view).toMatchObject({ title: 'Tickets: filter "My open issues"', jiraUrl: 'https://jira.example.com/issues/?filter=-1', queryUnread: false });
+  });
+});
+
+describe('the check before writing as a setting of the board', () => {
+  it('is on until the developer turns it off, and says so', async () => {
+    const deps = fake();
+    expect(await ticketListKind.preferences!.read(deps)).toEqual({ checkBeforeWrite: true });
+    expect(await ticketListKind.preferences!.write('checkBeforeWrite', false, deps)).toBeUndefined();
+    expect(deps.check).toBe(false);
+    expect(await ticketListKind.preferences!.read(deps)).toEqual({ checkBeforeWrite: false });
+  });
+
+  it('takes nothing else: no other name, and only on or off', async () => {
+    const deps = fake();
+    expect(await ticketListKind.preferences!.write('somethingElse', true, deps)).toEqual(expect.any(String));
+    expect(await ticketListKind.preferences!.write('checkBeforeWrite', 'no', deps)).toEqual(expect.any(String));
+    expect(deps.check).toBe(true);
   });
 });

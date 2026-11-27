@@ -121,12 +121,32 @@ export class BoardPanels implements BoardHost {
     });
   }
 
+  /**
+   * The board tabs VS Code has brought back after a restart but not shown yet. It hands such a tab to
+   * `deserializeWebviewPanel` only when the tab is first shown, so until then the extension has no panel
+   * for it; the tab list still has it. A title no live panel has is what tells the two apart.
+   */
+  private unrestoredTabs(title: string | undefined): vscode.Tab[] {
+    if (!title || [...this.panels.values()].some(panel => panel.title === title)) return [];
+    const groups = vscode.window.tabGroups?.all ?? [];
+    return groups.flatMap(group => group.tabs)
+      .filter(tab => tab.label === title && tab.input instanceof vscode.TabInputWebview && tab.input.viewType.endsWith(BOARD_VIEW_TYPE));
+  }
+
+  /** Whether the board's session has a tab, shown or waiting to be restored. */
+  private hasTab(kind: string, id: string, title: string | undefined): boolean {
+    return this.panels.has(this.key({ kind, id, title: '' })) || this.unrestoredTabs(title).length > 0;
+  }
+
   private reveal(state: BoardPanelState): void {
     const existing = this.panels.get(this.key(state));
     if (existing) {
       existing.reveal();
       return;
     }
+    // A tab waiting to be restored is replaced by the new one, so the board is not open twice.
+    const waiting = this.unrestoredTabs(state.title);
+    if (waiting.length > 0) void vscode.window.tabGroups.close(waiting);
     const panel = vscode.window.createWebviewPanel(BOARD_VIEW_TYPE, state.title, vscode.ViewColumn.Active, { ...this.options(), retainContextWhenHidden: true });
     this.show(panel, state);
   }
@@ -154,7 +174,9 @@ export class BoardPanels implements BoardHost {
       return { ok: true, title: REVIEW_START_TITLE };
     }
     if (!this.kinds.includes(kind)) return { ok: false, reason: 'there is no board of that name.' };
-    const opened = await this.manager.open(kind, input ?? {});
+    // A board that opens fresh keeps its session only while its tab is open; otherwise it starts clean.
+    const titles = new Map((await this.manager.list()).map(row => [row.id, row.title]));
+    const opened = await this.manager.open(kind, input ?? {}, { hasTab: id => this.hasTab(kind, id, titles.get(id)) });
     if (!opened.ok) return opened;
     this.reveal({ kind, id: opened.id, title: opened.title });
     return { ok: true, title: opened.title };
@@ -165,6 +187,8 @@ export class BoardPanels implements BoardHost {
     if (!this.kinds.includes(kind)) return { ok: false, reason: 'there is no board of that name.' };
     const row = (await this.manager.list()).find(s => s.kind === kind && s.id === id);
     if (!row) return { ok: false, reason: 'this session is no longer stored.' };
+    // A board that opens fresh starts over from its stored list when no tab of it is open.
+    if (this.manager.opensFresh(kind) && !this.hasTab(kind, id, row.title)) await this.manager.startOver(kind, id);
     this.reveal({ kind, id, title: row.title });
     return { ok: true };
   }
@@ -180,6 +204,8 @@ export class BoardPanels implements BoardHost {
           panel.dispose();
           return;
         }
+        // A board that opens fresh is read again when VS Code brings its tab back, so it shows current data.
+        if (state.id && this.manager.opensFresh(state.kind)) await this.manager.startOver(state.kind, state.id);
         this.show(panel, state);
       },
     };

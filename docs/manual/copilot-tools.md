@@ -60,7 +60,7 @@ A skill is a set of instructions Copilot follows, using the tools above. Type it
 
 The tools that only read Jira are marked as read-only and run without asking. Every tool that changes something (the five under "Tools that change Jira", and `jira_load_ticket`, which writes files into your workspace) shows a confirmation first, with every value it is about to write, and does nothing until you approve it. If you turned on VS Code's `chat.tools.autoApprove`, they run without asking.
 
-A change to several tickets at once is never done by a tool. Copilot opens a ticket list board with the change proposed, and you preview and apply it there; see [Boards](boards.md).
+A change to several tickets at once is never done by a tool. Copilot opens a ticket list board with the change proposed, and you check and apply it there; see [Boards](boards.md).
 
 ## Troubleshooting
 

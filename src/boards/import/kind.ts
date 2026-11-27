@@ -12,6 +12,7 @@ import { buildReviewPage } from '../../imports/rows';
 import type { AcceptedHidden, TicketedAction } from '../../imports/types';
 import { countedNoun } from '../../utils/chatPrimitives';
 import type { DateKind } from '../../utils/waltzDates';
+import { sameUpdatedTime } from '../../utils/updatedTime';
 import {
   ReportNotFoundError, isEmailRow, isLeftOut, newRows, readImport, rowKeyOf, slicesOf, staleTickets, ticketedRows,
   type ImportData, type ImportDeps, type ImportRow, type ImportTab, type SliceEntry,
@@ -395,7 +396,7 @@ function hasUnfinishedChoices(data: ImportData, working: ImportWorking, tab: Imp
   return false;
 }
 
-const sameUpdated = (a?: string, b?: string) => a === undefined || b === undefined || a === b;
+const sameUpdated = (a?: string, b?: string) => a === undefined || b === undefined || sameUpdatedTime(a, b);
 
 /**
  * The tabs whose slice differs between the stored and the fresh reading, after taking off what the
@@ -409,7 +410,7 @@ function changedTabs(stored: DerivedPart<ImportData>, fresh: DerivedPart<ImportD
   const createdTickets = new Set(writes.created.map(c => c.key));
   const own = (ticket: string | undefined, updated: string | undefined) => {
     const record = ticket ? writes.tickets[ticket] : undefined;
-    return record !== undefined && record.updated !== undefined && record.updated === updated;
+    return record !== undefined && record.updated !== undefined && updated !== undefined && sameUpdatedTime(record.updated, updated);
   };
   const changed = new Set<ImportTab>();
 
@@ -566,6 +567,9 @@ function matches(filter: string | undefined, ...fields: Array<string | null | un
 export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, ImportAction, ImportView, ImportDeps> = {
   kind: IMPORT_KIND,
   formatVersion: 1,
+  // An import is a reading of a report and Jira with some choices: opened anew, or brought back after a
+  // restart, it is read again, so what it shows is current. An unfinished ticket merge is not carried over.
+  freshOnOpen: true,
   title: recipe => importTitle(recipe),
 
   validate: async (input, deps) => {
@@ -606,16 +610,16 @@ export const importKind: BoardKind<ImportRecipe, ImportData, ImportWorking, Impo
         const take = new Set(tabs.filter(tab => tab !== 'ticketed'));
         const derived = compose(session.derived, fresh, take, tabs);
         const kept = keepChoices(session, derived.data);
-        return { derived, working: { ...session.working, ...kept, outOfDate: ['ticketed'] }, conflicts: [] };
+        return { derived, working: { ...session.working, ...kept, outOfDate: ['ticketed'] } };
       }
       const kept = keepChoices(session, fresh.data);
-      return { derived: fresh, working: { ...session.working, ...kept, outOfDate: [] }, conflicts: [] };
+      return { derived: fresh, working: { ...session.working, ...kept, outOfDate: [] } };
     }
     const changed = changedTabs(session.derived, fresh, session.working.writes, tabs);
     const marked = tabs.filter(tab => changed.has(tab)
       && (hasUnfinishedChoices(session.derived.data, session.working, tab) || IMPORT_HANDLERS.some(h => h.unfinished?.(session, tab) ?? false)));
     const take = new Set(tabs.filter(tab => !marked.includes(tab)));
-    return { derived: compose(session.derived, fresh, take, tabs), working: { ...session.working, outOfDate: marked }, conflicts: [] };
+    return { derived: compose(session.derived, fresh, take, tabs), working: { ...session.working, outOfDate: marked } };
   },
 
   reduce: (session, generic) => {

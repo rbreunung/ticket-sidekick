@@ -176,7 +176,7 @@ async function openVeracode(flaws: Flaw[]): Promise<ImportSession> {
   if (!validated.ok) throw new Error(validated.reason);
   return {
     id: importSessionId(r), kind: 'import', formatVersion: importKind.formatVersion, revision: 1, createdAt: 0, lastUsedAt: 0,
-    recipe: validated.recipe, derived: await importKind.read(validated.recipe, deps), working: importKind.initialWorking(validated.recipe), conflicts: [],
+    recipe: validated.recipe, derived: await importKind.read(validated.recipe, deps), working: importKind.initialWorking(validated.recipe),
   };
 }
 
@@ -349,9 +349,9 @@ describe('creating tickets for New rows', () => {
     expect(view(session).ext.new).toMatchObject({ toCreate: 72, perApply: 50 });
   });
 
-  it('asks for the native confirmation only for a plan over two or more tickets', async () => {
+  it('asks for no native confirmation, not even for a plan over two or more tickets', async () => {
     const session = await openVeracode(flaws('101', '102'));
-    expect(plan(session, { type: 'new-create' }).risky).toBe(true);
+    expect(plan(session, { type: 'new-create' }).risky).toBe(false);
     expect(plan(only(session, '102'), { type: 'new-create' }).risky).toBe(false);
   });
 

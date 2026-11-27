@@ -56,6 +56,8 @@ function fake(options: { rules?: CleanupRule[]; tickets?: TicketRow[]; graph?: W
     doneStatuses: async () => options.done,
     resolutions: async () => ['Fixed', "Won't Fix"],
     now: () => 1000,
+    checkBeforeWrite: async () => true,
+    setCheckBeforeWrite: async () => undefined,
   };
   return deps;
 }
@@ -67,7 +69,7 @@ async function open(deps: Fake, input: unknown = { cleanupRule: 'Close released 
   if (!validated.ok) throw new Error(validated.reason);
   return {
     id: 'c'.repeat(24), kind: 'ticket-list', formatVersion: 2, revision: 1, createdAt: 0, lastUsedAt: 0, recipe: validated.recipe,
-    derived: await ticketListKind.read(validated.recipe, deps), working: ticketListKind.initialWorking(validated.recipe), conflicts: [],
+    derived: await ticketListKind.read(validated.recipe, deps), working: ticketListKind.initialWorking(validated.recipe),
   };
 }
 
@@ -245,6 +247,19 @@ describe('choosing tickets on a cleanup', () => {
     expect(deps.moved).toEqual(['PROJ-1→Done (Fixed)', 'PROJ-2→Done (Fixed)']);
   });
 
+  it('names the move and the tickets of the page in view on its Apply button, once the resolution is chosen', async () => {
+    const deps = fake();
+    let s = await open(deps);
+    const button = () => ticketListKind.view(s).applyButton;
+    expect(button()).toEqual({ label: 'Apply', enabled: false });
+    s = act(s, { type: 'resolution', resolution: 'Fixed' });
+    expect(button()).toEqual({ label: 'Move 2 tickets to Done', enabled: true });
+    s = act(s, { type: 'select', key: 'PROJ-2', on: false });
+    expect(button()).toEqual({ label: 'Move 1 ticket to Done', enabled: true });
+    s = act(s, { type: 'select-none' });
+    expect(button()).toEqual({ label: 'Apply', enabled: false });
+  });
+
   it('sends the chosen resolution only with moves to a final status', async () => {
     const rule: CleanupRule = { ...RULE, closeSubtasks: true, subtaskTargetState: 'Verification' };
     const graph: WorkflowGraph = { ...GRAPH, Open: [...GRAPH.Open, { id: '7', name: 'Verify', to: 'Verification' }] };
@@ -258,9 +273,9 @@ describe('choosing tickets on a cleanup', () => {
     const rule: CleanupRule = { ...RULE, targetState: 'Shipped' };
     const graph: WorkflowGraph = { Open: [{ id: '8', name: 'Ship', to: 'Shipped' }], 'In Progress': [{ id: '9', name: 'Ship', to: 'Shipped' }] };
     const withCategories = ticketListKind.view(await open(fake({ rules: [rule], graph, done: ['Shipped'] })));
-    expect(withCategories.cleanup).toMatchObject({ needsResolution: true, targetFinal: true });
+    expect(withCategories.cleanup).toMatchObject({ needsResolution: true });
     const withoutCategories = ticketListKind.view(await open(fake({ rules: [rule], graph })));
-    expect(withoutCategories.cleanup).toMatchObject({ needsResolution: false, targetFinal: false });
+    expect(withoutCategories.cleanup).toMatchObject({ needsResolution: false });
   });
 
   it('can move without a resolution when none is chosen on purpose', async () => {
@@ -275,7 +290,7 @@ describe('applying a cleanup', () => {
   it('moves the subtasks before their parent, with the native confirmation', async () => {
     const deps = fake({ rules: [{ ...RULE, closeSubtasks: true, resolution: 'Fixed' }], tickets: [ticket('PROJ-10'), ticket('PROJ-11', 'Open', { parent: 'PROJ-10' })] });
     const { plan, applied } = await apply(await open(deps), deps);
-    expect(plan).toMatchObject({ title: 'Move 1 ticket(s) to Done, with 1 subtask(s) first', risky: true });
+    expect(plan).toMatchObject({ title: 'Move 1 ticket(s) to Done, with 1 subtask(s) first', risky: false });
     expect(plan.lines.map(l => l.target)).toEqual(['PROJ-11', 'PROJ-10']);
     expect(deps.moved).toEqual(['PROJ-11→Done (Fixed)', 'PROJ-10→Done (Fixed)']);
     expect(applied.results.map(r => `${r.target} ${r.outcome}`)).toEqual(['PROJ-11 done', 'PROJ-10 done']);
@@ -296,6 +311,31 @@ describe('applying a cleanup', () => {
     ]);
   });
 
+  it('still moves a parent whose own update time Jira changed when its subtask moved', async () => {
+    const deps = fake({ rules: [{ ...RULE, closeSubtasks: true, resolution: 'Fixed' }], tickets: [ticket('PROJ-10'), ticket('PROJ-11', 'Open', { parent: 'PROJ-10' })] });
+    const move = deps.move;
+    deps.move = async (key, status, resolution) => {
+      const result = await move(key, status, resolution);
+      if (key === 'PROJ-11') deps.jira.get('PROJ-10')!.updated = 'bumped-by-subtask';
+      return result;
+    };
+    const { applied } = await apply(await open(deps), deps);
+    expect(deps.moved).toEqual(['PROJ-11→Done (Fixed)', 'PROJ-10→Done (Fixed)']);
+    expect(applied.results.map(r => `${r.target} ${r.outcome}`)).toEqual(['PROJ-11 done', 'PROJ-10 done']);
+  });
+
+  it('leaves a parent and its subtasks alone when the parent changed before the Apply', async () => {
+    const deps = fake({ rules: [{ ...RULE, closeSubtasks: true, resolution: 'Fixed' }], tickets: [ticket('PROJ-10'), ticket('PROJ-11', 'Open', { parent: 'PROJ-10' })] });
+    const s = await open(deps);
+    deps.jira.get('PROJ-10')!.updated = 't9';
+    const { applied } = await apply(s, deps);
+    expect(deps.moved).toEqual([]);
+    expect(applied.results).toEqual([
+      { target: 'PROJ-11', outcome: 'refused', reason: 'not moved, because its parent PROJ-10 was not moved' },
+      { target: 'PROJ-10', outcome: 'refused', reason: 'changed in Jira since the board read it' },
+    ]);
+  });
+
   it('refuses a subtask that changed in Jira since the board read it, and leaves its parent', async () => {
     const deps = fake({
       rules: [{ ...RULE, closeSubtasks: true, resolution: 'Fixed' }],
@@ -310,7 +350,8 @@ describe('applying a cleanup', () => {
       { target: 'PROJ-10', outcome: 'refused', reason: 'not moved, because subtask PROJ-11 was not moved' },
       { target: 'PROJ-20', outcome: 'done' },
     ]);
-    expect(applied.conflicts?.map(c => `${c.target} ${c.stored} → ${c.fresh}`)).toEqual(['PROJ-11 Open → In Progress']);
+    // The page was read again after the writes, so the subtask shows as it is now and the board is not out of date.
+    expect(applied.working.outOfDate).toBeNull();
   });
 
   it('refuses a parent that changed in Jira since the board read it, and moves the others', async () => {

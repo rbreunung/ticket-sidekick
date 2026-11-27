@@ -243,7 +243,7 @@ async function open(r: ImportRecipe): Promise<ImportSession> {
   if (!validated.ok) throw new Error(validated.reason);
   return {
     id: importSessionId(r), kind: 'import', formatVersion: importKind.formatVersion, revision: 1, createdAt: 0, lastUsedAt: 0,
-    recipe: validated.recipe, derived: await importKind.read(validated.recipe, deps), working: importKind.initialWorking(validated.recipe), conflicts: [],
+    recipe: validated.recipe, derived: await importKind.read(validated.recipe, deps), working: importKind.initialWorking(validated.recipe),
   };
 }
 
@@ -305,12 +305,12 @@ function mergeThree(session: ImportSession) {
 }
 
 describe('a Waltz ticket merge', () => {
-  it('rewrites the kept ticket, links, marks and closes each source, after a risky opening Apply and one closing Apply', async () => {
+  it('rewrites the kept ticket, links, marks and closes each source, after an opening Apply and one closing Apply', async () => {
     threeWaltzTickets();
     let session = await openWaltz();
 
     const opening = await preview(session, mergeThree(session));
-    expect(opening.risky).toBe(true);
+    expect(opening.risky).toBe(false);
     expect(opening.title).toBe('Merge 2 tickets into PROJ-12');
     const targets = opening.lines.map(l => l.target);
     expect(targets).toEqual(expect.arrayContaining(['PROJ-12', 'PROJ-15', 'PROJ-18']));
@@ -353,7 +353,7 @@ describe('a Waltz ticket merge', () => {
 
     session = act(session, { type: 'merge-close-target', issueType: 'Bug', option: 'status:Closed' });
     const closing = await preview(session, { type: 'merge-close' });
-    expect(closing.risky).toBe(true);
+    expect(closing.risky).toBe(false);
     expect(closing.lines).toEqual([
       { target: 'PROJ-15', change: 'Close as Closed with resolution Duplicate' },
       { target: 'PROJ-18', change: 'Close as Closed with resolution Duplicate' },
@@ -388,7 +388,7 @@ describe('a Waltz ticket merge', () => {
       .toBe('Pick the ticket to keep from the selected rows, or type its ticket key.');
   });
 
-  it('after a failed link offers Retry, Ignore and Stop; Retry previews that one step, is not risky and the run carries on', async () => {
+  it('after a failed link offers Retry, Ignore and Stop; Retry previews that one step, asks for no confirmation and the run carries on', async () => {
     threeWaltzTickets();
     jira.failLinkFor.add('PROJ-18');
     let session = await openWaltz();
@@ -439,7 +439,7 @@ describe('a Waltz ticket merge', () => {
     expect(jira.transitions).toEqual([]);
   });
 
-  it('asks target and resolution for a Bug and a Task source, then one risky Apply closes both', async () => {
+  it('asks target and resolution for a Bug and a Task source, then one Apply closes both', async () => {
     threeWaltzTickets({ 'PROJ-18': { issueType: 'Task' } });
     jira.resolutionNames = ['Fixed', "Won't Fix"];
     let session = await openWaltz();
@@ -465,7 +465,7 @@ describe('a Waltz ticket merge', () => {
     expect(mergeView(session)!.question!.unanswered).toEqual([]);
 
     const closing = await preview(session, { type: 'merge-close' });
-    expect(closing.risky).toBe(true);
+    expect(closing.risky).toBe(false);
     expect(closing.lines).toEqual([
       { target: 'PROJ-15', change: "Close as Closed with resolution Won't Fix" },
       { target: 'PROJ-18', change: 'Close as Done without a resolution' },
@@ -584,7 +584,7 @@ describe('a Veracode ticket merge (close mode)', () => {
     const row = rowFor(session, 'PROJ-1');
 
     const opening = await preview(session, { type: 'merge-start', ids: [row, 'PROJ-2'], keep: row });
-    expect(opening.risky).toBe(true);
+    expect(opening.risky).toBe(false);
     expect(opening.lines).toContainEqual({ target: 'PROJ-2', change: 'Not moved, no longer in the report (named in the comment on PROJ-2): 999' });
     expect(opening.lines).toContainEqual({ target: 'PROJ-1', change: 'Stays as it is: PROJ-2 has no flaws PROJ-1 lacks' });
 

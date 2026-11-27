@@ -113,6 +113,9 @@ function repeatNote(row, ctx) {
     }, `Add as comment to ${first.key}…`));
 }
 
+/** "1 ticket", "2 tickets": the count a button names, with the noun in its right number. */
+const countOf = (n, noun) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+
 // ---- Email cleanup ----------------------------------------------------------------------------
 
 const MODEL_STATUS = {
@@ -150,7 +153,7 @@ function cleanupStage(cleanup, board, ctx) {
       h('td', {}, row.ref), h('td', {}, row.subject),
       h('td', {}, row.blocks.length === 0 ? h('span', { class: 'muted' }, 'Nothing') : h('ul', {}, row.blocks.map(b => h('li', {},
         `${b.kind} (${b.lines} line(s), ${b.source === 'model' ? 'found by the model' : 'your pattern'}): `, h('q', {}, b.excerpt), ' ',
-        b.savable ? h('vscode-button', { id: `save-${b.id}`, secondary: true, disabled: writeOff, onClick: () => ctx.preview({ type: 'cleanup-save', block: b.id }) }, 'Save as pattern…') : null,
+        b.savable ? h('vscode-button', { id: `save-${b.id}`, secondary: true, disabled: writeOff, onClick: () => ctx.apply({ type: 'cleanup-save', block: b.id }) }, 'Save as pattern') : null,
         b.saved ? h('span', { class: 'muted' }, 'Saved') : null)))),
       h('td', {}, `${MODEL_STATUS[row.status] ?? row.status}${row.modelId ? ` (${row.modelId})` : ''}`))))));
 
@@ -221,19 +224,20 @@ function newTab(view, board, ctx) {
       h('vscode-button', { id: 'select-all', secondary: true, disabled: off || open.length === 0, onClick: () => board.act({ type: 'new-include', ids: 'all', included: true }) }, 'Select all'),
       h('vscode-button', { id: 'select-none', secondary: true, disabled: off || selected.length === 0, onClick: () => board.act({ type: 'new-include', ids: 'all', included: false }) }, 'Select none'),
       h('span', { class: 'muted' }, `${selected.length} selected, ${ext.toCreate} ticket(s) to create.`)),
-    ext.toCreate > ext.perApply ? h('p', { class: 'muted' }, `One Apply creates at most ${ext.perApply} tickets; the preview says how many remain for the next one.`) : null,
+    ext.toCreate > ext.perApply ? h('p', { class: 'muted' }, `One click creates at most ${ext.perApply} tickets; the button names how many remain for the next one.`) : null,
     ctx.summary,
     rows.length === 0 ? null : table,
     h('div', { class: 'bar' },
       email ? null : h('vscode-button', { id: 'merge-selected', secondary: true, disabled: off || selected.length < 2, onClick: () => board.act({ type: 'new-merge', ids: selected }) }, 'Merge selected'),
-      h('vscode-button', { id: 'preview-create', disabled: writeOff || ext.toCreate === 0, onClick: () => ctx.preview({ type: 'new-create' }) }, `Preview create (${ext.toCreate} ticket(s))…`)),
+      h('vscode-button', { id: 'apply-create', disabled: writeOff || ext.toCreate === 0, onClick: () => ctx.apply({ type: 'new-create' }) },
+        ext.toCreate === 0 ? 'Create tickets' : `Create ${countOf(Math.min(ext.toCreate, ext.perApply), 'ticket')}`)),
     h('div', { class: 'bar' },
       h('label', {}, 'Add selected to ticket', addKey), addMode,
       h('vscode-button', { id: 'preview-add', secondary: true, disabled: writeOff || selected.length === 0, onClick: () => ctx.preview({ type: 'new-add', ids: selected, key: drafts.addKey, mode: email ? 'comment' : drafts.addMode }) }, 'Preview add…')),
     waltz ? h('div', { class: 'bar' },
       h('label', {}, 'Reason (optional)', reason),
-      h('vscode-button', { id: 'preview-accept-cve', secondary: true, disabled: writeOff || selected.length === 0, onClick: () => ctx.preview(acceptAction('accept-cve')) }, 'Preview accept CVEs of selected…'),
-      h('vscode-button', { id: 'preview-accept-component', secondary: true, disabled: writeOff || selected.length === 0, onClick: () => ctx.preview(acceptAction('accept-component')) }, 'Preview accept components of selected…')) : null,
+      h('vscode-button', { id: 'apply-accept-cve', secondary: true, disabled: writeOff || selected.length === 0, onClick: () => ctx.apply(acceptAction('accept-cve')) }, selected.length === 0 ? 'Accept CVEs of selected' : `Accept CVEs of ${selected.length} selected`),
+      h('vscode-button', { id: 'apply-accept-component', secondary: true, disabled: writeOff || selected.length === 0, onClick: () => ctx.apply(acceptAction('accept-component')) }, selected.length === 0 ? 'Accept components of selected' : `Accept components of ${selected.length} selected`)) : null,
   ];
 }
 
@@ -315,15 +319,16 @@ function ticketedTab(view, board, ctx) {
     ctx.summary,
     rows.length === 0 ? h('p', {}, 'No row matches this filter.') : table,
     h('div', { class: 'bar' },
-      h('vscode-button', { id: 'preview-ticketed', disabled: writeOff, onClick: () => ctx.preview({ type: 'ticketed-apply' }) }, 'Preview changes…')),
+      h('vscode-button', { id: 'apply-ticketed', disabled: writeOff || ext.toWrite === 0, onClick: () => ctx.apply({ type: 'ticketed-apply' }) },
+        ext.toWrite > 0 ? `Write ${countOf(ext.toWrite, 'ticket')}` : 'Write changes')),
     h('div', { class: 'bar' },
       h('span', {}, `${pickedRows.length} picked.`),
       h('label', {}, 'Keep', keepRow), h('label', {}, 'or ticket key', keepKey),
       h('vscode-button', { id: 'preview-merge', secondary: true, disabled: writeOff || pickedRows.length < 1, onClick: startMerge }, 'Preview merge tickets…'),
       waltz ? h('vscode-button', {
-        id: 'preview-accept-ticketed', secondary: true, disabled: writeOff || pickedRows.length === 0,
-        onClick: () => ctx.preview({ type: 'accept-component', ids: pickedRows.map(r => r.id) }),
-      }, 'Preview accept components of picked…') : null),
+        id: 'apply-accept-ticketed', secondary: true, disabled: writeOff || pickedRows.length === 0,
+        onClick: () => ctx.apply({ type: 'accept-component', ids: pickedRows.map(r => r.id) }),
+      }, pickedRows.length === 0 ? 'Accept components of picked' : `Accept components of ${pickedRows.length} picked`) : null),
   ];
 }
 
@@ -359,7 +364,7 @@ function staleTab(view, board, ctx) {
     ctx.summary,
     rows.length === 0 ? null : table,
     groups,
-    h('div', { class: 'bar' }, h('vscode-button', { id: 'preview-close', disabled: writeOff || marked === 0, onClick: () => ctx.preview({ type: 'close-stale' }) }, `Preview close (${marked} ticket(s))…`)),
+    h('div', { class: 'bar' }, h('vscode-button', { id: 'apply-close', disabled: writeOff || marked === 0, onClick: () => ctx.apply({ type: 'close-stale' }) }, marked === 0 ? 'Close tickets' : `Close ${countOf(marked, 'ticket')}`)),
   ];
 }
 
@@ -378,10 +383,10 @@ function acceptedTab(view, board, ctx) {
         h('td', {}, row.reason ?? ''),
         h('td', {}, h('vscode-button', {
           id: `unaccept-${n}`, secondary: true, disabled: writeOff,
-          onClick: () => ctx.preview(row.cve !== undefined
+          onClick: () => ctx.apply(row.cve !== undefined
             ? { type: 'unaccept', component: row.component, cve: row.cve }
             : { type: 'unaccept-component', component: row.component, version: row.version }),
-        }, row.cve !== undefined ? 'Unaccept…' : 'Unaccept component…'))))))),
+        }, row.cve !== undefined ? 'Unaccept' : 'Unaccept component'))))))),
   ];
 }
 
@@ -401,9 +406,9 @@ function mergeTab(merge, board, ctx) {
     ctx.summary,
     h('ol', { 'aria-label': 'Merge steps' }, merge.steps.map(step => h('li', {}, stepLine(step)))),
     merge.state === 'failed' ? h('div', { class: 'bar' },
-      can('retry') ? h('vscode-button', { id: 'merge-retry', disabled: off, onClick: () => ctx.preview({ type: 'merge-retry' }) }, 'Retry…') : null,
-      can('ignore') ? h('vscode-button', { id: 'merge-ignore', secondary: true, disabled: off, onClick: () => ctx.preview({ type: 'merge-ignore' }) }, 'Ignore…') : null,
-      can('stop') ? h('vscode-button', { id: 'merge-stop', secondary: true, disabled: off, onClick: () => ctx.preview({ type: 'merge-stop' }) }, 'Stop…') : null) : null,
+      can('retry') ? h('vscode-button', { id: 'merge-retry', disabled: off, onClick: () => ctx.apply({ type: 'merge-retry' }) }, 'Retry') : null,
+      can('ignore') ? h('vscode-button', { id: 'merge-ignore', secondary: true, disabled: off, onClick: () => ctx.apply({ type: 'merge-ignore' }) }, 'Ignore') : null,
+      can('stop') ? h('vscode-button', { id: 'merge-stop', secondary: true, disabled: off, onClick: () => ctx.apply({ type: 'merge-stop' }) }, 'Stop') : null) : null,
     question ? [
       question.resolution ? h('p', { class: 'muted' }, `Resolution set without asking: ${question.resolution}.`) : null,
       question.groups.map((g, n) => h('div', { class: 'bar' },
@@ -416,8 +421,9 @@ function mergeTab(merge, board, ctx) {
         ])),
       question.unanswered.length ? h('p', {}, `Still to answer: ${question.unanswered.join(', ')}.`) : null,
       h('div', { class: 'bar' },
-        h('vscode-button', { id: 'preview-merge-close', disabled: off || question.unanswered.length > 0 || !can('close'), onClick: () => ctx.preview({ type: 'merge-close' }) }, 'Preview close…'),
-        can('stop') ? h('vscode-button', { id: 'merge-stop', secondary: true, disabled: off, onClick: () => ctx.preview({ type: 'merge-stop' }) }, 'Stop…') : null),
+        h('vscode-button', { id: 'apply-merge-close', disabled: off || question.unanswered.length > 0 || !can('close'), onClick: () => ctx.apply({ type: 'merge-close' }) },
+          `Close ${countOf(question.groups.reduce((n, g) => n + g.tickets.length, 0), 'ticket')}`),
+        can('stop') ? h('vscode-button', { id: 'merge-stop', secondary: true, disabled: off, onClick: () => ctx.apply({ type: 'merge-stop' }) }, 'Stop') : null),
     ] : null,
     merge.report ? [
       merge.report.missing.length ? h('p', {}, `Not done: ${merge.report.missing.map(stepLine).join('; ')}.`) : null,
@@ -509,6 +515,7 @@ function render(view, board, locked, state) {
     waltz: view.tabs.some(t => t.id === 'accepted'),
     email: view.reportKind === 'Email',
     preview: action => { previewTab = shown; return board.preview(action); },
+    apply: action => { previewTab = shown; return board.apply(action); },
   };
 
   const tabs = [...view.tabs.map(t => ({ id: t.id, label: tabLabel(t) })), ...(merge ? [{ id: MERGE, label: `Ticket merge (${(MERGE_STATES.get(merge.state) ?? MERGE_RUNNING).tab})` }] : [])];
@@ -563,7 +570,7 @@ function render(view, board, locked, state) {
       h('vscode-button', { id: 'dismiss-dropped', secondary: true, disabled: locked, onClick: () => board.act({ type: 'dismiss-dropped' }) }, 'Dismiss')) : null,
     // Reload, the security overview export and the matched-ticket search belong to Veracode and Waltz reports.
     ctx.email ? null : h('div', { class: 'bar' },
-      h('vscode-button', { id: 'reload-report', secondary: true, disabled: locked || writesOff, onClick: () => { previewTab = shown; return board.preview({ type: 'reload-report' }); } }, 'Reload report…'),
+      h('vscode-button', { id: 'reload-report', secondary: true, disabled: locked || writesOff, onClick: () => ctx.apply({ type: 'reload-report' }) }, 'Reload report'),
       h('vscode-button', { id: 'save-csv', secondary: true, disabled: locked, onClick: () => board.save('csv') }, 'Save overview as CSV…'),
       h('vscode-button', { id: 'save-xlsx', secondary: true, disabled: locked, onClick: () => board.save('xlsx') }, 'Save overview as Excel…')),
     ctx.email ? null : searchBox(view, board, locked),

@@ -5,7 +5,7 @@
 Jira and Bitbucket inside GitHub Copilot Chat in VS Code:
 
 - **Jira tools for Copilot** — Copilot's agent views, finds, creates, comments on, moves and updates Jira tickets through Ticket Sidekick's tools, or you type a command such as `/ts-jira view PROJ-123`
-- **Boards** — ticket lists, the security report and the imports of Veracode reports, OSS reports and emails open in an editor tab, where you select, preview and apply changes; a board comes back after a restart
+- **Boards** — ticket lists, the security report and the imports of Veracode reports, OSS reports and emails open in an editor tab, where you select and apply changes (one click, with the button naming what it writes); a board comes back after a restart
 - **Pull request review** — a Bitbucket pull request is reviewed on its own board: a regular pass first, then the extra passes you pick, with a discussion per finding, editable comments posted to Bitbucket, and Copy for Teams
 
 > **`@jira` and `@bitbucket` are gone.** Every task runs from a Copilot chat with the Jira and Bitbucket tools and the `/ts-jira` and `/ts-bitbucket` commands, or on a board. Start with [Copilot tools and boards](#copilot-tools-and-boards).
