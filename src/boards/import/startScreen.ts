@@ -19,10 +19,12 @@ import {
 } from './recipe';
 
 // The start screen of an import: a tab without a session. The developer picks the report kind and
-// the report file (for an email import, one or more `.eml` files); the template comes from `ticketSidekick.<kind>.template`, the issue type from
-// that template and the project from `ticketSidekick.jira.defaultProject`. The template is asked
-// for only when its setting is empty or names a template that is gone, and the choice is saved to
-// the setting. The default project is picked the same way: when it is empty, not a project key or a
+// the report file (for an email import, one or more `.eml` files); the template is the one picked on
+// the screen, else the saved default in `ticketSidekick.<kind>.template`, the issue type comes from
+// that template and the project from `ticketSidekick.jira.defaultProject`. The template is always a
+// picker. A pick is for the import being started and is saved to the setting only when the page asks
+// for it (Set as default), which it does by default when the setting is empty or names a template that
+// is gone. The default project is picked the same way: when it is empty, not a project key or a
 // project Jira does not have, the page asks for a key, typed or chosen from Jira's projects, checks
 // it against Jira and saves it to the setting. Open hands the full recipe to the import board. vscode-free: the native file
 // dialog, the setting writes and the board opening are supplied by the host.
@@ -115,10 +117,13 @@ export interface StartScreenView {
     /** The setting as it is now. */
     setting: string;
     settingKey: string;
-    /** The template the import uses; absent while one must be picked. */
+    /** The template the import uses: the pick, else the saved default; absent while one must be picked. */
     name?: string;
-    /** The templates to pick from, present only when one must be picked. */
+    /** Whether the setting names a template that exists. */
+    hasDefault: boolean;
+    /** The templates to pick from, present whenever the workspace has templates. */
     options?: string[];
+    /** Why a template must be picked and what happens to the pick; present while there is no valid default. */
     askReason?: string;
     problem?: string;
   };
@@ -156,6 +161,8 @@ interface StartState {
   emailConsent?: boolean;
   /** The issue type picked for a template that names none, with that template's name. */
   issueType?: { template: string; name: string };
+  /** The template picked on this screen for this import; the saved default is not touched by it. */
+  template?: string;
 }
 
 function errorText(err: unknown): string {
@@ -240,8 +247,12 @@ export class ImportStartScreen {
         const name = stringOf(body.name, 'template');
         const names = this.loadTemplates().templates.map(t => t.name);
         if (!names.includes(name)) throw new SessionError(400, `There is no template "${name}" in .jira-templates.json.`);
-        await this.deps.writeTemplateSetting(this.state.kind, name);
-        this.deps.onDiag?.('info', 'Import template setting saved', { setting: templateSettingKey(this.state.kind) });
+        this.state.template = name;
+        // Only an explicit `true` saves a default, so no caller changes the setting by leaving the flag out.
+        if (body.setAsDefault === true && this.deps.templateSetting(this.state.kind).trim() !== name) {
+          await this.deps.writeTemplateSetting(this.state.kind, name);
+          this.deps.onDiag?.('info', 'Import template setting saved', { setting: templateSettingKey(this.state.kind) });
+        }
         return this.view();
       }
       case 'project': {
@@ -463,19 +474,23 @@ export class ImportStartScreen {
     const { templates, problem: templatesProblem } = this.loadTemplates();
     const setting = this.deps.templateSetting(kind).trim();
     const settingKey = templateSettingKey(kind);
-    const chosen = templates.find(t => t.name === setting);
-    const template: StartScreenView['template'] = { setting, settingKey };
+    const saved = templates.find(t => t.name === setting);
+    // A pick whose template has gone from .jira-templates.json is ignored; the saved default shows, or the screen asks.
+    const picked = this.state.template ? templates.find(t => t.name === this.state.template) : undefined;
+    const chosen = picked ?? saved;
+    const template: StartScreenView['template'] = { setting, settingKey, hasDefault: saved !== undefined };
     if (templatesProblem) {
       template.problem = templatesProblem;
     } else if (templates.length === 0) {
       template.problem = 'There are no templates in .jira-templates.json in this workspace. Add one to import a report.';
-    } else if (chosen) {
-      template.name = chosen.name;
     } else {
       template.options = templates.map(t => t.name);
-      template.askReason = setting
-        ? `The template "${setting}" in ${settingKey} is not in .jira-templates.json. Pick a template; it is saved to the setting.`
-        : `${settingKey} is empty. Pick the template for ${REPORT_KIND_LABELS[kind]} imports; it is saved to the setting.`;
+      if (chosen) template.name = chosen.name;
+      if (!saved) {
+        template.askReason = setting
+          ? `The template "${setting}" in ${settingKey} is not in .jira-templates.json. Pick a template; keep Set as default ticked to save it to the setting.`
+          : `${settingKey} is empty. Pick the template for ${REPORT_KIND_LABELS[kind]} imports; keep Set as default ticked to save it to the setting.`;
+      }
     }
 
     const issueType: StartScreenView['issueType'] = { fromTemplate: false };
