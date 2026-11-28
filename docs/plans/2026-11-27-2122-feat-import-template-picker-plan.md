@@ -46,6 +46,7 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
 
 **Stored imports**
 
+- R8. The start screen, the manual and the setting descriptions say that Open shows an import whose tab is still open as it is, that closing the tab and opening again starts the import fresh, and that Start over discards the earlier import. They no longer promise that a stored import survives closing its tab. This is wording only, with no change to what Open does.
 - R7. When the import's tab is open, Open shows it with the template it was started with. With no tab open, Open builds the import again from the start screen, so it takes the template shown there, as it takes the saved default today. Start over discards the import and starts again with the template picked on the start screen.
 
 ### Key Decisions
@@ -66,6 +67,7 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
 - The pick is not remembered after the start screen closes. Only the setting is.
 - Considered and not built: clearing a saved default from the screen. Nobody asked for it, and the setting stays editable in Settings.
 - Considered and not built: changing the template after Open. An opened import keeps its template, as today.
+- Considered and not built: showing "Open stored import" only while the tab is open. That needs the start screen to know the tab state and is a behavior change for a separate issue. This plan rewords the text only (R8).
 - Considered and not built: reading a stored import's template onto the start screen. The session manager already keeps an open tab's own template, and with no tab open the import kind builds the import again by design (`freshOnOpen`). Reading it would change that design for a label nobody asked about.
 
 ---
@@ -111,7 +113,7 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
 ### U2. Page: picker and checkbox
 
 - **Goal:** The page always shows the picker and the checkbox, with the starting values R5 and R6 give.
-- **Requirements:** R1, R4 to R6, KTD1, KTD3
+- **Requirements:** R1, R4 to R6, R8, KTD1, KTD3
 - **Dependencies:** U1
 - **Files:** `board-pages/import-start/page.js`, `src/test/importStartPage.test.ts`
 - **Approach:**
@@ -119,7 +121,8 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
   - Keep the checkbox value in a page variable, as `typedProject` is kept. Its starting value is `!template.hasDefault`. Once the developer acts, the page holds the value it sent, so a save that turns `hasDefault` true does not untick the box. Reset it when the kind changes.
   - Give the checkbox an id and an accessible label. `paint()` rebuilds the DOM and restores focus by id, so a checkbox without one loses keyboard focus after every repaint.
   - A picker change sends the picked name with the checkbox value. Ticking sends the current template with `setAsDefault: true`. Unticking sends nothing. Until a template is picked, ticking and unticking only change the page variable and post nothing.
-  - Reword the header line that says the template comes from the settings. The stored-import banner already says "the template above" and stays.
+  - Reword the header line that says the template comes from the settings.
+  - Reword the stored-import wording (R8), text only. The button reads "Open" in every case, because with no tab open it builds the import again. The banner says: if the import's tab is still open, Open shows it as it is; otherwise Open starts a new import with the template above; Start over discards the earlier import and starts again with the template above.
 - **Patterns to follow:** `projectCell` and its page variable for typed input, and `fakeDom` posted-message checks in the existing page tests.
 - **Test scenarios:**
   - Valid default: `#template` exists with the default selected, the checkbox is unticked, and the page text holds no "null" or "undefined" (issue #131).
@@ -130,13 +133,13 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
   - With a pick that differs from the saved default and the box unticked, the page says the pick is for this import only, and the saved default stays named next to the picker.
   - The checkbox has an id and a label, and focus on it survives a repaint.
   - After a save that makes the setting valid, the view re-read with `hasDefault: true` leaves the checkbox ticked.
-  - The stored-import notice and Start over tests pass with the new view shape.
+  - With an import stored, the banner carries the new wording, the button reads "Open", Start over is still offered, and neither the page nor the view says "Open stored import" any more (update the existing stored-import notice test).
 - **Verification:** The page tests pass.
 
 ### U3. Docs and setting descriptions
 
 - **Goal:** Every place that says "asked once and saved" or "the template now in the setting" describes the new behavior.
-- **Requirements:** R1, R4 to R7
+- **Requirements:** R1, R4 to R8
 - **Dependencies:** U1, U2
 - **Files:** `docs/manual/boards.md`, `docs/manual/report-imports.md`, `docs/manual/settings-reference.md`, `package.json`, `docs/architecture/manual-checklist.md`, `CLAUDE.md`
 - **Approach:**
@@ -146,7 +149,7 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
   - `package.json`: the descriptions of `ticketSidekick.email.template`, `ticketSidekick.veracode.template` and `ticketSidekick.waltz.template`. Defaults stay.
   - `manual-checklist.md`: the start screen items for an empty template, the stored import and the email template.
   - `CLAUDE.md`: the start screen row in Key files.
-  - Wording: the template is a picker, the saved default is preselected, a pick is for this import, "Set as default" saves it, it starts ticked when no valid default exists, and Start over uses the picked template. For a stored import, say that Open shows an open tab as it is and otherwise builds the import again from the start screen's template.
+  - Wording: the template is a picker, the saved default is preselected, a pick is for this import, "Set as default" saves it, it starts ticked when no valid default exists, and Start over uses the picked template. For R8, say that Open shows an open tab as it is, that closing the tab and opening again starts the import fresh from the start screen's template, and drop "Open stored import" and "a stored import keeps the template it was started with until you use Start over" everywhere they appear, including the three setting descriptions in `package.json` and the matching manual-checklist items.
 - **Test expectation:** none -- text only. `src/test/userDocsSync.test.ts` checks setting keys and defaults, which do not change, and must stay green.
 - **Verification:** `npm test` passes, and a search for "asked once" and "template now in the setting" finds no stale wording outside dated plans.
 
