@@ -157,6 +157,21 @@ describe('the template picker', () => {
     expect(byId('template-default').checked).toBe(true);
   });
 
+  it('forgets the Set as default box when the report kind changes', async () => {
+    let kind = 'veracode';
+    await open((op, body) => {
+      if (op === 'kind') kind = String(body.kind);
+      return { ...startView({}, { setting: 'Default', name: 'Default', hasDefault: true }), kind };
+    });
+    await toggle(true);
+    expect(byId('template-default').checked).toBe(true);
+    const kindSelect = byId('kind');
+    kindSelect.value = 'waltz';
+    kindSelect.dispatch('change');
+    await settle();
+    expect(byId('template-default').checked).toBeFalsy();
+  });
+
   it('keeps keyboard focus on the checkbox when the page is drawn again', async () => {
     await open(startView());
     const box = byId('template-default');
