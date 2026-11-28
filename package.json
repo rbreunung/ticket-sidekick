@@ -1135,7 +1135,7 @@
           "ticketSidekick.email.template": {
             "type": "string",
             "default": "",
-            "description": "Name of the template in .jira-templates.json that an email import on the Jira Import Board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the Jira Import Board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
+            "description": "Name of the template in .jira-templates.json that an email import on the Jira Import Board uses; the issue type comes from that template. The Jira Import Board's start screen preselects it and lets you pick another template for one import; Set as default saves the pick here. When empty, or when it names a template that no longer exists, the start screen asks for a template and saves your first pick here unless you untick Set as default."
           },
           "ticketSidekick.email.checkModel": {
             "type": "string",
@@ -1268,7 +1268,7 @@
           "ticketSidekick.veracode.template": {
             "type": "string",
             "default": "",
-            "description": "Name of the template in .jira-templates.json that a Veracode import on the Jira Import Board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the Jira Import Board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
+            "description": "Name of the template in .jira-templates.json that a Veracode import on the Jira Import Board uses; the issue type comes from that template. The Jira Import Board's start screen preselects it and lets you pick another template for one import; Set as default saves the pick here. When empty, or when it names a template that no longer exists, the start screen asks for a template and saves your first pick here unless you untick Set as default."
           }
         }
       },
@@ -1308,7 +1308,7 @@
           "ticketSidekick.waltz.template": {
             "type": "string",
             "default": "",
-            "description": "Name of the template in .jira-templates.json that an OSS report (Waltz) import on the Jira Import Board uses; the issue type comes from that template. When empty, or when it names a template that no longer exists, the Jira Import Board's start screen asks for a template once and saves the choice here. A stored import keeps the template it was started with until you use Start over."
+            "description": "Name of the template in .jira-templates.json that an OSS report (Waltz) import on the Jira Import Board uses; the issue type comes from that template. The Jira Import Board's start screen preselects it and lets you pick another template for one import; Set as default saves the pick here. When empty, or when it names a template that no longer exists, the start screen asks for a template and saves your first pick here unless you untick Set as default."
           }
         }
       }
