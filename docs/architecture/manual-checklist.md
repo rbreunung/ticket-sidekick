@@ -49,7 +49,8 @@ Preparation: a test project; a `.jira-templates.json` with two templates (one wi
 
 **Start screen**
 
-- [ ] `Ticket Sidekick: Open Jira Import Board` opens the start screen. With `ticketSidekick.waltz.template` empty, picking Waltz OSS asks for a template; after the pick, the setting holds the name, and the next Waltz import does not ask.
+- [ ] `Ticket Sidekick: Open Jira Import Board` opens the start screen. With `ticketSidekick.waltz.template` empty, picking Waltz OSS asks for a template with **Set as default** ticked; after the pick, the setting holds the name, and the next Waltz import preselects it with the box unticked. With the box unticked before the first pick, the setting stays empty and the next import asks again.
+- [ ] With a template saved, pick another template without **Set as default**: the import uses it and the setting is unchanged. Tick the box: the setting holds the new name. Switching the report kind forgets the pick.
 - [ ] A template setting that names a template no longer in `.jira-templates.json` asks again, saying the template is not there.
 - [ ] A template without an issue type lets you pick one of the project's issue types.
 - [ ] `ticketSidekick.jira.defaultProject` empty: the start screen asks for the project; typing a few letters suggests Jira's projects, and a chosen or fully typed key is saved to the setting, so the next import does not ask. A key Jira does not know and a value that is not a key ask the same way.
@@ -57,7 +58,7 @@ Preparation: a test project; a `.jira-templates.json` with two templates (one wi
 - [ ] With Jira's project list unreadable (for example a network block on `/rest/api/2/project`), the start screen says so and a typed key still works; **Open Setting** opens the setting.
 - [ ] The oversize report, the file that is not a report and the report with nothing matching each show their reason, and **Open** stays disabled.
 - [ ] With Jira not set up (base URL removed), the start screen shows the setup hint instead of **Open**.
-- [ ] Opening the same file again in the same project offers **Open stored import** (with the template it was started with) and **Start over**; Start over discards it and uses the template now in the setting.
+- [ ] With the import's tab still open, opening the same file in the same project offers **Open** (shows the open import with the template it was started with) and **Start over**; Start over discards it and starts again with the template picked on the start screen. After closing the tab, **Open** starts the import fresh.
 
 **Opening from chat**
 
@@ -143,7 +144,7 @@ Run on the preview build on the managed machine, against Jira Data Center, with 
 **Start screen and model**
 
 - [ ] `Ticket Sidekick: Open Jira Import Board`, kind **Email**, **Choose emails…** with three files: the screen says how many emails it will import; a file that is not an email is named and left out.
-- [ ] With `ticketSidekick.email.template` empty, the start screen asks for a template once; the next email import does not ask.
+- [ ] With `ticketSidekick.email.template` empty, the start screen asks for a template with **Set as default** ticked; the next email import preselects the saved one.
 - [ ] "Model for the email check" lists your models; picking one saves it to `ticketSidekick.email.checkModel` and says "The model answered."
 - [ ] With the Local harness hidden (`chat.editor.localAgent.enabled: false`), the model still answers.
 

@@ -13,7 +13,8 @@ import type { JiraAccess } from '../tools/jiraTools/jiraAccess';
 import type { IJiraClient } from '../jira/IJiraClient';
 
 // The start screen of an import: a developer picks the report kind and the report file; the
-// template comes from the kind's setting (asked once and saved when it is empty or stale), the
+// template is the one picked on the screen, else the kind's saved default (the pick is saved to the
+// setting only with Set as default; it is asked for when the setting is empty or stale), the
 // issue type from the template (asked from the project when the template names none), and the
 // project from the default project setting. Open hands the full recipe on to the import board.
 
@@ -138,43 +139,116 @@ afterEach(async () => {
 });
 
 describe('the template', () => {
-  it('is asked for once when the setting is empty, saved to the setting, and not asked on the next import', async () => {
+  it('is saved when picked with Set as default, and the next import shows it preselected without asking', async () => {
     const { screen, view } = await screenWithFile('waltz');
-    expect(view.template).toMatchObject({ setting: '', options: ['OSS finding', 'Plain'] });
+    expect(view.template).toMatchObject({ setting: '', hasDefault: false, options: ['OSS finding', 'Plain'] });
     expect(view.template.name).toBeUndefined();
+    expect(view.template.askReason).toBeDefined();
     expect(view.canOpen).toBe(false);
 
-    const picked = await screen.handle('template', { name: 'OSS finding' }) as StartScreenView;
+    const picked = await screen.handle('template', { name: 'OSS finding', setAsDefault: true }) as StartScreenView;
     expect(writes).toEqual([['waltz', 'OSS finding']]);
-    expect(picked.template).toMatchObject({ name: 'OSS finding', setting: 'OSS finding' });
-    expect(picked.template.options).toBeUndefined();
+    expect(picked.template).toMatchObject({ name: 'OSS finding', setting: 'OSS finding', hasDefault: true, options: ['OSS finding', 'Plain'] });
+    expect(picked.template.askReason).toBeUndefined();
 
     const second = (await screenWithFile('waltz', report('next.xlsx'))).view;
-    expect(second.template.options).toBeUndefined();
-    expect(second.template.name).toBe('OSS finding');
+    expect(second.template).toMatchObject({ name: 'OSS finding', hasDefault: true });
+    expect(second.template.askReason).toBeUndefined();
     expect(second.canOpen).toBe(true);
     expect(writes).toHaveLength(1);
   });
 
-  it('is asked for again when the setting names a template that no longer exists, and the setting is overwritten', async () => {
+  it('is asked for again when the setting names a template that no longer exists, and a pick with Set as default overwrites it', async () => {
     settings.waltz = 'Deleted template';
     const { screen, view } = await screenWithFile('waltz');
-    expect(view.template.options).toEqual(['OSS finding', 'Plain']);
+    expect(view.template).toMatchObject({ hasDefault: false, options: ['OSS finding', 'Plain'] });
     expect(view.template.askReason).toContain('"Deleted template"');
-    await screen.handle('template', { name: 'Plain' });
+    await screen.handle('template', { name: 'Plain', setAsDefault: true });
     expect(settings.waltz).toBe('Plain');
+  });
+
+  it('is used for this import and not saved when picked without Set as default, and the next screen asks again', async () => {
+    const { screen } = await screenWithFile('waltz');
+    const picked = await screen.handle('template', { name: 'OSS finding', setAsDefault: false }) as StartScreenView;
+    expect(writes).toEqual([]);
+    expect(picked.template).toMatchObject({ name: 'OSS finding', setting: '', hasDefault: false });
+    expect(picked.template.askReason).toBeDefined();
+    expect(picked.canOpen).toBe(true);
+
+    const next = (await screenWithFile('waltz', report('next.xlsx'))).view;
+    expect(next.template.name).toBeUndefined();
+    expect(next.template.askReason).toBeDefined();
+  });
+
+  it('keeps the saved default listed and preselected, and a pick without Set as default changes only this import', async () => {
+    settings.waltz = 'OSS finding';
+    const { screen, view } = await screenWithFile('waltz');
+    expect(view.template).toMatchObject({ name: 'OSS finding', hasDefault: true, options: ['OSS finding', 'Plain'] });
+    expect(view.template.askReason).toBeUndefined();
+
+    const picked = await screen.handle('template', { name: 'Plain' }) as StartScreenView;
+    expect(writes).toEqual([]);
+    expect(picked.template).toMatchObject({ name: 'Plain', setting: 'OSS finding', hasDefault: true });
+    expect(settings.waltz).toBe('OSS finding');
+    // The issue type follows the pick: "Plain" names none, so one is asked for from the project.
+    expect(picked.issueType).toMatchObject({ fromTemplate: false, options: ['Vulnerability', 'Bug'] });
+    expect(picked.canOpen).toBe(false);
+    await screen.handle('issue-type', { name: 'Bug' });
+    await screen.handle('open', {});
+    expect(opened).toEqual([{ kind: 'waltz', projectKey: 'PROJ', reportPath: path.join(dir, 'report.xlsx'), templateName: 'Plain', issueType: 'Bug' }]);
+  });
+
+  it('saves the pick when Set as default is ticked after it, and writes nothing for the template that is already the default', async () => {
+    settings.waltz = 'OSS finding';
+    const { screen } = await screenWithFile('waltz');
+    await screen.handle('template', { name: 'Plain' });
+    const saved = await screen.handle('template', { name: 'Plain', setAsDefault: true }) as StartScreenView;
+    expect(writes).toEqual([['waltz', 'Plain']]);
+    expect(saved.template).toMatchObject({ name: 'Plain', setting: 'Plain', hasDefault: true });
+    await screen.handle('template', { name: 'Plain', setAsDefault: true });
+    expect(writes).toHaveLength(1);
+  });
+
+  it('writes the setting only when Set as default is exactly true', async () => {
+    const { screen } = await screenWithFile('waltz');
+    await screen.handle('template', { name: 'Plain', setAsDefault: 'true' });
+    await screen.handle('template', { name: 'Plain', setAsDefault: 1 });
+    expect(writes).toEqual([]);
+    expect(settings.waltz).toBe('');
   });
 
   it('refuses a template the workspace does not have, and writes nothing', async () => {
     const { screen } = await screenWithFile('waltz');
-    await expect(screen.handle('template', { name: 'Made up' })).rejects.toMatchObject({ status: 400 });
+    await expect(screen.handle('template', { name: 'Made up', setAsDefault: true })).rejects.toMatchObject({ status: 400 });
     expect(writes).toEqual([]);
   });
 
-  it('is kept per kind: a Veracode import does not take the Waltz template', async () => {
+  it('lasts across views, and is dropped when the report kind changes', async () => {
     settings.waltz = 'OSS finding';
+    const { screen } = await screenWithFile('waltz');
+    await screen.handle('template', { name: 'Plain' });
+    expect(((await screen.handle('view', {})) as StartScreenView).template.name).toBe('Plain');
+    await screen.handle('kind', { kind: 'veracode' });
+    await screen.handle('kind', { kind: 'waltz' });
+    expect(((await screen.handle('view', {})) as StartScreenView).template.name).toBe('OSS finding');
+  });
+
+  it('is ignored once the template has gone from .jira-templates.json, and the saved default shows again', async () => {
+    settings.waltz = 'OSS finding';
+    const { screen } = await screenWithFile('waltz');
+    await screen.handle('template', { name: 'Plain' });
+    templates = templates.filter(t => t.name !== 'Plain');
+    const view = await screen.handle('view', {}) as StartScreenView;
+    expect(view.template).toMatchObject({ name: 'OSS finding', options: ['OSS finding'] });
+  });
+
+  it('is kept per kind: a Veracode import does not take the Waltz template or its pick', async () => {
+    settings.waltz = 'OSS finding';
+    const { screen } = await screenWithFile('waltz');
+    await screen.handle('template', { name: 'Plain' });
     const { view } = await screenWithFile('veracode', report('report.xml'));
-    expect(view.template.options).toEqual(['OSS finding', 'Plain']);
+    expect(view.template).toMatchObject({ setting: '', hasDefault: false, options: ['OSS finding', 'Plain'] });
+    expect(view.template.name).toBeUndefined();
   });
 });
 
@@ -219,24 +293,27 @@ describe('opening', () => {
     expect(opened).toEqual([{ kind: 'veracode', projectKey: 'PROJ', reportPath: file, templateName: 'OSS finding', issueType: 'Vulnerability' }]);
   });
 
-  it('finds the same session for the same file and project, offers Start over, and keeps the stored template until then', async () => {
+  it('finds the same session for the same file and project, offers Start over, and starts over with the template picked on the screen', async () => {
     settings.waltz = 'OSS finding';
     const file = report();
     const first = await screenWithFile('waltz', file);
     expect(first.view.stored).toBe(false);
     await first.screen.handle('open', {});
 
-    settings.waltz = 'Plain';
     const again = await screenWithFile('waltz', file);
     expect(again.view.stored).toBe(true);
+    await again.screen.handle('template', { name: 'Plain' });
     await again.screen.handle('issue-type', { name: 'Bug' });
     await again.screen.handle('open', {});
+    // Same session id: the session manager decides whether an open tab keeps its own template.
     expect(importSessionId(opened[1])).toBe(importSessionId(opened[0]));
+    expect(opened[1]).toMatchObject({ templateName: 'Plain', issueType: 'Bug' });
     expect(discarded).toEqual([]);
 
     await again.screen.handle('start-over', {});
     expect(discarded).toEqual([importSessionId(opened[0])]);
     expect(opened[2]).toMatchObject({ templateName: 'Plain', issueType: 'Bug' });
+    expect(writes).toEqual([]);
   });
 
   it('says why when the import board does not open', async () => {
@@ -479,7 +556,7 @@ describe('an email import', () => {
     nextEmails = [report('a.eml')];
     const view = await screen.handle('pick-file', {}) as StartScreenView;
     expect(view.template.askReason).toMatch(/ticketSidekick\.email\.template is empty/);
-    await screen.handle('template', { name: 'OSS finding' });
+    await screen.handle('template', { name: 'OSS finding', setAsDefault: true });
     expect(writes).toEqual([['email', 'OSS finding']]);
   });
 });

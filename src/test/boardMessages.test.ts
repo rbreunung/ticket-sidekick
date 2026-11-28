@@ -345,6 +345,8 @@ describe('the import start screen', () => {
     const picked = (await askStart(boardHost, 'pick-file', { path: '/etc/passwd' })).body;
     expect(picked.report.path).toBe(path.join(dir, 'report.xlsx'));
     expect((await askStart(boardHost, 'template', { name: 'OSS finding' })).status).toBe(200);
+    expect(written).toEqual([]);
+    expect((await askStart(boardHost, 'template', { name: 'OSS finding', setAsDefault: true })).status).toBe(200);
     expect(written).toEqual(['OSS finding']);
     const blocked = await askStart(boardHost, 'open');
     expect(blocked.status).toBe(409);

@@ -1,9 +1,9 @@
 import { api, h } from '../shared/board.js';
 
 // The import start screen: the report kind and file, and the template, issue type and project the
-// import takes from the settings, for checking before Open. The page holds no state of its own and
-// names no file path, setting or session: the extension opens the file dialog, saves a picked
-// template or project to its setting and opens the import board.
+// import takes, for checking before Open. The page holds no state of its own beyond typed input and the
+// Set as default box, and names no file path, setting or session: the extension opens the file dialog,
+// saves a picked template (when Set as default is ticked) or project to its setting and opens the import board.
 
 const root = document.getElementById('root');
 let view;
@@ -11,6 +11,9 @@ let message;
 let busy = false;
 let typedIssueType = '';
 let typedProject = '';
+// The Set as default box: undefined until the developer acts, then the value they left it at. Forgotten when the kind changes.
+let setAsDefault;
+let boxKind;
 
 /** Runs one request; `keepMessage` leaves the last error on show, for a re-read the developer did not ask for. */
 async function run(op, body, keepMessage = false) {
@@ -50,15 +53,34 @@ function reportCell() {
   ];
 }
 
+// The template is always a picker. "Set as default" saves a pick to the kind's setting; the page keeps its
+// value (as it keeps typed input), starting ticked while no valid default exists and unticked otherwise.
 function templateCell() {
   const { template } = view;
   if (template.problem) return h('span', {}, template.problem);
-  if (template.name) return [h('span', {}, template.name), h('span', { class: 'muted' }, ` (from ${template.settingKey})`)];
+  const ticked = setAsDefault ?? !template.hasDefault;
+  const onPick = e => {
+    if (!e.target.value) return;
+    setAsDefault = ticked;
+    void run('template', { name: e.target.value, setAsDefault: ticked });
+  };
+  const onTick = e => {
+    setAsDefault = e.target.checked;
+    if (setAsDefault && template.name) void run('template', { name: template.name, setAsDefault: true });
+    else paint();
+  };
   return [
-    h('p', {}, template.askReason),
-    h('select', { id: 'template', 'aria-label': 'Template', disabled: busy, onChange: e => { if (e.target.value) void run('template', { name: e.target.value }); } },
-      h('option', { value: '', selected: true }, 'Choose a template…'),
-      template.options.map(name => h('option', { value: name }, name))),
+    template.askReason ? h('p', {}, template.askReason) : null,
+    h('select', { id: 'template', 'aria-label': 'Template', disabled: busy, onChange: onPick },
+      template.name ? null : h('option', { value: '', selected: true }, 'Choose a template…'),
+      template.options.map(name => h('option', { value: name, selected: name === template.name }, name))),
+    ' ',
+    h('label', {},
+      h('input', { type: 'checkbox', id: 'template-default', checked: ticked, disabled: busy, onChange: onTick }),
+      ' Set as default'),
+    template.hasDefault ? h('p', { class: 'muted' },
+      `Default: ${template.setting} (from ${template.settingKey}).`,
+      template.name && template.name !== template.setting && !ticked ? ' This import only.' : null) : null,
   ];
 }
 
@@ -129,13 +151,17 @@ function projectCell() {
 function actions() {
   if (view.jiraHint) return h('p', { class: 'banner error', role: 'alert' }, view.jiraHint);
   return h('div', { class: 'bar' },
-    h('vscode-button', { id: 'open', disabled: busy || !view.canOpen, onClick: () => run('open') }, view.stored ? 'Open stored import' : 'Open'),
+    h('vscode-button', { id: 'open', disabled: busy || !view.canOpen, onClick: () => run('open') }, 'Open'),
     view.stored ? h('vscode-button', { id: 'start-over', secondary: true, disabled: busy || !view.canOpen, onClick: () => run('start-over') }, 'Start over') : null,
     view.blocker ? h('span', { class: 'muted', role: 'status' }, view.blocker) : null);
 }
 
 function paint() {
   const focusId = document.activeElement?.id;
+  if (view && view.kind !== boxKind) {
+    boxKind = view.kind;
+    setAsDefault = undefined;
+  }
   const content = view ? [
     h('div', { class: 'bar' }, kindPicker()),
     h('table', {}, h('tbody', {},
@@ -145,13 +171,13 @@ function paint() {
       row('Template', templateCell()),
       row('Issue type', issueTypeCell()),
       view.emailModel ? row('Model for the email check', modelCell()) : null)),
-    view.stored ? h('p', { class: 'banner' }, 'An import of this file in this project is stored. Open shows it as it is, with the template it was started with; Start over discards it and starts again with the template above.') : null,
+    view.stored ? h('p', { class: 'banner' }, 'An import of this file in this project was started before. If its tab is still open, Open shows it as it is. Otherwise Open starts a new import with the template above. Start over discards the earlier import and starts again with the template above.') : null,
     actions(),
   ] : [h('p', { class: 'muted' }, 'Reading the settings…')];
   root.replaceChildren(
     h('header', {},
       h('h1', {}, 'Jira Import Board'),
-      h('p', { class: 'muted' }, 'Choose the report. The template, issue type and project come from the settings; check them before you open the import.')),
+      h('p', { class: 'muted' }, 'Choose the report. The project and the default template come from the settings, and the issue type from the template; you can pick another template for this import. Check them before you open the import.')),
     message ? h('p', { class: 'banner error', role: 'alert' }, message) : '',
     // `replaceChildren` renders a `null` as the text "null", unlike `h`, so absent children are dropped here.
     ...content.filter(Boolean));

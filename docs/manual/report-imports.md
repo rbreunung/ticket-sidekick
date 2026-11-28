@@ -10,7 +10,7 @@ Download the email from OWA using **More actions → Download message** to save 
 
 1. Open the Jira Import Board and pick **Email** as the kind, or type `/ts-jira create from email` in a Copilot chat. You can also attach the `.eml` files to the message, or name them: `/ts-jira create from email mails/escalation.eml`
 2. Choose one or more `.eml` files (at most 50, and at most `ticketSidekick.email.maxBatchSizeMB` in total). A file that is not an email is named and left out
-3. Check the project and the template. The template comes from `ticketSidekick.email.template`; when it is empty the start screen asks for one once and saves it. One template and issue type apply to all emails of the import
+3. Check the project and the template. The template is `ticketSidekick.email.template`, preselected on the start screen: pick another template for this import, or tick **Set as default** to save your pick. When the setting is empty the start screen asks for one and saves your first pick unless you untick **Set as default**. One template and issue type apply to all emails of the import
 4. **Open**. If boilerplate was found, or an email can be checked by the model, the [cleanup step](#removing-confidentiality-headers-footers-and-signatures) comes first
 5. Each email is a row on the **New** tab. Create tickets for the selected emails, or add emails to an existing ticket as comments, creating tickets writes on one click, and adding to a ticket shows one preview first
 
@@ -61,7 +61,7 @@ A check that fails is marked *Check failed*, keeps what your patterns found, and
 
 | Setting | Default | Description |
 |---|---|---|
-| `ticketSidekick.email.template` | `""` | The template an email import uses; asked for once on the start screen when empty |
+| `ticketSidekick.email.template` | `""` | The template an email import uses; preselected on the start screen, which asks for one when it is empty and saves a pick made with Set as default |
 | `ticketSidekick.email.deleteEmlAfterImport` | `false` | Delete the `.eml` file after its ticket is created (not after a comment) |
 | `ticketSidekick.jira.defaultProject` | — | Project the tickets go to; asked for on the start screen when empty |
 | `ticketSidekick.email.maxBatchSizeMB` | `150` | Largest total size (1–500 MB) of the `.eml` files of one import; a larger selection is refused before any file is read |
@@ -75,7 +75,7 @@ Veracode reports are imported on the **Jira Import Board**.
 Export a Detailed Report XML from Veracode, then:
 
 1. Run **Command Palette → Ticket Sidekick: Open Jira Import Board**, or ask Copilot in Agent mode with the file's path (or drag the file into the chat), or type `/ts-jira create from veracode <path>`
-2. On the start screen, pick **Veracode** and the `.xml` file. The template comes from `ticketSidekick.veracode.template`; when that setting is empty, the start screen asks for one once and saves it (see [Boards → Jira Import Board](boards.md#jira-import-board))
+2. On the start screen, pick **Veracode** and the `.xml` file. The template is `ticketSidekick.veracode.template`, preselected on the start screen: pick another template for this import, or tick **Set as default** to save your pick. When that setting is empty, the start screen asks for one and saves your first pick unless you untick **Set as default** (see [Boards → Jira Import Board](boards.md#jira-import-board))
 3. Review the results on the board's tabs (see [Reviewing an import](#reviewing-an-import) below): new flaws, flaws that already have a ticket, and stale tickets each have their own tab, with their own actions
 4. Tickets are created one per group of related flaws (flaws in the same file with the same CWE, or on the same line, fold into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with severity, CWE (linked to the public CWE definition), file/line location, each flaw's own description, and the category's remediation recommendation
 
@@ -85,7 +85,7 @@ Each ticket is labeled `veracode`, `veracode-issue-<id>`, and `cwe-<id>` (plus a
 
 | Setting | Default | Description |
 |---|---|---|
-| `ticketSidekick.veracode.template` | empty | The template a Veracode import uses; asked for once on the start screen and saved here when empty |
+| `ticketSidekick.veracode.template` | empty | The template a Veracode import uses; preselected on the start screen, which asks for one when it is empty and saves a pick made with Set as default |
 | `ticketSidekick.veracode.minSeverity` | `4` | Minimum severity (0–5) included by default |
 | `ticketSidekick.veracode.includeRemediationStatuses` | `["New", "Open", "Reopened"]` | Remediation statuses included by default |
 | `ticketSidekick.veracode.maxReportSizeMB` | `50` | Largest report file (1–200 MB) accepted; a larger file is rejected before it is read |
@@ -187,7 +187,7 @@ OSS reports are imported on the **Jira Import Board**.
 Export an "OSS Report" from Waltz (or a compatible SCA tool) as `.xlsx`, then:
 
 1. Run **Command Palette → Ticket Sidekick: Open Jira Import Board**, or ask Copilot in Agent mode with the file's path (or drag the file into the chat), or type `/ts-jira create from waltz <path>`
-2. On the start screen, pick **Waltz OSS** and the `.xlsx` file. The template comes from `ticketSidekick.waltz.template`; when that setting is empty, the start screen asks for one once and saves it
+2. On the start screen, pick **Waltz OSS** and the `.xlsx` file. The template is `ticketSidekick.waltz.template`, preselected on the start screen: pick another template for this import, or tick **Set as default** to save your pick. When that setting is empty, the start screen asks for one and saves your first pick unless you untick **Set as default**
 3. Review the results on the board's tabs (see [Reviewing an import](#reviewing-an-import) above), the same way as a Veracode import, plus an **Accepted** tab
 4. Tickets are created one per component (use **Merge selected** to fold related components such as a family of `netty-*` artifacts into one ticket — see [Folding findings into one ticket](#folding-findings-into-one-ticket)), with the max vulnerability rating, the dates by which the component must be fixed, the single most critical CVE up front, affected artifact paths, and a table of known vulnerabilities
 
@@ -229,7 +229,7 @@ Things to know:
 
 | Setting | Default | Description |
 |---|---|---|
-| `ticketSidekick.waltz.template` | empty | The template an OSS report import uses; asked for once on the start screen and saved here when empty |
+| `ticketSidekick.waltz.template` | empty | The template an OSS report import uses; preselected on the start screen, which asks for one when it is empty and saves a pick made with Set as default |
 | `ticketSidekick.waltz.minVulnRating` | `High` | Minimum "Max Vuln Rating" (Low/Medium/High/Critical) included by default |
 | `ticketSidekick.waltz.includeRemediationActions` | `["", "Remediate"]` | Remediation Action values included by default (empty string means the column was blank) |
 | `ticketSidekick.waltz.maxReportSizeMB` | `50` | Largest report file (1–200 MB) accepted; a larger file is rejected before it is read |
