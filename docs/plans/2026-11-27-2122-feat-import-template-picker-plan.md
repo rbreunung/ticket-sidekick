@@ -46,7 +46,7 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
 
 **Stored imports**
 
-- R7. Open stored import opens the stored import with the template it was started with. Start over discards it and starts again with the template picked on the start screen.
+- R7. When the import's tab is open, Open shows it with the template it was started with. With no tab open, Open builds the import again from the start screen, so it takes the template shown there, as it takes the saved default today. Start over discards the import and starts again with the template picked on the start screen.
 
 ### Key Decisions
 
@@ -58,7 +58,7 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
 - AE2. **Covers R2, R5.** Given the default is "OSS finding", when the developer picks "Plain" with the checkbox unticked and opens the import, then the import uses "Plain", asks for an issue type, and the setting still holds "OSS finding".
 - AE3. **Covers R4.** Given the state after AE2's pick, when the developer ticks the checkbox, then the setting holds "Plain".
 - AE4. **Covers R6.** Given the setting names a deleted template, when the developer unticks the checkbox and picks "Plain", then the import uses "Plain" and the next import asks again.
-- AE5. **Covers R7.** Given a stored import of this file and project, when the developer picks another template, then Open stored import opens the stored import with its own template, and Start over starts a new import with the picked template.
+- AE5. **Covers R7.** Given an import of this file and project whose tab is open, when the developer picks another template, then Open shows the open import with its own template, and Start over starts a new import with the picked template.
 
 ### Scope Boundaries
 
@@ -66,6 +66,7 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
 - The pick is not remembered after the start screen closes. Only the setting is.
 - Considered and not built: clearing a saved default from the screen. Nobody asked for it, and the setting stays editable in Settings.
 - Considered and not built: changing the template after Open. An opened import keeps its template, as today.
+- Considered and not built: reading a stored import's template onto the start screen. The session manager already keeps an open tab's own template, and with no tab open the import kind builds the import again by design (`freshOnOpen`). Reading it would change that design for a label nobody asked about.
 
 ---
 
@@ -103,7 +104,7 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
   - A pick survives later views and is gone after the kind changes to another kind and back.
   - A pick for a template removed from `.jira-templates.json` before the next view is ignored and the saved default shows.
   - An unknown template name returns 400 and writes nothing (existing test stays).
-  - Covers AE5. With a stored import and a different pick, `stored` is true, Open passes the picked template with the same session id, and Start over discards the stored session and opens with the picked template (adapts the existing stored-template test, which flips the setting instead).
+  - Covers AE5. With a stored import and a different pick, `stored` is true, Open passes the picked template with the same session id (the session manager, not the screen, keeps an open tab's own template), and Start over discards the stored session and opens with the picked template (adapts the existing stored-template test, which flips the setting instead).
   - A Waltz pick does not reach a Veracode screen (extends the per-kind test).
 - **Verification:** The start screen tests pass and `npm run compile` is clean.
 
@@ -114,9 +115,10 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
 - **Dependencies:** U1
 - **Files:** `board-pages/import-start/page.js`, `src/test/importStartPage.test.ts`
 - **Approach:**
-  - Replace the read-only branch of `templateCell` with the picker, preselected from `template.name`, and the checkbox. Keep the setting key visible next to the picker so the developer still sees where the default lives.
+  - Replace the read-only branch of `templateCell` with the picker, preselected from `template.name`, and the checkbox. Next to the picker, show the saved default and its setting key from `template.setting` (`Default: <name> (from <settingKey>)`), or the ask reason when no valid default exists. While a pick differs from the saved default and the box is unticked, add "This import only." so the pick is not read as the default.
   - Keep the checkbox value in a page variable, as `typedProject` is kept. Its starting value is `!template.hasDefault`. Once the developer acts, the page holds the value it sent, so a save that turns `hasDefault` true does not untick the box. Reset it when the kind changes.
-  - A picker change sends the picked name with the checkbox value. Ticking sends the current template with `setAsDefault: true`. Unticking sends nothing.
+  - Give the checkbox an id and an accessible label. `paint()` rebuilds the DOM and restores focus by id, so a checkbox without one loses keyboard focus after every repaint.
+  - A picker change sends the picked name with the checkbox value. Ticking sends the current template with `setAsDefault: true`. Unticking sends nothing. Until a template is picked, ticking and unticking only change the page variable and post nothing.
   - Reword the header line that says the template comes from the settings. The stored-import banner already says "the template above" and stays.
 - **Patterns to follow:** `projectCell` and its page variable for typed input, and `fakeDom` posted-message checks in the existing page tests.
 - **Test scenarios:**
@@ -124,6 +126,9 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
   - Empty or stale setting: the ask reason shows, the picker shows its placeholder, and the checkbox is ticked.
   - Changing the picker posts `template` with the picked name and the checkbox value, for a ticked and an unticked box.
   - Ticking after a pick posts the current name with `setAsDefault: true`, and unticking posts nothing.
+  - Toggling the checkbox before any pick posts nothing and shows no error.
+  - With a pick that differs from the saved default and the box unticked, the page says the pick is for this import only, and the saved default stays named next to the picker.
+  - The checkbox has an id and a label, and focus on it survives a repaint.
   - After a save that makes the setting valid, the view re-read with `hasDefault: true` leaves the checkbox ticked.
   - The stored-import notice and Start over tests pass with the new view shape.
 - **Verification:** The page tests pass.
@@ -141,7 +146,7 @@ Once `ticketSidekick.<kind>.template` names a template in `.jira-templates.json`
   - `package.json`: the descriptions of `ticketSidekick.email.template`, `ticketSidekick.veracode.template` and `ticketSidekick.waltz.template`. Defaults stay.
   - `manual-checklist.md`: the start screen items for an empty template, the stored import and the email template.
   - `CLAUDE.md`: the start screen row in Key files.
-  - Wording: the template is a picker, the saved default is preselected, a pick is for this import, "Set as default" saves it, it starts ticked when no valid default exists, and Start over uses the picked template.
+  - Wording: the template is a picker, the saved default is preselected, a pick is for this import, "Set as default" saves it, it starts ticked when no valid default exists, and Start over uses the picked template. For a stored import, say that Open shows an open tab as it is and otherwise builds the import again from the start screen's template.
 - **Test expectation:** none -- text only. `src/test/userDocsSync.test.ts` checks setting keys and defaults, which do not change, and must stay green.
 - **Verification:** `npm test` passes, and a search for "asked once" and "template now in the setting" finds no stale wording outside dated plans.
 
