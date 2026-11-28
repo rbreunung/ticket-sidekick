@@ -475,9 +475,8 @@ export class ImportStartScreen {
     const setting = this.deps.templateSetting(kind).trim();
     const settingKey = templateSettingKey(kind);
     const saved = templates.find(t => t.name === setting);
-    // A pick whose template has gone from .jira-templates.json is ignored; the saved default shows, or the screen asks.
-    const picked = this.state.template ? templates.find(t => t.name === this.state.template) : undefined;
-    const chosen = picked ?? saved;
+    const pickedTemplate = this.state.template ? templates.find(t => t.name === this.state.template) : undefined;
+    const chosen = pickedTemplate ?? saved;
     const template: StartScreenView['template'] = { setting, settingKey, hasDefault: saved !== undefined };
     if (templatesProblem) {
       template.problem = templatesProblem;

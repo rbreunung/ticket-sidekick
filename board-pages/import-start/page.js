@@ -66,7 +66,6 @@ function templateCell() {
   };
   const onTick = e => {
     setAsDefault = e.target.checked;
-    // Ticking saves the template in use; unticking, or ticking before anything is picked, only changes the box.
     if (setAsDefault && template.name) void run('template', { name: template.name, setAsDefault: true });
     else paint();
   };
